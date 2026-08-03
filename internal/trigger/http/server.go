@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/application"
+	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
+	"github.com/spray272598/code-agent/internal/observability"
 )
 
 type Server struct {
@@ -40,8 +42,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/skills/install", s.handleSkillInstall)
 	mux.HandleFunc("/api/v1/skills/uninstall", s.handleSkillUninstall)
 	mux.HandleFunc("/api/v1/skills/reload", s.handleSkillReload)
+	mux.HandleFunc("/api/v1/memory", s.handleMemory)
+	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
 
-	s.srv = &http.Server{Addr: s.addr, Handler: cors(auth(s.app, mux)), ReadHeaderTimeout: 10 * time.Second}
+	handler := cors(auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux))))
+	s.srv = &http.Server{Addr: s.addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("[http] listening on %s\n", s.addr)
 	return s.srv.ListenAndServe()
 }
@@ -442,6 +447,65 @@ func (s *Server) handleSkillReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"reloaded": true, "count": len(sk.List())}})
+}
+
+func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		userID := r.URL.Query().Get("userId")
+		projectID := r.URL.Query().Get("projectId")
+		scope := r.URL.Query().Get("scope")
+		q := r.URL.Query().Get("q")
+		if q != "" {
+			list, err := s.app.SearchMemory(r.Context(), userID, projectID, q, 20)
+			if err != nil {
+				writeJSON(w, 500, errMap(err))
+				return
+			}
+			writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
+			return
+		}
+		list, err := s.app.ListMemory(r.Context(), userID, projectID, scope, 50)
+		if err != nil {
+			writeJSON(w, 500, errMap(err))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
+	case http.MethodPost:
+		var body struct {
+			UserID     string `json:"userId"`
+			ProjectID  string `json:"projectId"`
+			Scope      string `json:"scope"`
+			Category   string `json:"category"`
+			Content    string `json:"content"`
+			Importance int    `json:"importance"`
+			Source     string `json:"source"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, 400, errMap(err))
+			return
+		}
+		item := &memport.MemoryItem{
+			UserID: body.UserID, ProjectID: body.ProjectID,
+			Scope: memport.Scope(body.Scope), Category: body.Category,
+			Content: body.Content, Importance: body.Importance, Source: body.Source,
+		}
+		if item.Source == "" {
+			item.Source = "api"
+		}
+		if err := s.app.SaveMemory(r.Context(), item); err != nil {
+			writeJSON(w, 400, errMap(err))
+			return
+		}
+		observability.Global.MemoryWrites.Add(1)
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": item})
+	default:
+		writeJSON(w, 405, map[string]any{"code": "405"})
+	}
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": observability.Global.Snapshot()})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -57,9 +57,15 @@ go build -o mcp-demo.exe ./cmd/mcp-demo   # 供 MCP demo 热装
 go run ./cmd/server -config configs/config.yaml
 ```
 
+### Phase 3 记忆
+
+- 工具：`memory_save` / `memory_search`（scope=user|project）
+- API：`GET/POST /api/v1/memory`、`GET /api/v1/metrics`
+- 自动：用户纠正/偏好话术写入；每轮 prompt 注入相关记忆
+
 ### 待做
 
-对象存储落大结果、记忆 user/project、SubAgent、Worktree（见 design.md Phase 3+）
+对象存储落大结果、LLM 摘要压缩、SubAgent、Worktree、更强可观测（OTLP）
 
 ## 文档
 

@@ -79,8 +79,11 @@ func NewRegistry() *Registry {
 		}
 		return Result{Handled: true, Response: ctx.ListMCP()}
 	})
-	r.Register("cost", "Show rough session token usage hint", func(args string, ctx Context) Result {
-		return Result{Handled: true, Response: "Use GET /api/v1/usage or check session.tokenUsed after chat. Redis keys token:user:{id}:{day} when enabled."}
+	r.Register("cost", "Show rough session token usage / metrics hint", func(args string, ctx Context) Result {
+		return Result{Handled: true, Response: "See GET /api/v1/metrics and GET /api/v1/memory. Redis: token:user:{id}:{day}."}
+	})
+	r.Register("memory", "Hint for memory tools / API", func(args string, ctx Context) Result {
+		return Result{Handled: true, Response: "Use tools memory_save / memory_search, or GET/POST /api/v1/memory. Scopes: user | project."}
 	})
 	return r
 }

@@ -1,6 +1,9 @@
 package port
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Scope of long-term memory.
 type Scope string
@@ -28,4 +31,29 @@ type IMemoryRepository interface {
 	List(ctx context.Context, userID, projectID string, scope Scope, limit int) ([]MemoryItem, error)
 	Search(ctx context.Context, userID, projectID, query string, limit int) ([]MemoryItem, error)
 	Delete(ctx context.Context, id int64) error
+}
+
+// Tokenize splits query into lowercase tokens for simple search scoring.
+func Tokenize(q string) []string {
+	q = strings.ToLower(q)
+	var cur strings.Builder
+	var out []string
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+		}
+	}
+	for _, r := range q {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r > 127 {
+			if r >= 'A' && r <= 'Z' {
+				r += 32
+			}
+			cur.WriteRune(r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return out
 }

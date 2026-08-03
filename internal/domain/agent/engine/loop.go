@@ -13,11 +13,14 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/contextx"
 	"github.com/spray272598/code-agent/internal/domain/hook"
+	"github.com/spray272598/code-agent/internal/domain/memory"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/tool"
+	"github.com/spray272598/code-agent/internal/domain/tool/coding"
+	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
@@ -32,6 +35,8 @@ type Loop struct {
 	compressor   *contextx.Compressor
 	skills       *skill.Service
 	hooks        *hook.Bus
+	memSvc       *memory.Service
+	memCtx       *coding.MemoryContext
 	maxRounds    int
 	tokenBudget  int
 	systemPrompt string
@@ -59,13 +64,18 @@ func NewLoop(
 	}
 }
 
-func (l *Loop) SetSkills(s *skill.Service) { l.skills = s }
-func (l *Loop) SetHooks(h *hook.Bus)       { l.hooks = h }
+func (l *Loop) SetSkills(s *skill.Service)           { l.skills = s }
+func (l *Loop) SetHooks(h *hook.Bus)                 { l.hooks = h }
+func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
+	l.memSvc = svc
+	l.memCtx = mc
+}
 
 func defaultSystem() string {
 	return `You are Code-Agent, a coding agent like Claude Code.
 You work inside a sandboxed project workspace.
-Core tools: read_file, write_file, edit_file, bash, glob, grep.
+Core tools: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_search.
+Use memory_save for durable user/project facts; memory_search to recall them.
 When you need a tool, reply with ONLY JSON:
 {"name":"tool_name","args":{...}}
 Or multiple: [{"name":"...","args":{...}}]
@@ -100,6 +110,15 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionStart, SessionID: session.ID})
 	}
 
+	// bind memory identity for tools
+	if l.memCtx != nil {
+		l.memCtx.Bind(session.UserID, session.ProjectID)
+	}
+	// auto extract corrections into memory
+	if l.memSvc != nil && !continuing {
+		l.memSvc.MaybeExtractFromUserCorrection(ctx, session.UserID, session.ProjectID, session.ID, userInput)
+	}
+
 	// skill match
 	var activeSkill *skill.Skill
 	if l.skills != nil && !continuing {
@@ -121,12 +140,22 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		var saved int
 		history, saved = l.compressor.Compress(history)
 		publish(&Event{Type: EventCompress, Content: fmt.Sprintf("compressed history, ~%d tokens saved", saved), Timestamp: now()})
+		observability.Trace.Event(map[string]any{"event": "compress", "session": session.ID, "savedTokens": saved})
 	}
 
 	toolDesc := l.tools.Descriptions()
 	sys := l.systemPrompt + "\n\n## Available tools\n" + formatTools(toolDesc)
 	if activeSkill != nil && l.skills != nil {
 		sys += "\n" + l.skills.PromptSection(activeSkill)
+	}
+	// inject long-term memory
+	if l.memSvc != nil {
+		memBlock := l.memSvc.FormatForPrompt(ctx, session.UserID, session.ProjectID, userInput, 8)
+		if memBlock != "" {
+			sys += "\n" + memBlock
+			publish(&Event{Type: EventThought, Content: "memory injected", Timestamp: now()})
+			observability.Global.MemoryReads.Add(1)
+		}
 	}
 
 	messages := mapsToChat(history)
@@ -255,6 +284,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 				l.hooks.Emit(ctx, hook.Event{Point: hook.PreToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args})
 			}
 			publish(&Event{Type: EventToolCall, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
+			observability.Global.ToolCalls.Add(1)
 			resText, _ := l.execTool(ctx, tc.Name, tc.Args)
 			resText = budget(resText)
 			if l.hooks != nil {
@@ -279,6 +309,10 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	}
 	session.AddTokens(totalTokens)
 	_ = l.sessions.Save(ctx, session)
+	observability.Global.TokensTotal.Add(int64(totalTokens))
+	observability.Trace.Event(map[string]any{
+		"event": "done", "session": session.ID, "tools": totalTools, "tokens": totalTokens,
+	})
 	if l.hooks != nil {
 		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionEnd, SessionID: session.ID, Meta: map[string]any{"tokenUsed": totalTokens}})
 	}

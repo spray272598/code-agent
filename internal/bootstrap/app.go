@@ -12,6 +12,8 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
+	"github.com/spray272598/code-agent/internal/domain/memory"
+	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/tool"
@@ -34,6 +36,7 @@ type App struct {
 	Redis  *redisx.Client
 	MCP    *inframcp.Manager
 	Skills *skill.Service
+	Memory *memory.Service
 	Hooks  *hook.Bus
 	Closer func()
 }
@@ -45,6 +48,7 @@ func Build(cfg *config.Config) (*App, error) {
 
 	var sessionRepo sessrepo.ISessionRepository
 	var messageRepo sessrepo.IMessageRepository
+	var memRepo memport.IMemoryRepository
 	var closer func()
 	if cfg.Database.Type == "mysql" {
 		db, err := mysql.Open(cfg.MySQLDSN(), cfg.Database.AutoMigrate, cfg.Database.SchemaPath)
@@ -52,18 +56,23 @@ func Build(cfg *config.Config) (*App, error) {
 			log.Printf("[bootstrap] mysql unavailable (%v), use memory\n", err)
 			sessionRepo = repository.NewMemorySessionRepo()
 			messageRepo = repository.NewMemoryMessageRepo()
+			memRepo = repository.NewMemoryCoreRepo()
 			closer = func() {}
 			cfg.Database.Type = "memory"
 		} else {
 			sessionRepo = repository.NewMySQLSessionRepo(db)
 			messageRepo = repository.NewMySQLMessageRepo(db)
+			memRepo = repository.NewMySQLMemoryRepo(db)
 			closer = func() { _ = db.Close() }
 		}
 	} else {
 		sessionRepo = repository.NewMemorySessionRepo()
 		messageRepo = repository.NewMemoryMessageRepo()
+		memRepo = repository.NewMemoryCoreRepo()
 		closer = func() {}
 	}
+	memSvc := memory.NewService(memRepo)
+	memCtx := &coding.MemoryContext{Svc: memSvc}
 
 	rdb := redisx.New(cfg.Redis)
 	llmPort := llm.NewFromConfig(cfg)
@@ -76,6 +85,8 @@ func Build(cfg *config.Config) (*App, error) {
 	reg.Register(coding.NewBash(ws, 60))
 	reg.Register(coding.NewGlob(ws))
 	reg.Register(coding.NewGrep(ws))
+	reg.Register(coding.NewMemorySave(memCtx))
+	reg.Register(coding.NewMemorySearch(memCtx))
 
 	// hooks
 	hooks := hook.NewBus()
@@ -118,6 +129,7 @@ func Build(cfg *config.Config) (*App, error) {
 	loop := engine.NewLoop(llmPort, reg, sessionRepo, messageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
 	loop.SetSkills(skillSvc)
 	loop.SetHooks(hooks)
+	loop.SetMemory(memSvc, memCtx)
 
 	chat := application.NewChatApp(
 		loop, sessionRepo, messageRepo, reg, perm, rdb,
@@ -125,6 +137,7 @@ func Build(cfg *config.Config) (*App, error) {
 		cfg.RateLimit.Enabled, cfg.RateLimit.PerMinute, cfg.Security.APIKeys,
 	)
 	chat.SetSkills(skillSvc)
+	chat.SetMemory(memSvc)
 	if mcpMgr != nil {
 		chat.SetMCP(mcpMgr)
 	}
@@ -134,7 +147,7 @@ func Build(cfg *config.Config) (*App, error) {
 
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,
-		MCP: mcpMgr, Skills: skillSvc, Hooks: hooks,
+		MCP: mcpMgr, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
 		Closer: func() {
 			if mcpMgr != nil {
 				_ = mcpMgr.Close()

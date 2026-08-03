@@ -11,7 +11,10 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
+	"github.com/spray272598/code-agent/internal/domain/memory"
+	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/security"
+	"github.com/spray272598/code-agent/internal/observability"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/skill"
@@ -30,6 +33,7 @@ type ChatApp struct {
 	skills      *skill.Service
 	slash       *slash.Registry
 	mcp         mcpport.IMCPManagerPort
+	memSvc      *memory.Service
 	timeoutSec  int
 	workspace   string
 	rateEnabled bool
@@ -69,9 +73,33 @@ func NewChatApp(
 
 func (a *ChatApp) SetSkills(s *skill.Service)      { a.skills = s }
 func (a *ChatApp) SetMCP(m mcpport.IMCPManagerPort) { a.mcp = m }
+func (a *ChatApp) SetMemory(s *memory.Service)     { a.memSvc = s }
 func (a *ChatApp) Slash() *slash.Registry           { return a.slash }
 func (a *ChatApp) Skills() *skill.Service           { return a.skills }
 func (a *ChatApp) MCP() mcpport.IMCPManagerPort     { return a.mcp }
+func (a *ChatApp) Memory() *memory.Service          { return a.memSvc }
+
+// SaveMemory API/helper
+func (a *ChatApp) SaveMemory(ctx context.Context, item *memport.MemoryItem) error {
+	if a.memSvc == nil {
+		return fmt.Errorf("memory disabled")
+	}
+	return a.memSvc.Save(ctx, item)
+}
+
+func (a *ChatApp) ListMemory(ctx context.Context, userID, projectID, scope string, limit int) ([]memport.MemoryItem, error) {
+	if a.memSvc == nil {
+		return nil, nil
+	}
+	return a.memSvc.List(ctx, userID, projectID, memport.Scope(scope), limit)
+}
+
+func (a *ChatApp) SearchMemory(ctx context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+	if a.memSvc == nil {
+		return nil, nil
+	}
+	return a.memSvc.Search(ctx, userID, projectID, query, limit)
+}
 
 // InstallMCP installs/updates an MCP server via domain port.
 func (a *ChatApp) InstallMCP(ctx context.Context, name, transport, command string, args []string, env map[string]string, url string, enabled bool, timeout int) error {
@@ -226,11 +254,14 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	if a.redis != nil && a.redis.Enabled() {
 		_ = a.redis.Set(ctx, "sess:hot:"+session.ID, req.Message, 24*time.Hour)
 	}
+	observability.Global.ChatTotal.Add(1)
 	res, err := a.loop.Run(ctx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
 	if err != nil && res == nil {
+		observability.Global.ChatErrors.Add(1)
 		return nil, err
 	}
 	if res == nil {
+		observability.Global.ChatErrors.Add(1)
 		return nil, fmt.Errorf("empty result")
 	}
 	if a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
