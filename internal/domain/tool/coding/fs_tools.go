@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
@@ -117,26 +119,33 @@ func (t *WriteFileTool) Execute(_ context.Context, args map[string]any) (tool.Re
 	return tool.Result{Text: fmt.Sprintf("wrote %s (%d bytes)", path, len(content))}, nil
 }
 
-// --- EditFile (search_replace) ---
+// --- EditFile (search_replace + multi-line + regex) ---
 
 type EditFileTool struct{ ws *Workspace }
 
 func NewEditFile(ws *Workspace) *EditFileTool { return &EditFileTool{ws: ws} }
 func (t *EditFileTool) Name() string          { return "edit_file" }
 func (t *EditFileTool) Description() string {
-	return "Edit file by exact search_replace. Args: path, old_string, new_string"
+	return "Edit file: exact multi-line replace or regex. Args: path, old_string, new_string; optional regex(bool), replace_all(bool), count(int)"
 }
 func (t *EditFileTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"path": map[string]any{"type": "string"},
-		"old_string": map[string]any{"type": "string"},
-		"new_string": map[string]any{"type": "string"},
+		"path":         map[string]any{"type": "string"},
+		"old_string":   map[string]any{"type": "string", "description": "exact text or regex pattern (multi-line ok)"},
+		"new_string":   map[string]any{"type": "string"},
+		"regex":        map[string]any{"type": "boolean", "description": "treat old_string as Go regexp"},
+		"replace_all":  map[string]any{"type": "boolean", "description": "replace every match (default false for exact, true for regex if count unset)"},
+		"count":        map[string]any{"type": "integer", "description": "max replacements; 0 or omit = 1 for exact unless replace_all"},
 	}, "required": []string{"path", "old_string", "new_string"}}
 }
 func (t *EditFileTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
 	path, _ := args["path"].(string)
 	oldS, _ := args["old_string"].(string)
 	newS, _ := args["new_string"].(string)
+	useRegex := boolArg(args, "regex")
+	replaceAll := boolArg(args, "replace_all")
+	nLimit := intArg(args, "count", -1)
+
 	abs, err := t.ws.Resolve(path)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
@@ -149,18 +158,123 @@ func (t *EditFileTool) Execute(_ context.Context, args map[string]any) (tool.Res
 	if oldS == "" {
 		return tool.Result{Text: "old_string empty", IsError: true}, nil
 	}
-	count := strings.Count(content, oldS)
-	if count == 0 {
-		return tool.Result{Text: "old_string not found", IsError: true}, nil
+
+	var (
+		out      string
+		replaced int
+	)
+	if useRegex {
+		re, err := regexp.Compile(oldS)
+		if err != nil {
+			return tool.Result{Text: "invalid regex: " + err.Error(), IsError: true}, nil
+		}
+		limit := nLimit
+		if limit < 0 {
+			if replaceAll {
+				limit = -1
+			} else {
+				limit = 1
+			}
+		}
+		if limit == 0 {
+			limit = -1
+		}
+		// submatch indices for Expand ($1, $2…)
+		all := re.FindAllStringSubmatchIndex(content, limit)
+		if len(all) == 0 {
+			return tool.Result{Text: "regex matched 0 times", IsError: true}, nil
+		}
+		out = content
+		for i := len(all) - 1; i >= 0; i-- {
+			sub := all[i]
+			lo, hi := sub[0], sub[1]
+			repl := string(re.ExpandString(nil, newS, content, sub))
+			out = out[:lo] + repl + out[hi:]
+			replaced++
+		}
+	} else {
+		// exact multi-line string replace (old_string may contain \n)
+		// normalize CRLF in needle only if file has LF
+		needle := oldS
+		if !strings.Contains(content, "\r\n") && strings.Contains(needle, "\r\n") {
+			needle = strings.ReplaceAll(needle, "\r\n", "\n")
+		}
+		count := strings.Count(content, needle)
+		if count == 0 {
+			return tool.Result{Text: "old_string not found", IsError: true}, nil
+		}
+		limit := 1
+		if replaceAll || nLimit == 0 {
+			limit = -1
+		} else if nLimit > 0 {
+			limit = nLimit
+		}
+		if !replaceAll && nLimit < 0 && count > 1 {
+			return tool.Result{Text: fmt.Sprintf("old_string matches %d times; make it unique or set replace_all=true", count), IsError: true}, nil
+		}
+		if limit < 0 {
+			out = strings.ReplaceAll(content, needle, newS)
+			replaced = count
+		} else {
+			out = strings.Replace(content, needle, newS, limit)
+			if count < limit {
+				replaced = count
+			} else {
+				replaced = limit
+			}
+		}
 	}
-	if count > 1 {
-		return tool.Result{Text: fmt.Sprintf("old_string matches %d times; make it unique", count), IsError: true}, nil
-	}
-	content = strings.Replace(content, oldS, newS, 1)
-	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(abs, []byte(out), 0o644); err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
-	return tool.Result{Text: fmt.Sprintf("edited %s (1 replacement)", path)}, nil
+	mode := "exact"
+	if useRegex {
+		mode = "regex"
+	}
+	return tool.Result{Text: fmt.Sprintf("edited %s (%d %s replacement(s))", path, replaced, mode)}, nil
+}
+
+func boolArg(args map[string]any, key string) bool {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		b, _ := strconv.ParseBool(t)
+		return b
+	case float64:
+		return t != 0
+	case int:
+		return t != 0
+	default:
+		return false
+	}
+}
+
+func intArg(args map[string]any, key string, def int) int {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return def
+	}
+	switch t := v.(type) {
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case string:
+		n, err := strconv.Atoi(t)
+		if err != nil {
+			return def
+		}
+		return n
+	default:
+		return def
+	}
 }
 
 // --- Glob ---
@@ -170,7 +284,7 @@ type GlobTool struct{ ws *Workspace }
 func NewGlob(ws *Workspace) *GlobTool { return &GlobTool{ws: ws} }
 func (t *GlobTool) Name() string      { return "glob" }
 func (t *GlobTool) Description() string {
-	return "Find files by glob pattern under workspace. Args: pattern (e.g. **/*.go), path? (subdir)"
+	return "Find files by glob (doublestar ** supported). Args: pattern (e.g. **/*.{go,md}), path? (subdir)"
 }
 func (t *GlobTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
@@ -181,43 +295,58 @@ func (t *GlobTool) InputSchema() map[string]any {
 func (t *GlobTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
 	pattern, _ := args["pattern"].(string)
 	sub, _ := args["path"].(string)
+	if pattern == "" {
+		return tool.Result{Text: "pattern required", IsError: true}, nil
+	}
 	root, err := t.ws.Resolve(sub)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
-	// simple ** support via Walk
+	// normalize pattern to slash form for doublestar
+	pattern = filepath.ToSlash(pattern)
+	// if pattern is not recursive and has no path sep, match basename anywhere
+	if !strings.Contains(pattern, "/") && !strings.Contains(pattern, "**") {
+		pattern = "**/" + pattern
+	}
 	var matches []string
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	// Prefer doublestar.Glob on OS FS rooted at workspace subdir
+	fsys := os.DirFS(root)
+	found, err := doublestar.Glob(fsys, pattern)
+	if err != nil {
+		// fallback walk with PathMatch
+		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(root, p)
+			rel = filepath.ToSlash(rel)
+			ok, _ := doublestar.Match(pattern, rel)
+			if ok {
+				matches = append(matches, rel)
+			}
+			if len(matches) >= 200 {
+				return fs.SkipAll
+			}
 			return nil
+		})
+	} else {
+		for _, m := range found {
+			// skip directories
+			full := filepath.Join(root, filepath.FromSlash(m))
+			st, err := os.Stat(full)
+			if err != nil || st.IsDir() {
+				continue
+			}
+			matches = append(matches, filepath.ToSlash(m))
+			if len(matches) >= 200 {
+				break
+			}
 		}
-		rel, _ := filepath.Rel(root, p)
-		rel = filepath.ToSlash(rel)
-		ok, _ := pathMatch(pattern, rel)
-		if ok {
-			matches = append(matches, rel)
-		}
-		if len(matches) >= 200 {
-			return fs.SkipAll
-		}
-		return nil
-	})
+	}
 	if len(matches) == 0 {
 		return tool.Result{Text: "(no matches)"}, nil
 	}
 	return tool.Result{Text: strings.Join(matches, "\n")}, nil
-}
-
-func pathMatch(pattern, name string) (bool, error) {
-	// filepath.Match doesn't support **; approximate
-	p := strings.ReplaceAll(pattern, "**/*", "*")
-	p = strings.ReplaceAll(p, "**/", "")
-	p = strings.ReplaceAll(p, "**", "*")
-	if strings.Contains(p, "/") {
-		return filepath.Match(p, name)
-	}
-	base := filepath.Base(name)
-	return filepath.Match(p, base)
 }
 
 // --- Grep ---

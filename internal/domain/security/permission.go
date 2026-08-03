@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// Action 5-layer permission outcome
 type Action string
 
 const (
@@ -20,7 +19,7 @@ const (
 
 type Decision struct {
 	Action  Action `json:"action"`
-	Layer   string `json:"layer"` // L1..L5
+	Layer   string `json:"layer"`
 	RuleID  string `json:"ruleId,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Tool    string `json:"tool"`
@@ -46,7 +45,7 @@ type AwaitingResume struct {
 	Ready     bool
 }
 
-// Guard implements 5-layer defense.
+// Guard implements 5-layer defense with command normalization.
 type Guard struct {
 	mu           sync.RWMutex
 	sessionAllow map[string]map[string]bool
@@ -59,11 +58,16 @@ type Guard struct {
 	confirmWrite bool
 	denyRules    []rule
 	confirmRules []rule
+	// tools that are always allow / confirm / deny by name class
+	readTools  map[string]bool
+	writeTools map[string]bool
+	// MCP/unknown tools: confirm by default
+	mcpConfirm bool
 }
 
 type rule struct {
 	id, reason string
-	re         *regexp.Regexp
+	patterns   []*regexp.Regexp // multi-pattern
 	layer      string
 }
 
@@ -77,37 +81,93 @@ func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
 		workspace:    workspace,
 		pathSandbox:  pathSandbox,
 		confirmWrite: confirmWrite,
+		mcpConfirm:   true,
+		readTools: map[string]bool{
+			"read_file": true, "glob": true, "grep": true, "memory_search": true,
+		},
+		writeTools: map[string]bool{
+			"write_file": true, "edit_file": true, "memory_save": true,
+		},
 	}
 	g.initRules()
 	return g
 }
 
 func (g *Guard) initRules() {
-	denies := []struct{ id, pat, reason string }{
-		{"rm_rf_root", `(?i)\brm\s+-rf?\s+/?(\s|$)`, "recursive delete root"},
-		{"rm_rf_star", `(?i)\brm\s+-rf?\s+\*`, "recursive delete wildcard"},
-		{"format", `(?i)\b(format|mkfs)\b`, "disk format"},
-		{"shutdown", `(?i)\b(shutdown|poweroff|reboot)\b`, "power control"},
-		{"dd", `(?i)\bdd\s+if=`, "dd disk write"},
-		{"fork_bomb", `:\(\)\s*\{\s*:|:&`, "fork bomb"},
-		{"force_push_main", `(?i)\bgit\s+push\s+(-f|--force).*(main|master)`, "force push main"},
+	// Multiple patterns per rule to catch spacing / flag-order variants after normalize
+	denies := []struct {
+		id, reason string
+		pats       []string
+	}{
+		{"rm_rf_root", "recursive delete root", []string{
+			`(?i)\brm\s+(-[a-z]*f[a-z]*r[a-z]*|-[a-z]*r[a-z]*f[a-z]*)\s+/?(\s|$)`,
+			`(?i)\brm\s+-rf?\s+/?(\s|$)`,
+			`(?i)\brm\s+/s\s+/q\s+\\?\s*$`, // windows-ish
+			`rm-rf/`, `rm-fr/`,
+		}},
+		{"rm_rf_star", "recursive delete wildcard", []string{
+			`(?i)\brm\s+(-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*)\s+\*`,
+			`(?i)\brm\s+-rf?\s+\*`,
+			`rm-rf\*`,
+		}},
+		{"format", "disk format", []string{`(?i)\b(format|mkfs(\.\w+)?)\b`}},
+		{"shutdown", "power control", []string{`(?i)\b(shutdown|poweroff|reboot|halt)\b`}},
+		{"dd", "dd disk write", []string{`(?i)\bdd\s+.*\bof=`, `(?i)\bdd\s+if=`}},
+		{"fork_bomb", "fork bomb", []string{`:\(\)\s*\{\s*:|:&`, `:\(\)\{:`}},
+		{"force_push_main", "force push main", []string{
+			`(?i)\bgit\s+push\s+(-f|--force).*(main|master)`,
+			`(?i)\bgit\s+push\s+.*(main|master).*(-f|--force)`,
+		}},
+		{"curl_pipe_sh", "pipe remote script", []string{
+			`(?i)\b(curl|wget).*\|\s*(ba)?sh\b`,
+			`(?i)\b(curl|wget).*\|\s*bash\b`,
+		}},
 	}
 	for _, d := range denies {
-		g.denyRules = append(g.denyRules, rule{id: d.id, reason: d.reason, re: regexp.MustCompile(d.pat), layer: "L1"})
+		var res []*regexp.Regexp
+		for _, p := range d.pats {
+			res = append(res, regexp.MustCompile(p))
+		}
+		g.denyRules = append(g.denyRules, rule{id: d.id, reason: d.reason, patterns: res, layer: "L1"})
 	}
-	confirms := []struct{ id, pat, reason string }{
-		{"rm", `(?i)\brm\s+`, "delete files"},
-		{"git_push", `(?i)\bgit\s+push\b`, "git push"},
-		{"pip", `(?i)\bpip3?\s+install\b`, "pip install"},
-		{"curl_pipe", `(?i)\b(curl|wget).*\|\s*(sh|bash)`, "pipe remote script"},
+	confirms := []struct {
+		id, reason string
+		pats       []string
+	}{
+		{"rm", "delete files", []string{`(?i)\brm\s+`, `(?i)\bdel\s+`, `(?i)\bRemove-Item\b`}},
+		{"git_push", "git push", []string{`(?i)\bgit\s+push\b`}},
+		{"pip", "pip install", []string{`(?i)\bpip3?\s+install\b`, `(?i)\bpython\s+-m\s+pip\s+install\b`}},
+		{"npm_g", "global npm", []string{`(?i)\bnpm\s+i(nstall)?\s+-g\b`}},
+		{"chmod", "chmod", []string{`(?i)\bchmod\s+`}},
+		{"sudo", "sudo", []string{`(?i)\bsudo\s+`}},
 	}
 	for _, c := range confirms {
-		g.confirmRules = append(g.confirmRules, rule{id: c.id, reason: c.reason, re: regexp.MustCompile(c.pat), layer: "L3"})
+		var res []*regexp.Regexp
+		for _, p := range c.pats {
+			res = append(res, regexp.MustCompile(p))
+		}
+		g.confirmRules = append(g.confirmRules, rule{id: c.id, reason: c.reason, patterns: res, layer: "L3"})
 	}
+}
+
+func matchAny(rules []rule, variants []string) *rule {
+	for i := range rules {
+		r := &rules[i]
+		for _, v := range variants {
+			for _, re := range r.patterns {
+				if re.MatchString(v) {
+					return r
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	summary := tool + ": " + fmt.Sprint(args)
+	tool = strings.TrimSpace(tool)
+
 	// L5 circuit
 	g.mu.RLock()
 	streak := g.denyStreak[sessionID]
@@ -126,18 +186,18 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		return Decision{Action: ActionDeny, Layer: "L5", RuleID: "circuit", Reason: "too many denials", Tool: tool, Summary: summary}
 	}
 
-	// L1 deny on bash content
+	// L1 deny — all command variants
 	cmd := extract(tool, args)
-	for _, r := range g.denyRules {
-		if cmd != "" && r.re.MatchString(cmd) {
-			g.incDeny(sessionID)
-			return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
-		}
+	variants := CommandVariants(cmd)
+	if r := matchAny(g.denyRules, variants); r != nil {
+		g.incDeny(sessionID)
+		return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 	}
 
-	// L2 path sandbox
+	// L2 path sandbox (also normalize path tricks)
 	if g.pathSandbox {
 		if p := pathArg(tool, args); p != "" {
+			p = NormalizePathArg(p)
 			if !g.underWorkspace(p) {
 				g.incDeny(sessionID)
 				return Decision{Action: ActionDeny, Layer: "L2", RuleID: "path_sandbox", Reason: "path outside workspace", Tool: tool, Summary: summary}
@@ -149,22 +209,67 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	}
 
 	// L3 tool class
-	switch tool {
-	case "read_file", "glob", "grep":
+	base := toolBaseName(tool) // strip server__ prefix for MCP
+	if g.readTools[tool] || g.readTools[base] {
 		return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: summary}
-	case "write_file", "edit_file":
+	}
+	if g.writeTools[tool] || g.writeTools[base] {
 		if g.confirmWrite {
 			return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "write", Reason: "write/edit requires confirm", Tool: tool, Summary: summary}
 		}
-	case "bash":
-		for _, r := range g.confirmRules {
-			if cmd != "" && r.re.MatchString(cmd) {
-				return Decision{Action: ActionConfirm, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
-			}
+	}
+	if tool == "bash" || base == "bash" || tool == "run_command" {
+		if r := matchAny(g.confirmRules, variants); r != nil {
+			return Decision{Action: ActionConfirm, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 		}
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "bash", Reason: "shell requires confirm", Tool: tool, Summary: summary}
 	}
-	return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: summary}
+	if tool == "delegate" {
+		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "delegate", Reason: "subagent delegation requires confirm", Tool: tool, Summary: summary}
+	}
+
+	// MCP / unknown tools — never silent allow
+	if g.mcpConfirm || isMCPTool(tool) {
+		// still allow known safe MCP names if clearly read-only
+		if looksReadOnlyMCP(tool) {
+			return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: summary, Reason: "mcp read-like"}
+		}
+		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "mcp_or_unknown",
+			Reason: "MCP/unknown tool requires confirm", Tool: tool, Summary: summary}
+	}
+	return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "unknown_tool", Reason: "unknown tool requires confirm", Tool: tool, Summary: summary}
+}
+
+func toolBaseName(tool string) string {
+	if i := strings.LastIndex(tool, "__"); i >= 0 {
+		return tool[i+2:]
+	}
+	return tool
+}
+
+func isMCPTool(name string) bool {
+	// registered as server__tool or tagged in description; name heuristic
+	return strings.Contains(name, "__")
+}
+
+func looksReadOnlyMCP(name string) bool {
+	n := strings.ToLower(toolBaseName(name))
+	for _, k := range []string{"read", "get", "list", "search", "find", "fetch", "time", "echo", "info", "stat"} {
+		if strings.Contains(n, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func NormalizePathArg(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.ReplaceAll(p, "\\", "/")
+	// collapse /./ and // 
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	return p
 }
 
 func (g *Guard) underWorkspace(p string) bool {
@@ -172,15 +277,16 @@ func (g *Guard) underWorkspace(p string) bool {
 		return true
 	}
 	absW, _ := filepath.Abs(g.workspace)
-	// relative paths resolved against workspace
 	candidate := p
 	if !filepath.IsAbs(p) {
-		candidate = filepath.Join(absW, p)
+		candidate = filepath.Join(absW, filepath.FromSlash(p))
 	}
 	absP, err := filepath.Abs(candidate)
 	if err != nil {
 		return false
 	}
+	// clean .. after abs
+	absP = filepath.Clean(absP)
 	rel, err := filepath.Rel(absW, absP)
 	if err != nil {
 		return false
@@ -191,7 +297,8 @@ func (g *Guard) underWorkspace(p string) bool {
 func sensitivePath(p string) bool {
 	lp := strings.ToLower(filepath.ToSlash(p))
 	return strings.Contains(lp, ".ssh") || strings.Contains(lp, ".env") ||
-		strings.Contains(lp, "id_rsa") || strings.Contains(lp, "credentials")
+		strings.Contains(lp, "id_rsa") || strings.Contains(lp, "credentials") ||
+		strings.Contains(lp, "secret") || strings.Contains(lp, "wallet")
 }
 
 func (g *Guard) CreatePending(sessionID, tool string, args map[string]any, d Decision) *PendingConfirm {
@@ -281,8 +388,8 @@ func extract(tool string, args map[string]any) string {
 	if args == nil {
 		return ""
 	}
-	switch tool {
-	case "bash":
+	switch toolBaseName(tool) {
+	case "bash", "run_command":
 		if c, ok := args["command"].(string); ok {
 			return c
 		}
@@ -291,22 +398,28 @@ func extract(tool string, args map[string]any) string {
 			return p
 		}
 	}
-	return fmt.Sprint(args)
+	// MCP tools: join string args for pattern scan
+	var parts []string
+	for _, v := range args {
+		if s, ok := v.(string); ok {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func pathArg(tool string, args map[string]any) string {
 	if args == nil {
 		return ""
 	}
-	switch tool {
-	case "read_file", "write_file", "edit_file":
+	switch toolBaseName(tool) {
+	case "read_file", "write_file", "edit_file", "glob", "grep":
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
-	case "glob", "grep":
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
+	}
+	if p, ok := args["path"].(string); ok {
+		return p
 	}
 	return ""
 }

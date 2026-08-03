@@ -4,7 +4,6 @@ import "testing"
 
 func TestPathSandbox(t *testing.T) {
 	g := NewGuard("./workspace", true, true)
-	// write outside should deny when path is absolute escape - relative ../
 	d := g.Check("s1", "read_file", map[string]any{"path": "../secret"})
 	if d.Action != ActionDeny {
 		t.Fatalf("want deny for ../, got %s %s", d.Action, d.Reason)
@@ -29,4 +28,55 @@ func TestApproveResume(t *testing.T) {
 	if r == nil || !r.Ready {
 		t.Fatal("expected ready resume")
 	}
+}
+
+func TestDenyBypassAttempts(t *testing.T) {
+	g := NewGuard("./workspace", true, true)
+	// various obfuscations of rm -rf /
+	attacks := []string{
+		"rm -rf /",
+		"rm  -rf  /",
+		"Rm -Rf /",
+		"rm%20-rf%20/",
+		"rm\t-rf\t/",
+		"rm -rf /",
+	}
+	for _, a := range attacks {
+		d := g.Check("s1", "bash", map[string]any{"command": a})
+		if d.Action != ActionDeny {
+			t.Fatalf("command %q should deny, got %s (%s)", a, d.Action, d.Reason)
+		}
+	}
+}
+
+func TestMCPDefaultConfirm(t *testing.T) {
+	g := NewGuard("./workspace", true, true)
+	d := g.Check("s1", "demo__delete_everything", map[string]any{"x": "1"})
+	if d.Action != ActionConfirm {
+		t.Fatalf("mcp unknown should confirm, got %s", d.Action)
+	}
+	d2 := g.Check("s1", "fs__read_file", map[string]any{"path": "a"})
+	// read-like mcp may allow or confirm depending on path sandbox
+	if d2.Action == ActionDeny && d2.RuleID != "path_sandbox" {
+		t.Fatalf("unexpected deny: %+v", d2)
+	}
+}
+
+func TestNormalizeCommand(t *testing.T) {
+	n := NormalizeCommand("Rm%20-Rf%20/")
+	if !contains(n, "rm") || !contains(n, "-rf") {
+		t.Fatalf("normalized=%q", n)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
+		func() bool {
+			for i := 0; i+len(sub) <= len(s); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+			return false
+		}())
 }

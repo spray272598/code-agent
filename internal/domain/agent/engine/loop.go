@@ -111,16 +111,29 @@ func (l *Loop) maybeOffload(ctx context.Context, sessionID, toolName, resText st
 func defaultSystem() string {
 	return `You are Code-Agent, a coding agent like Claude Code.
 You work inside a sandboxed project workspace.
-Core tools: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_search, delegate.
-Use memory_save for durable user/project facts; memory_search to recall them.
-Use delegate to run SubAgents in parallel for independent subtasks (roles: explore|verify|general).
-When you need a tool, reply with ONLY JSON:
-{"name":"tool_name","args":{...}}
-Or multiple: [{"name":"...","args":{...}}]
-When done, answer the user in natural language without JSON tool format.
-Be concise. Prefer edit_file over full write when changing existing files.
-Dangerous operations will require user confirmation.
-If a tool fails, adjust strategy (different path, tool, or ask user).`
+
+## ReAct protocol (required every turn)
+You MUST reason actively before acting. Each assistant turn uses this format:
+
+Thought: <your analysis of the goal, what you know, what to do next>
+Action: {"name":"tool_name","args":{...}}
+  — or multiple tools: Action: [{"name":"...","args":{...}}, ...]
+  — or pure JSON tool call(s) without the Action: label is also accepted
+Final Answer: <user-facing answer when no more tools are needed>
+
+After tools run, you will receive Observation(...): results. Then emit a new Thought and either another Action or Final Answer.
+Do NOT skip Thought. Reflection on failure is part of Thought, not a separate mode.
+
+## Tools
+Core: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_search, delegate.
+- memory_save / memory_search for durable user/project facts
+- delegate for SubAgents (roles: explore|verify|general)
+- edit_file supports multi-line exact replace and regex (regex=true)
+- glob supports ** via doublestar
+
+Prefer edit_file over full write for existing files. Be concise.
+Dangerous operations require user confirmation. All tools (including MCP server__tool) go through permission checks.
+If a tool fails: Thought should diagnose root cause and pick a different path/tool.`
 }
 
 type RunOptions struct {
@@ -246,7 +259,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	}
 	messages = append(messages, port.ChatMessage{Role: "user", Content: promptUser})
 
-	publish(NewEvent(EventThought, 0, "processing: "+truncate(userInput, 80)))
+	publish(NewEvent(EventThought, 0, "ReAct start: "+truncate(userInput, 80)))
 
 	totalTokens, totalTools := 0, 0
 	var final string
@@ -254,7 +267,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	lastSig, same := "", 0
 	toolFailStreak := 0
 
-	// resume approved tool
+	// resume approved tool → Observation, then continue ReAct
 	if l.perm != nil && continuing {
 		if r := l.perm.TakeReadyResume(session.ID); r != nil {
 			publish(&Event{Type: EventResume, SubType: r.Tool, Content: "resume " + r.Tool, Timestamp: now()})
@@ -263,7 +276,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			observability.Global.ObserveTool(time.Since(t0))
 			resText = l.maybeOffload(ctx, session.ID, r.Tool, resText)
 			totalTools++
+			obs := FormatObservation(r.Tool, resText)
 			publish(&Event{Type: EventToolCall, SubType: r.Tool, Content: r.Tool, Data: r.Args, Timestamp: now()})
+			publish(&Event{Type: EventObservation, SubType: r.Tool, Content: truncate(resText, 800), Timestamp: now()})
 			publish(&Event{Type: EventToolResult, SubType: r.Tool, Content: truncate(resText, 800), Timestamp: now()})
 			auditLog("tool_call", r.Tool, truncate(resText, 200), "resume", time.Since(t0).Milliseconds())
 			_ = l.messages.Save(ctx, &sessmodel.Message{
@@ -271,9 +286,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 				ToolName: r.Tool, ToolCallID: "resume", CreatedAt: time.Now(),
 			})
 			messages = append(messages,
-				port.ChatMessage{Role: "assistant", Content: fmt.Sprintf(`{"name":%q,"args":%s}`, r.Tool, mustJSON(r.Args))},
-				port.ChatMessage{Role: "tool", Content: resText, Name: r.Tool, ToolCallID: "resume"},
-				port.ChatMessage{Role: "user", Content: "Tool executed after approval. Continue the task."},
+				port.ChatMessage{Role: "assistant", Content: "Thought: resume approved tool\nAction: " + fmt.Sprintf(`{"name":%q,"args":%s}`, r.Tool, mustJSON(r.Args))},
+				port.ChatMessage{Role: "tool", Content: obs, Name: r.Tool, ToolCallID: "resume"},
+				port.ChatMessage{Role: "user", Content: FormatReActContinue(0, "Approved tool executed. Continue with Thought then Action or Final Answer.")},
 			)
 			if taskPlan != nil {
 				taskPlan.Advance(!isToolFail(resText), "resume")
@@ -287,7 +302,6 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			return &Result{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}, ctx.Err()
 		default:
 		}
-		publish(NewEvent(EventThought, step, fmt.Sprintf("step %d", step)))
 
 		tLLM := time.Now()
 		llmCtx, llmSpan := observability.StartSpan(ctx, "llm.generate", attribute.Int("step", step))
@@ -309,12 +323,20 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			totalTokens += common.EstimateTokens(resp.Content)
 		}
 
-		calls := resp.ToolCalls
-		if len(calls) == 0 {
-			calls = parseToolCalls(resp.Content)
+		// --- ReAct parse: Thought + Action(s) | Final Answer ---
+		react := ParseReAct(resp.Content, resp.ToolCalls)
+		if react.Thought != "" {
+			publish(&Event{Type: EventThought, Step: step, Content: react.Thought, Timestamp: now()})
+		} else {
+			publish(NewEvent(EventThought, step, fmt.Sprintf("step %d (implicit)", step)))
 		}
+
+		calls := react.Actions
 		if len(calls) == 0 {
-			final = strings.TrimSpace(resp.Content)
+			final = strings.TrimSpace(react.FinalAnswer)
+			if final == "" {
+				final = strings.TrimSpace(resp.Content)
+			}
 			if final == "" {
 				final = "done."
 			}
@@ -322,11 +344,12 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			if taskPlan != nil {
 				pass, gaps := taskPlan.Review()
 				if !pass && step < l.maxRounds {
-					msg := "Plan review: incomplete steps — " + strings.Join(gaps, "; ") + ". Continue with remaining work or explain why skipped."
+					msg := "Plan review: incomplete steps — " + strings.Join(gaps, "; ") +
+						". Emit Thought then Action for remaining work, or Final Answer explaining why skipped."
 					publish(&Event{Type: EventReview, Content: msg, Data: taskPlan, Timestamp: now()})
 					auditLog("review", "", msg, "retry", 0)
 					messages = append(messages,
-						port.ChatMessage{Role: "assistant", Content: final},
+						port.ChatMessage{Role: "assistant", Content: resp.Content},
 						port.ChatMessage{Role: "user", Content: msg},
 					)
 					_ = l.messages.Save(ctx, sessmodel.NewMessage(id("msg"), session.ID, "assistant", final))
@@ -347,7 +370,6 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		if sig == lastSig {
 			same++
 			if same >= 2 {
-				// reflect then stop if still looping
 				ref := l.reflect(ctx, "repeated identical tool calls", lastSig)
 				publish(&Event{Type: EventReflect, Content: ref, Timestamp: now()})
 				observability.Global.ReflectTotal.Add(1)
@@ -359,9 +381,10 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			same, lastSig = 0, sig
 		}
 
+		// Persist assistant turn as Thought+Action for history
 		asst := resp.Content
 		if asst == "" {
-			asst = mustJSON(calls)
+			asst = "Thought: " + react.Thought + "\nAction: " + mustJSON(calls)
 		}
 		messages = append(messages, port.ChatMessage{Role: "assistant", Content: asst})
 		_ = l.messages.Save(ctx, sessmodel.NewMessage(id("msg"), session.ID, "assistant", asst))
@@ -369,6 +392,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		needBreak := false
 		for _, tc := range calls {
 			totalTools++
+			publish(&Event{Type: EventAction, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
+
+			// Permission guard for ALL tools including MCP (server__tool)
 			if l.perm != nil && !opts.AutoApprove {
 				dec := l.perm.Check(session.ID, tc.Name, tc.Args)
 				if l.hooks != nil {
@@ -380,7 +406,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 					observability.Global.PermissionDeny.Add(1)
 					publish(&Event{Type: EventPermission, SubType: "deny", Content: msg, Data: dec, Timestamp: now()})
 					auditLog("permission", tc.Name, dec.Reason, "deny", 0)
-					messages = append(messages, port.ChatMessage{Role: "tool", Content: msg, Name: tc.Name, ToolCallID: ensureID(tc)})
+					obs := FormatObservation(tc.Name, msg)
+					messages = append(messages, port.ChatMessage{Role: "tool", Content: obs, Name: tc.Name, ToolCallID: ensureID(tc)})
+					publish(&Event{Type: EventObservation, SubType: tc.Name, Content: msg, Step: step, Timestamp: now()})
 					continue
 				case security.ActionConfirm:
 					p := l.perm.CreatePending(session.ID, tc.Name, tc.Args, dec)
@@ -420,6 +448,8 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			if l.hooks != nil {
 				l.hooks.Emit(ctx, hook.Event{Point: hook.PostToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args, Result: resText})
 			}
+			obs := FormatObservation(tc.Name, resText)
+			publish(&Event{Type: EventObservation, SubType: tc.Name, Step: step, Content: truncate(resText, 800), Timestamp: now()})
 			publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(resText, 800), Timestamp: now()})
 			auditLog("tool_call", tc.Name, truncate(resText, 300), map[bool]string{true: "error", false: "ok"}[failed], lat.Milliseconds())
 			callID := ensureID(tc)
@@ -427,15 +457,17 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 				ID: id("msg"), SessionID: session.ID, Role: "tool", Content: resText,
 				ToolName: tc.Name, ToolCallID: callID, Step: step, CreatedAt: time.Now(),
 			})
-			messages = append(messages, port.ChatMessage{Role: "tool", Content: resText, Name: tc.Name, ToolCallID: callID})
+			messages = append(messages, port.ChatMessage{Role: "tool", Content: obs, Name: tc.Name, ToolCallID: callID})
 
-			// Reflect after tool failure
+			// On failure: inject structured Thought seed (active ReAct, not silent retry)
 			if failed && toolFailStreak >= 1 {
 				ref := l.reflect(ctx, fmt.Sprintf("tool %s failed: %s", tc.Name, truncate(resText, 200)), mustJSON(tc.Args))
 				publish(&Event{Type: EventReflect, Content: ref, Step: step, Timestamp: now()})
 				observability.Global.ReflectTotal.Add(1)
 				auditLog("reflect", tc.Name, ref, "ok", 0)
-				messages = append(messages, port.ChatMessage{Role: "user", Content: "Reflection:\n" + ref + "\nAdjust and continue."})
+				messages = append(messages, port.ChatMessage{Role: "user", Content:
+					"Observation indicated failure. Next turn MUST start with Thought diagnosing the failure, then Action or Final Answer.\n" +
+						"Failure analysis:\n" + ref})
 				if taskPlan != nil {
 					taskPlan.Advance(false, truncate(resText, 80))
 				}
@@ -444,11 +476,11 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		if needBreak {
 			break
 		}
-		stepHint := fmt.Sprintf("Step %d done. Continue or answer.", step)
+		planHint := ""
 		if taskPlan != nil {
-			stepHint += "\n" + taskPlan.StringForPrompt()
+			planHint = taskPlan.StringForPrompt()
 		}
-		messages = append(messages, port.ChatMessage{Role: "user", Content: stepHint})
+		messages = append(messages, port.ChatMessage{Role: "user", Content: FormatReActContinue(step, planHint)})
 	}
 
 	if final == "" {

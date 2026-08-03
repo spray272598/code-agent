@@ -10,6 +10,7 @@ import (
 
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
@@ -42,7 +43,7 @@ type ChatApp struct {
 	workspace   string
 	rateEnabled bool
 	ratePerMin  int
-	apiKeys     map[string]bool
+	keys        *auth.KeyStore
 }
 
 func NewChatApp(
@@ -58,19 +59,14 @@ func NewChatApp(
 	ratePerMin int,
 	apiKeys []string,
 ) *ChatApp {
-	km := map[string]bool{}
-	for _, k := range apiKeys {
-		if k != "" {
-			km[k] = true
-		}
-	}
 	if timeoutSec <= 0 {
 		timeoutSec = 180
 	}
 	return &ChatApp{
 		loop: loop, sessions: sessions, messages: messages, tools: tools, perm: perm,
 		redis: redis, timeoutSec: timeoutSec, workspace: workspace,
-		rateEnabled: rateEnabled, ratePerMin: ratePerMin, apiKeys: km,
+		rateEnabled: rateEnabled, ratePerMin: ratePerMin,
+		keys:  auth.NewKeyStore(apiKeys),
 		slash: slash.NewRegistry(),
 	}
 }
@@ -140,11 +136,12 @@ func (a *ChatApp) InstallMCP(ctx context.Context, name, transport, command strin
 	})
 }
 
+// Auth verifies API key via SHA-256 hash + constant-time compare (never stores plaintext after boot).
 func (a *ChatApp) Auth(apiKey string) bool {
-	if len(a.apiKeys) == 0 {
-		return true
+	if a.keys == nil || a.keys.Empty() {
+		return true // dev open when no keys configured
 	}
-	return a.apiKeys[apiKey]
+	return a.keys.Valid(apiKey)
 }
 
 func (a *ChatApp) CreateSession(userID, projectID, title string) (*sessmodel.Session, error) {
