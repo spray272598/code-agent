@@ -63,7 +63,8 @@ func WithKeyStore(k *auth.KeyStore) Option {
 
 // CoreDeps required dependencies for ChatApp construction.
 type CoreDeps struct {
-	Loop        *engine.Loop
+	// Loop is the agent orchestrator (native *engine.Loop or Eino runner).
+	Loop        engine.Runner
 	Sessions    sessrepo.ISessionRepository
 	Messages    sessrepo.IMessageRepository
 	Tools       *tool.MapRegistry
@@ -99,7 +100,7 @@ func New(core CoreDeps, opts ...Option) *ChatApp {
 
 // NewChatApp keeps backward-compatible constructor; prefer New + Option.
 func NewChatApp(
-	loop *engine.Loop,
+	loop engine.Runner,
 	sessions sessrepo.ISessionRepository,
 	messages sessrepo.IMessageRepository,
 	tools *tool.MapRegistry,

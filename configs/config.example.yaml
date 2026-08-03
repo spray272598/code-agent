@@ -9,6 +9,8 @@ agent:
   timeout_sec: 180
   token_budget: 32000
   workspace_root: "./workspace"
+  # native = self-built Loop (default); eino = CloudWeGo Eino ReAct (needs real LLM key)
+  orchestrator: "native"
 
 llm:
   provider: "openai_compatible"

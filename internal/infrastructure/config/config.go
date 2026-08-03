@@ -40,11 +40,13 @@ type ServerConfig struct {
 }
 
 type AgentConfig struct {
-	Name           string `yaml:"name"`
-	MaxSteps       int    `yaml:"max_steps"`
-	TimeoutSec     int    `yaml:"timeout_sec"`
-	TokenBudget    int    `yaml:"token_budget"`
-	WorkspaceRoot  string `yaml:"workspace_root"`
+	Name          string `yaml:"name"`
+	MaxSteps      int    `yaml:"max_steps"`
+	TimeoutSec    int    `yaml:"timeout_sec"`
+	TokenBudget   int    `yaml:"token_budget"`
+	WorkspaceRoot string `yaml:"workspace_root"`
+	// Orchestrator: "native" (default, self-built Loop) | "eino" (CloudWeGo Eino ReAct)
+	Orchestrator string `yaml:"orchestrator"`
 }
 
 type LLMConfig struct {
@@ -258,6 +260,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("WORKSPACE_ROOT"); v != "" {
 		cfg.Agent.WorkspaceRoot = v
+	}
+	if v := os.Getenv("AGENT_ORCHESTRATOR"); v != "" {
+		cfg.Agent.Orchestrator = v
 	}
 	if v := os.Getenv("OTLP_ENABLED"); v != "" {
 		cfg.OTLP.Enabled = strings.EqualFold(v, "true") || v == "1"

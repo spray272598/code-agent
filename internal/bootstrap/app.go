@@ -27,6 +27,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
 	"github.com/spray272598/code-agent/internal/domain/worktree"
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
+	"github.com/spray272598/code-agent/internal/infrastructure/einoorch"
 	"github.com/spray272598/code-agent/internal/infrastructure/llm"
 	inframcp "github.com/spray272598/code-agent/internal/infrastructure/mcp"
 	"github.com/spray272598/code-agent/internal/infrastructure/mysql"
@@ -245,17 +246,37 @@ func Build(cfg *config.Config) (*App, error) {
 	}
 
 	perm := security.NewGuard(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite)
-	loop := engine.NewLoop(llmPort, reg, sessionRepo, messageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
-	loop.SetSkills(skillSvc)
-	loop.SetHooks(hooks)
-	loop.SetMemory(memSvc, memCtx)
-	loop.SetAudit(auditRepo)
-	loop.SetSummaryRepo(summaryRepo)
-	if blobStore != nil {
-		loop.SetBlobStore(blobStore, 4000)
+
+	// Orchestrator: native (default) or CloudWeGo Eino ReAct
+	var runner engine.Runner
+	orch := strings.ToLower(strings.TrimSpace(cfg.Agent.Orchestrator))
+	if orch == "eino" {
+		if cfg.LLM.APIKey == "" || cfg.LLM.UseMock {
+			log.Printf("[bootstrap] orchestrator=eino requires real LLM API key; falling back to native\n")
+			orch = "native"
+		} else {
+			runner = einoorch.NewRunner(einoorch.Config{
+				APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
+				MaxSteps: cfg.Agent.MaxSteps,
+			}, reg, perm, sessionRepo, messageRepo)
+			log.Printf("[bootstrap] orchestrator=eino (CloudWeGo ReAct); tools still guarded by domain Guard\n")
+		}
 	}
-	if subRunner != nil {
-		loop.SetSubRunner(subRunner)
+	if runner == nil {
+		loop := engine.NewLoop(llmPort, reg, sessionRepo, messageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
+		loop.SetSkills(skillSvc)
+		loop.SetHooks(hooks)
+		loop.SetMemory(memSvc, memCtx)
+		loop.SetAudit(auditRepo)
+		loop.SetSummaryRepo(summaryRepo)
+		if blobStore != nil {
+			loop.SetBlobStore(blobStore, 4000)
+		}
+		if subRunner != nil {
+			loop.SetSubRunner(subRunner)
+		}
+		runner = loop
+		orch = "native"
 	}
 
 	var chatOpts []application.Option
@@ -272,14 +293,13 @@ func Build(cfg *config.Config) (*App, error) {
 		chatOpts = append(chatOpts, application.WithMCP(mcpMgr))
 	}
 	chat := application.New(application.CoreDeps{
-		Loop: loop, Sessions: sessionRepo, Messages: messageRepo, Tools: reg, Perm: perm,
+		Loop: runner, Sessions: sessionRepo, Messages: messageRepo, Tools: reg, Perm: perm,
 		Redis: rdb, TimeoutSec: cfg.Agent.TimeoutSec, Workspace: workspaceRoot,
 		RateEnabled: cfg.RateLimit.Enabled, RatePerMin: cfg.RateLimit.PerMinute,
-		// APIKeys empty when KeyStore injected via option
 	}, chatOpts...)
 
-	log.Printf("[bootstrap] db=%s tools=%d redis=%v mock_llm=%v workspace=%s mcp=%v subagent=%v\n",
-		cfg.Database.Type, len(reg.List()), rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, mcpMgr != nil, subRunner != nil)
+	log.Printf("[bootstrap] db=%s tools=%d redis=%v mock_llm=%v workspace=%s mcp=%v subagent=%v orchestrator=%s\n",
+		cfg.Database.Type, len(reg.List()), rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, mcpMgr != nil, subRunner != nil, orch)
 
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,

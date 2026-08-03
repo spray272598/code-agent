@@ -27,7 +27,7 @@ import (
 )
 
 type ChatApp struct {
-	loop        *engine.Loop
+	loop        engine.Runner // native Loop or Eino orchestrator
 	sessions    sessrepo.ISessionRepository
 	messages    sessrepo.IMessageRepository
 	tools       *tool.MapRegistry
