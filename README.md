@@ -88,10 +88,31 @@ llm:
 | [docs/interview-guide.md](docs/interview-guide.md) | 秋招话术 |
 | [docs/design.md](docs/design.md) | 总体设计 |
 
+## 本机一键（Host + Server）
+
+```powershell
+# mock + prefer_host：工具可在本机 workspace 执行
+powershell -File scripts/dev_local.ps1 -Workspace .
+
+# 真实 LLM（Eino 主路径）
+$env:LLM_API_KEY="sk-..."
+$env:LLM_USE_MOCK="false"
+powershell -File scripts/dev_local.ps1 -RealLLM -Workspace D:\your\repo
+
+# 另开终端
+.\bin\cli.exe --key dev-key
+powershell -File scripts/eval_report.ps1   # → reports/eval-latest.json + .md
+```
+
+详见 [docs/local-demo.md](docs/local-demo.md)。
+
 ## 评测 / Docker
 
 ```powershell
+# 轻量冒烟
 powershell -File scripts/eval_smoke.ps1
+# 数字报告（pass_rate / 每 case 延迟）
+powershell -File scripts/eval_report.ps1
 # Docker: scripts/docker-up.md
 ```
 

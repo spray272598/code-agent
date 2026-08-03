@@ -21,12 +21,13 @@ import (
 
 // host-agent: runs on developer machine, executes tools locally for the server.
 //
-//	go run ./cmd/host-agent --server ws://127.0.0.1:8080/ws/host --token dev-key --workspace .
+//	go run ./cmd/host-agent --server ws://127.0.0.1:8080/ws/host --token dev-key --workspace . --reconnect
 func main() {
 	server := flag.String("server", "ws://127.0.0.1:8080/ws/host", "server host websocket URL")
 	token := flag.String("token", env("CODE_AGENT_API_KEY", "dev-key"), "API token")
 	deviceID := flag.String("device", "local-dev", "device id")
 	workspace := flag.String("workspace", ".", "local workspace root")
+	reconnect := flag.Bool("reconnect", false, "reconnect with backoff when disconnected")
 	flag.Parse()
 
 	abs, err := filepath.Abs(*workspace)
@@ -38,7 +39,7 @@ func main() {
 		"read_file":  coding.NewReadFile(ws),
 		"write_file": coding.NewWriteFile(ws),
 		"edit_file":  coding.NewEditFile(ws),
-		"bash":       coding.NewBash(ws, 60),
+		"bash":       coding.NewBashIsolated(ws, 60),
 		"glob":       coding.NewGlob(ws),
 		"grep":       coding.NewGrep(ws),
 	}
@@ -51,42 +52,84 @@ func main() {
 	q.Set("token", *token)
 	q.Set("deviceId", *deviceID)
 	u.RawQuery = q.Encode()
+	wsURL := u.String()
 
-	log.Printf("[host-agent] connecting %s workspace=%s\n", u.String(), abs)
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-
-	// hello
-	_ = conn.WriteJSON(host.Envelope{
-		Type: host.MsgHello, DeviceID: *deviceID, Workspace: abs,
-	})
-
-	// graceful
+	// graceful stop
+	stop := make(chan struct{})
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
-		_ = conn.Close()
-		os.Exit(0)
+		close(stop)
 	}()
 
+	backoff := time.Second
+	for {
+		select {
+		case <-stop:
+			log.Printf("[host-agent] stopped\n")
+			return
+		default:
+		}
+		log.Printf("[host-agent] connecting %s workspace=%s reconnect=%v\n", wsURL, abs, *reconnect)
+		err := runSession(wsURL, *deviceID, abs, tools, stop)
+		if err != nil {
+			log.Printf("[host-agent] session end: %v\n", err)
+		}
+		if !*reconnect {
+			return
+		}
+		select {
+		case <-stop:
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+		log.Printf("[host-agent] reconnecting in next loop (backoff=%s)\n", backoff)
+	}
+}
+
+func runSession(wsURL, deviceID, workspace string, tools map[string]tool.ITool, stop <-chan struct{}) error {
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	_ = conn.WriteJSON(host.Envelope{
+		Type: host.MsgHello, DeviceID: deviceID, Workspace: workspace,
+	})
+
 	// ping ticker
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
-		for range t.C {
-			_ = conn.WriteJSON(host.Envelope{Type: host.MsgPing, DeviceID: *deviceID})
+		for {
+			select {
+			case <-done:
+				return
+			case <-stop:
+				_ = conn.Close()
+				return
+			case <-t.C:
+				_ = conn.WriteJSON(host.Envelope{Type: host.MsgPing, DeviceID: deviceID})
+			}
 		}
 	}()
 
 	for {
+		select {
+		case <-stop:
+			return fmt.Errorf("stopped")
+		default:
+		}
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("[host-agent] disconnected: %v\n", err)
-			return
+			return err
 		}
 		var env host.Envelope
 		if err := json.Unmarshal(data, &env); err != nil {
@@ -96,7 +139,7 @@ func main() {
 		case host.MsgToolCall:
 			go handleTool(conn, tools, env)
 		case host.MsgPing:
-			_ = conn.WriteJSON(host.Envelope{Type: host.MsgPong, DeviceID: *deviceID})
+			_ = conn.WriteJSON(host.Envelope{Type: host.MsgPong, DeviceID: deviceID})
 		case host.MsgPong:
 		default:
 			log.Printf("[host-agent] msg type=%s\n", env.Type)
@@ -140,6 +183,3 @@ func env(k, def string) string {
 	}
 	return def
 }
-
-// silence unused
-var _ = fmt.Sprintf

@@ -17,6 +17,7 @@
 /logs/
 /exports/
 /screenshots/
+/reports/
 *.log
 
 # Config secrets

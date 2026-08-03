@@ -1,0 +1,105 @@
+# Local "Claude Code-like" mode: tools prefer host-agent workspace.
+# Use with: scripts/dev_local.ps1
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"
+
+agent:
+  name: "Code-Agent"
+  max_steps: 20
+  timeout_sec: 180
+  token_budget: 32000
+  workspace_root: "./workspace"
+  orchestrator: "eino"
+  eino_stream: false
+
+llm:
+  provider: "openai_compatible"
+  model: "deepseek-ai/DeepSeek-V3"
+  api_key: ""              # set LLM_API_KEY + LLM_USE_MOCK=false for Eino
+  api_base: "https://api.siliconflow.cn/v1"
+  use_mock: true           # true → native-offline; false + key → Eino
+
+database:
+  type: "memory"
+  auto_migrate: true
+  schema_path: "scripts/sql/01_schema.sql"
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    database: "code_agent"
+    username: "root"
+    password: "123456"
+
+redis:
+  enabled: false
+  host: "127.0.0.1"
+  port: 6379
+
+rate_limit:
+  enabled: true
+  per_minute: 120
+
+token_quota:
+  enabled: false
+  per_user_per_day: 2000000
+
+storage:
+  enabled: false
+  endpoint: "http://127.0.0.1:9000"
+  bucket: "code-agent"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  use_path_style: true
+  local_fallback_dir: "./data/objects"
+
+security:
+  api_keys: ["dev-key"]
+  path_sandbox: true
+  default_confirm_write: true
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+    - "http://localhost:8080"
+    - "http://127.0.0.1:8080"
+  max_body_bytes: 2097152
+
+mcp:
+  enabled: true
+
+skills:
+  enabled: true
+  dir: "./skills"
+
+hooks:
+  enabled: true
+  dir: "./hooks"
+
+commands:
+  dir: "./commands"
+
+logging:
+  level: "info"
+
+teams:
+  enabled: true
+  file: "./teams/default.yaml"
+
+subagent:
+  enabled: true
+  max_concurrent: 3
+  default_steps: 8
+
+# KEY: route coding tools to host-agent when online
+host:
+  mode: "host"
+  prefer_host: true
+  endpoint: "ws://127.0.0.1:8080/ws/host"
+
+otlp:
+  enabled: false
+  endpoint: "localhost:4318"
+  insecure: true
+  service: "code-agent"

@@ -27,11 +27,21 @@ go run ./cmd/server -config configs/config.yaml
 
 ## Host Agent（本机改代码）
 
-```powershell
-# 终端1: server，建议 host.prefer_host=true
-# 终端2:
-go run ./cmd/host-agent --server ws://127.0.0.1:8080/ws/host --token dev-key --workspace D:\your\repo --device local-dev
+一键：
 
+```powershell
+powershell -File scripts/dev_local.ps1 -Workspace D:\your\repo
+```
+
+手动：
+
+```powershell
+# 终端1
+go run ./cmd/server -config configs/config.host.yaml
+# 终端2
+go run ./cmd/host-agent --server ws://127.0.0.1:8080/ws/host --token dev-key --workspace D:\your\repo --reconnect
 # 查看在线
 curl -H "X-API-Key: dev-key" http://127.0.0.1:8080/api/v1/host/devices
+# 评测数字
+powershell -File scripts/eval_report.ps1
 ```

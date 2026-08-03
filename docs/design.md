@@ -541,7 +541,7 @@ code-agent/
 - [x] `internal/api/dto` 边缘契约层（非 domain）
 - [x] ContextCompressor L0–L3（LLM session summary + session_summary 持久化）
 - [x] Reflect（工具失败/重复调用）+ Plan 规则拆解 + Reviewer 收尾
-- [ ] 独立 eval 脚本集（可后续补）
+- [x] 独立 eval 脚本集：`scripts/eval_smoke.ps1` + `scripts/eval_report.ps1`（pass_rate 数字报告）
 
 ### Phase 4 — SubAgent ✅
 
@@ -561,6 +561,9 @@ code-agent/
 - [x] Host Agent WebSocket：`/ws/host` + `cmd/host-agent` + ProxyTool（prefer_host）
 - [x] OTLP Trace（HTTP → Jaeger/Collector）
 - [x] `scripts/eval_smoke.ps1`、`scripts/docker-up.md`、`docs/interview-guide.md`
+- [x] 本机一键：`scripts/dev_local.ps1` + `configs/config.host.yaml` + host `--reconnect`
+- [x] Eval 数字报告：`scripts/eval_report.ps1` → `reports/eval-latest.{json,md}`
+- [x] 演示文档：`docs/local-demo.md`
 
 ---
 
