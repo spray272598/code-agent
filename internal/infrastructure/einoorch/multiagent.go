@@ -137,9 +137,10 @@ func (m *MultiAgent) runOne(ctx context.Context, sessionID, prompt string, allow
 	if err != nil {
 		return "", err
 	}
+	cross := m.parent.crossCut("")
 	var tools []einotool.BaseTool
 	if len(allow) == 0 {
-		tools = WrapRegistry(m.parent.tools, m.parent.perm)
+		tools = WrapRegistryCross(m.parent.tools, m.parent.perm, cross)
 	} else {
 		reg := domtool.NewRegistry()
 		for _, name := range allow {
@@ -147,7 +148,7 @@ func (m *MultiAgent) runOne(ctx context.Context, sessionID, prompt string, allow
 				reg.Register(t)
 			}
 		}
-		tools = WrapRegistry(reg, m.parent.perm)
+		tools = WrapRegistryCross(reg, m.parent.perm, cross)
 	}
 	// cap steps for sub agents
 	maxStep := 6

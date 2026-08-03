@@ -36,6 +36,11 @@ internal/api/dto         edge contracts only (not imported by domain)
 | **ToolExecutor** | `engine/tool_batch.go` | Validate, permission, hook abort, parallel read tools |
 | **TokenManager** | `engine/token_manager.go` | Budget pressure + mid-loop trim |
 | **HistoryLoader** | `engine/history.go` | Lazy history load (recent first, full on compress) |
+| **Eino Runner** | `infrastructure/einoorch/` | Optional ReAct graph; **GuardedTool** owns security cross-cuts |
+| **mapsToSchema** | `einoorch/messages.go` | History → Eino msgs **including tool rows** |
+| **PromptBuilder** | `einoorch/prompt.go` | Dynamic system: tools + skill + memory + budget |
+
+See also: [eino-integration.md](./eino-integration.md).
 
 ## Security layers (Guard)
 

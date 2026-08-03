@@ -14,6 +14,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
+	"github.com/spray272598/code-agent/internal/domain/contextx"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/host"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
@@ -255,11 +256,20 @@ func Build(cfg *config.Config) (*App, error) {
 			log.Printf("[bootstrap] orchestrator=eino requires real LLM API key; falling back to native\n")
 			orch = "native"
 		} else {
-			runner = einoorch.NewRunner(einoorch.Config{
+			er := einoorch.NewRunner(einoorch.Config{
 				APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
 				MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
+				TokenBudget: cfg.Agent.TokenBudget,
 			}, reg, perm, sessionRepo, messageRepo)
-			log.Printf("[bootstrap] orchestrator=eino (CloudWeGo ReAct); tools still guarded by domain Guard\n")
+			er.SetHooks(hooks)
+			er.SetAudit(auditRepo)
+			er.SetSummaryRepo(summaryRepo)
+			er.SetSkills(skillSvc)
+			er.SetMemory(memSvc)
+			// L3 summary uses same LLM port via domain summarizer
+			er.SetCompressorLLM(contextx.NewSummarizer(llmPort))
+			runner = er
+			log.Printf("[bootstrap] orchestrator=eino (ReAct+Guard+compress+hooks); tools domain-owned\n")
 		}
 	}
 	if runner == nil {

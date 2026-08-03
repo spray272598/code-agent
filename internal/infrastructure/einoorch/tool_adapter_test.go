@@ -4,7 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 )
@@ -36,9 +39,21 @@ func (bashT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
 	return tool.Result{Text: "should-not-run"}, nil
 }
 
+type memAudit struct {
+	entries []audit.Entry
+}
+
+func (m *memAudit) Append(_ context.Context, e audit.Entry) error {
+	m.entries = append(m.entries, e)
+	return nil
+}
+func (m *memAudit) ListBySession(context.Context, string, int) ([]audit.Entry, error) {
+	return m.entries, nil
+}
+
 func TestGuardedToolAllow(t *testing.T) {
 	g := security.NewGuard("./workspace", true, false)
-	gt := &GuardedTool{Inner: echoT{}, Guard: g}
+	gt := &GuardedTool{Inner: echoT{}, Guard: g, UseInterrupt: false}
 	ctx := WithSession(context.Background(), "s1", true)
 	out, err := gt.InvokableRun(ctx, `{"text":"hi"}`)
 	if err != nil {
@@ -51,7 +66,7 @@ func TestGuardedToolAllow(t *testing.T) {
 
 func TestGuardedToolDenyBash(t *testing.T) {
 	g := security.NewGuard("./workspace", true, true)
-	gt := &GuardedTool{Inner: bashT{}, Guard: g}
+	gt := &GuardedTool{Inner: bashT{}, Guard: g, UseInterrupt: false}
 	ctx := WithSession(context.Background(), "s1", false)
 	out, err := gt.InvokableRun(ctx, `{"command":"rm -rf /"}`)
 	if err != nil {
@@ -60,6 +75,95 @@ func TestGuardedToolDenyBash(t *testing.T) {
 	if !strings.HasPrefix(out, "DENIED") {
 		t.Fatalf("want DENIED, got %q", out)
 	}
+}
+
+func TestGuardedToolValidation(t *testing.T) {
+	gt := &GuardedTool{Inner: echoT{}, UseInterrupt: false}
+	out, err := gt.InvokableRun(context.Background(), `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "validation error") {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestGuardedToolHookAbort(t *testing.T) {
+	bus := hook.NewBus()
+	bus.On(hook.PreToolUse, func(ctx context.Context, ev hook.Event) error {
+		return hook.Abort("policy")
+	})
+	gt := &GuardedTool{
+		Inner: echoT{}, Guard: security.NewGuard("./ws", true, false),
+		UseInterrupt: false,
+		Cross:        &CrossCut{Hooks: bus},
+	}
+	ctx := WithRunContext(context.Background(), RunContext{SessionID: "s", AutoApprove: true, Cross: &CrossCut{Hooks: bus}})
+	out, err := gt.InvokableRun(ctx, `{"text":"x"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out, "HOOK_ABORT") {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestGuardedToolCacheAndAudit(t *testing.T) {
+	aud := &memAudit{}
+	cache := tool.NewResultCache(time.Minute, 16)
+	// mark echo as cacheable via name containing "echo" - IsCacheable checks IsReadOnly
+	// echo is in IsReadOnly list
+	gt := &GuardedTool{
+		Inner: echoT{}, UseInterrupt: false,
+		Cross: &CrossCut{Audit: aud, Cache: cache, UserID: "u1"},
+	}
+	ctx := WithRunContext(context.Background(), RunContext{
+		SessionID: "s1", UserID: "u1", AutoApprove: true,
+		Cross: &CrossCut{Audit: aud, Cache: cache, UserID: "u1"},
+	})
+	out1, _ := gt.InvokableRun(ctx, `{"text":"a"}`)
+	out2, _ := gt.InvokableRun(ctx, `{"text":"a"}`)
+	if out1 != out2 || out1 != "echo:a" {
+		t.Fatalf("%q %q", out1, out2)
+	}
+	if len(aud.entries) < 2 {
+		t.Fatalf("audit entries=%d", len(aud.entries))
+	}
+	// second should be cache decision
+	if aud.entries[len(aud.entries)-1].Decision != "cache" {
+		t.Fatalf("last decision=%s", aud.entries[len(aud.entries)-1].Decision)
+	}
+}
+
+func TestGuardedToolConfirm(t *testing.T) {
+	g := security.NewGuard("./workspace", true, true)
+	// write-like confirm
+	wt := &writeT{}
+	gt := &GuardedTool{Inner: wt, Guard: g, UseInterrupt: false}
+	ctx := WithSession(context.Background(), "s1", false)
+	out, err := gt.InvokableRun(ctx, `{"path":"a.txt","content":"x"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "CONFIRM") {
+		t.Fatalf("got %q", out)
+	}
+	if len(g.ListPending("s1")) != 1 {
+		t.Fatal("pending expected")
+	}
+}
+
+type writeT struct{}
+
+func (writeT) Name() string        { return "write_file" }
+func (writeT) Description() string { return "write" }
+func (writeT) InputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"},
+	}}
+}
+func (writeT) Execute(context.Context, map[string]any) (tool.Result, error) {
+	return tool.Result{Text: "wrote"}, nil
 }
 
 func TestWrapRegistry(t *testing.T) {
