@@ -13,10 +13,9 @@ import (
 	"time"
 )
 
-// built-in slash commands for local completion (mirrors server slash registry)
 var slashCmds = []string{
 	"/help", "/quit", "/exit", "/continue", "/tools", "/skills", "/mcp",
-	"/clear", "/compact", "/approve", "/reject", "/memory", "/metrics",
+	"/clear", "/compact", "/pending", "/approve", "/reject", "/memory", "/metrics",
 }
 
 func main() {
@@ -28,7 +27,6 @@ func main() {
 	flag.Parse()
 
 	sessionID := ""
-	// create session
 	sess, err := postJSON(*base+"/api/v1/session", *apiKey, map[string]any{
 		"userId": *user, "title": "cli",
 	})
@@ -38,10 +36,11 @@ func main() {
 		}
 	}
 	fmt.Printf("code-agent CLI  base=%s  session=%s\n", *base, sessionID)
-	fmt.Println("type message; /quit exit; Tab-like: type / then prefix + ? for complete")
-	fmt.Println("examples: /h? → /help ; /continue after approve")
+	fmt.Println("hybrid: Eino orchestration (server) + GuardedTool security | /pending /approve /continue")
+	fmt.Println("type /help ; /prefix? for complete")
 	fmt.Println("---")
 
+	lastPermID := ""
 	in := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("> ")
@@ -52,10 +51,8 @@ func main() {
 		if line == "" {
 			continue
 		}
-		// slash completion: /to? or /to<TAB> style via trailing ?
 		if strings.HasPrefix(line, "/") && strings.HasSuffix(line, "?") {
-			prefix := strings.TrimSuffix(line, "?")
-			matches := completeSlash(prefix)
+			matches := completeSlash(strings.TrimSuffix(line, "?"))
 			if len(matches) == 0 {
 				fmt.Println("(no matches)")
 			} else if len(matches) == 1 {
@@ -72,22 +69,110 @@ func main() {
 			line = "继续"
 		}
 		if line == "/tools" {
-			body, err := getJSON(*base+"/api/v1/tools", *apiKey)
+			printJSON(getJSON(*base+"/api/v1/tools", *apiKey))
+			continue
+		}
+		if line == "/pending" {
+			body, err := getJSON(*base+"/api/v1/permission/pending?sessionId="+sessionID, *apiKey)
 			if err != nil {
 				fmt.Println("err:", err)
 				continue
 			}
 			pretty, _ := json.MarshalIndent(body["data"], "", "  ")
 			fmt.Println(string(pretty))
+			// remember first pending id
+			if arr, ok := body["data"].([]any); ok && len(arr) > 0 {
+				if m, ok := arr[0].(map[string]any); ok {
+					if id, _ := m["id"].(string); id != "" {
+						lastPermID = id
+						fmt.Println("(tip) /approve  or  /approve", id, "once")
+					}
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "/approve") {
+			parts := strings.Fields(line)
+			id, scope := lastPermID, "once"
+			if len(parts) >= 2 {
+				id = parts[1]
+			}
+			if len(parts) >= 3 {
+				scope = parts[2]
+			}
+			if id == "" {
+				fmt.Println("usage: /approve [permId] [once|session]  (or /pending first)")
+				continue
+			}
+			body, err := postJSON(*base+"/api/v1/permission/approve", *apiKey, map[string]any{
+				"id": id, "scope": scope, "continue": true,
+				"sessionId": sessionID, "userId": *user,
+			})
+			if err != nil {
+				fmt.Println("err:", err)
+				continue
+			}
+			if d, ok := body["data"].(map[string]any); ok {
+				if chat, ok := d["chat"].(map[string]any); ok {
+					fmt.Println(chat["response"])
+				} else {
+					pretty, _ := json.MarshalIndent(d, "", "  ")
+					fmt.Println(string(pretty))
+				}
+			}
+			lastPermID = ""
+			continue
+		}
+		if strings.HasPrefix(line, "/reject") {
+			parts := strings.Fields(line)
+			id := lastPermID
+			if len(parts) >= 2 {
+				id = parts[1]
+			}
+			if id == "" {
+				fmt.Println("usage: /reject [permId]")
+				continue
+			}
+			_, err := postJSON(*base+"/api/v1/permission/reject", *apiKey, map[string]any{"id": id})
+			if err != nil {
+				fmt.Println("err:", err)
+			} else {
+				fmt.Println("rejected", id)
+				lastPermID = ""
+			}
 			continue
 		}
 		if line == "/help" {
-			fmt.Println("Slash (local + server):")
+			fmt.Println("Slash:")
 			for _, c := range slashCmds {
 				fmt.Println(" ", c)
 			}
-			fmt.Println("  /prefix?  — complete slash commands")
+			fmt.Println("  /approve [id] [once|session]  — HITL approve + inline continue")
+			fmt.Println("  /pending                      — list confirmations")
+			fmt.Println("  y / yes                       — same as /continue after confirm")
 			continue
+		}
+
+		// interactive short confirm
+		if line == "y" || line == "Y" || line == "yes" {
+			if lastPermID != "" {
+				body, err := postJSON(*base+"/api/v1/permission/approve", *apiKey, map[string]any{
+					"id": lastPermID, "scope": "once", "continue": true,
+					"sessionId": sessionID, "userId": *user,
+				})
+				if err != nil {
+					fmt.Println("err:", err)
+					continue
+				}
+				if d, ok := body["data"].(map[string]any); ok {
+					if chat, ok := d["chat"].(map[string]any); ok {
+						fmt.Println(chat["response"])
+					}
+				}
+				lastPermID = ""
+				continue
+			}
+			line = "继续"
 		}
 
 		req := map[string]any{
@@ -95,7 +180,7 @@ func main() {
 			"message": line, "autoApprove": *autoApprove,
 		}
 		if *stream {
-			if err := streamChat(*base+"/api/v1/chat/stream", *apiKey, req, &sessionID); err != nil {
+			if err := streamChat(*base+"/api/v1/chat/stream", *apiKey, req, &sessionID, &lastPermID); err != nil {
 				fmt.Println("err:", err)
 			}
 		} else {
@@ -110,7 +195,12 @@ func main() {
 				}
 				fmt.Println(d["response"])
 				if d["needPermission"] == true {
-					fmt.Println("[permission required — approve via API then /continue]")
+					fmt.Println("[permission] /pending then /approve  or  y")
+					if p, ok := d["pendingPermission"].(map[string]any); ok {
+						if id, _ := p["id"].(string); id != "" {
+							lastPermID = id
+						}
+					}
 				}
 			}
 		}
@@ -129,7 +219,7 @@ func completeSlash(prefix string) []string {
 	return out
 }
 
-func streamChat(url, key string, req map[string]any, sessionID *string) error {
+func streamChat(url, key string, req map[string]any, sessionID, lastPerm *string) error {
 	raw, _ := json.Marshal(req)
 	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
@@ -159,14 +249,14 @@ func streamChat(url, key string, req map[string]any, sessionID *string) error {
 		}
 		if strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			handleEvent(event, data, sessionID)
+			handleEvent(event, data, sessionID, lastPerm)
 			event = ""
 		}
 	}
 	return sc.Err()
 }
 
-func handleEvent(event, data string, sessionID *string) {
+func handleEvent(event, data string, sessionID, lastPerm *string) {
 	var m map[string]any
 	_ = json.Unmarshal([]byte(data), &m)
 	switch event {
@@ -194,17 +284,32 @@ func handleEvent(event, data string, sessionID *string) {
 		}
 	case "permission":
 		fmt.Printf("\n⚠ %v\n", m["content"])
+		fmt.Println("   → type y  or  /approve   after /pending")
+		if d, ok := m["data"].(map[string]any); ok {
+			if id, _ := d["id"].(string); id != "" {
+				*lastPerm = id
+			}
+		}
 	case "compress":
 		fmt.Printf("\n📦 %v\n", m["content"])
+	case "subagent":
+		fmt.Printf("\n👥 %v %v\n", m["subType"], trim(fmt.Sprint(m["content"]), 100))
 	case "answer":
 		fmt.Println()
 	case "error":
 		fmt.Printf("\n✖ %v\n", m["content"])
 	case "done":
 		fmt.Println()
-	default:
-		// ignore
 	}
+}
+
+func printJSON(body map[string]any, err error) {
+	if err != nil {
+		fmt.Println("err:", err)
+		return
+	}
+	pretty, _ := json.MarshalIndent(body["data"], "", "  ")
+	fmt.Println(string(pretty))
 }
 
 func postJSON(url, key string, body any) (map[string]any, error) {

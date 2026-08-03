@@ -10,7 +10,7 @@
 | MCP / Skill / 六工具业务实现 | — |
 | HITL：Pending + approve + 继续 / Interrupt | StatefulInterrupt 信号 |
 
-默认 **`orchestrator: native`**；`eino` 为可切换编排后端，**不削弱 Guard**。
+默认 **`orchestrator: eino`**（有真实 LLM Key 时）；`use_mock`/无 Key 自动 **native-offline**。**不削弱 Guard**；MCP 注册为 `server__tool`，与 core 工具同一 `GuardedTool` 横切。
 
 ## 架构
 

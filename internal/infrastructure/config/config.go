@@ -179,6 +179,9 @@ func Default() *Config {
 		Agent: AgentConfig{
 			Name: "Code-Agent", MaxSteps: 20, TimeoutSec: 180,
 			TokenBudget: 32000, WorkspaceRoot: "./workspace",
+			// Primary: CloudWeGo Eino ReAct. Falls back to native when mock/no API key.
+			Orchestrator: "eino",
+			EinoStream:   false,
 		},
 		LLM: LLMConfig{UseMock: true, Model: "deepseek-ai/DeepSeek-V3"},
 		Database: DatabaseConfig{
@@ -299,6 +302,9 @@ func normalize(cfg *Config) {
 	}
 	if cfg.Agent.WorkspaceRoot == "" {
 		cfg.Agent.WorkspaceRoot = "./workspace"
+	}
+	if strings.TrimSpace(cfg.Agent.Orchestrator) == "" {
+		cfg.Agent.Orchestrator = "eino"
 	}
 	if cfg.RateLimit.PerMinute <= 0 {
 		cfg.RateLimit.PerMinute = 60

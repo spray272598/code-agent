@@ -1,114 +1,99 @@
 # Code-Agent
 
-类 Claude Code 的 **Coding Agent 运行时**：Go 服务端 + CLI 客户端。
+类 **Claude Code** 的 Coding Agent 运行时（Go）：**Eino 负责编排与对话，自研负责安全执行与产品层**。
 
-- 远程仓库：`git@github.com:spray272598/code-agent.git`
-- 设计文档：**[docs/design.md](docs/design.md)**（必读）
-- 参考：`walicode-server` / `walissh-client` / `ai-desktop-assistant`
+- 仓库：`git@github.com:spray272598/code-agent.git`
+- 设计：[docs/design.md](docs/design.md) · 边界：[docs/boundary.md](docs/boundary.md) · Eino：[docs/eino-integration.md](docs/eino-integration.md) · 面试：[docs/interview-guide.md](docs/interview-guide.md)
 
-## 形态
+## 架构原则（必读）
 
-| 组件 | 说明 |
-|------|------|
-| `cmd/server` | Agent 服务端（ReAct、MCP、权限、记忆、SSE） |
-| `cmd/cli` | 终端客户端（流式多轮、权限确认） |
-| MySQL | 会话 / 消息 / 记忆 / MCP / 审计 |
-| Redis | 限流、会话热点、Token 计量、权限会话缓存 |
-| 对象存储 | 大工具结果、导出、Skill 资源（S3/MinIO） |
+| Eino（框架） | 自研（护城河） |
+|--------------|----------------|
+| ChatModel / Stream | HTTP SSE、心跳、鉴权、CORS |
+| ReAct / MultiAgent 图 | Guard 五层权限 + 归一化 |
+| tool-calling 协议 | GuardedTool 横切（validate/hook/cache/audit） |
+| — | Workspace 六工具 + bash 进程隔离 |
+| MCP 可对接 | MCP 热装 + **一律过 Guard**（`server__tool`） |
+| — | Skill / Memory / 会话持久化 / CLI |
 
-## 快速开始（Phase 1 MVP）
+```
+CLI ──SSE──► Server(trigger)
+               └─ ChatApp
+                    └─ Runner: Eino（主）| native-offline（mock）
+                         └─ GuardedTool → domain tools + MCP
+```
+
+## 快速开始
 
 ```bash
-# 依赖（可选）：MySQL / Redis / MinIO
-# docker compose up -d
-
-# 本地 memory + mock LLM（零依赖）
-# configs/config.yaml 默认 database.type=memory, llm.use_mock=true
-
+# 零依赖：memory DB + mock LLM → 自动 native-offline
 go run ./cmd/server -config configs/config.yaml
 
 # 另一终端
 go run ./cmd/cli --base http://127.0.0.1:8080 --key dev-key
-
-# 或 curl
-curl -H "X-API-Key: dev-key" http://127.0.0.1:8080/health
 ```
 
-环境变量：`LLM_API_KEY` / `LLM_API_BASE` / `LLM_MODEL` / `LLM_USE_MOCK` / `CODE_AGENT_API_KEY` / `DB_TYPE` / `WORKSPACE_ROOT`
-
-### 已实现（Phase 1）
-
-- CLI + Server（SSE 流式事件）
-- ReAct 循环 + 六大工具：read/write/edit/bash/glob/grep
-- 5 层权限骨架 + 批准后继续
-- MySQL / memory 仓储；Redis 限流与 token 计数（可选）
-- 上下文 Hybrid 压缩
-- API Key 鉴权（`X-API-Key` / Bearer）
-
-### Phase 2 已加
-
-- MCP stdio 热装 + 自动加载 `mcp-demo`；API `/api/v1/mcp/*`
-- Skill（`skills/*/SKILL.md`）+ `/api/v1/skills/*`
-- Slash：`/help` `/tools` `/skills` `/mcp` `/compact` …
-- Hook 生命周期日志（Session/Tool/Permission/Compact）
+### 生产/真实模型（Eino 主路径）
 
 ```bash
-go build -o mcp-demo.exe ./cmd/mcp-demo   # 供 MCP demo 热装
+# PowerShell
+$env:LLM_API_KEY="sk-..."
+$env:LLM_API_BASE="https://api.siliconflow.cn/v1"   # 或 OpenAI 兼容
+$env:LLM_MODEL="deepseek-ai/DeepSeek-V3"
+$env:LLM_USE_MOCK="false"
+# 可选：$env:AGENT_ORCHESTRATOR="eino"   # 默认已是 eino
 go run ./cmd/server -config configs/config.yaml
 ```
 
-### Phase 3 记忆
-
-- 工具：`memory_save` / `memory_search`（scope=user|project）
-- API：`GET/POST /api/v1/memory`、`GET /api/v1/metrics`
-- 自动：用户纠正/偏好话术写入；每轮 prompt 注入相关记忆
-
-### Phase 3+（压缩 / 反思 / 审计）
-
-- L0–L3 上下文压缩（强制/自动；L3 LLM summary 写入 `session_summary`）
-- 工具失败 Reflect；多步 Plan + 结束前 Review
-- 审计 `GET /api/v1/audit?sessionId=`
-- metrics 含 `llm_latency_avg_ms` / `tool_latency_avg_ms`
-
-### Phase 4/5 — SubAgent / Worktree / Teams
-
-- 工具 `delegate`：并行子任务（`role=explore|verify|general`，`isolation=worktree`）
-- 配置：`teams/default.yaml`、`subagent.max_concurrent`
-- SSE 事件：`subagent`（start/tool/done）
-- 斜杠：`/teams`
-
-示例：
-
-```json
-{"name":"delegate","args":{"tasks":[
-  {"id":"e1","role":"explore","prompt":"glob **/*.go"},
-  {"id":"e2","role":"explore","prompt":"grep package main"}
-]}}
+```yaml
+# configs/config.yaml
+agent:
+  orchestrator: eino        # 主路径；无 key/mock 时自动 native-offline
+  eino_stream: false
+  token_budget: 32000
+llm:
+  use_mock: false
+  api_key: "..."            # 或环境变量
 ```
 
-### Phase 6 — 抛光 + 中间件能力
+## CLI 交互
 
-- **对象存储**：minio-go 优先（Docker MinIO），失败回落 `./data/objects`；`GET /api/v1/blobs?key=`
-- **Prometheus**：`GET /metrics`；JSON：`/api/v1/metrics`
-- **Host Agent**：`cmd/host-agent` + 服务端 `/ws/host`；`host.prefer_host=true` 时工具转发本机
-- **OTLP Trace**：`otlp.enabled` → Jaeger（`:16686`）；agent.run / llm / tool spans
-- 评测：`scripts/eval_smoke.ps1`；Docker：`scripts/docker-up.md`
+| 命令 | 作用 |
+|------|------|
+| 普通输入 | 多轮对话（SSE） |
+| `/pending` | 列出待确认权限 |
+| `/approve [id] [once\|session]` | 批准并 **inline continue** |
+| `y` / `/continue` | 确认后继续 |
+| `/tools` `/mcp` `/help` | 列表与帮助 |
+| `/team …` | Eino 多代理 explore+verify（eino 模式） |
 
-```powershell
-docker compose up -d
-$env:OTLP_ENABLED="true"
-go run ./cmd/server -config configs/config.yaml
-# 另一终端（本机执行工具）
-go run ./cmd/host-agent --server ws://127.0.0.1:8080/ws/host --token dev-key --workspace .
-```
+## 能力清单
+
+- **编排**：Eino ReAct + callbacks→SSE；`/team` 并行子代理；native 自研 Loop 兜底  
+- **安全**：五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流  
+- **工具**：read/write/edit/bash/glob/grep + memory + delegate  
+- **MCP**：stdio 热装，`server__tool` 注册，**与 core 工具同一 GuardedTool 横切**  
+- **Skill / 记忆 / L0–L3 压缩 / Token 预算**  
+- **SQLite | MySQL | memory**；MinIO；OTLP/Prometheus；host-agent  
 
 ## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [docs/design.md](docs/design.md) | 总体设计、DDD、阶段计划 |
-| docs/api.md | API（实现后补充） |
-| docs/architecture.md | 架构图（实现后补充） |
+| [docs/boundary.md](docs/boundary.md) | **Eino vs 自研边界** |
+| [docs/eino-integration.md](docs/eino-integration.md) | GuardedTool / 压缩 / 预算 |
+| [docs/architecture.md](docs/architecture.md) | Ports & Adapters |
+| [docs/agent-loop.md](docs/agent-loop.md) | ReAct 流程 |
+| [docs/mcp.md](docs/mcp.md) | MCP 对接 |
+| [docs/interview-guide.md](docs/interview-guide.md) | 秋招话术 |
+| [docs/design.md](docs/design.md) | 总体设计 |
+
+## 评测 / Docker
+
+```powershell
+powershell -File scripts/eval_smoke.ps1
+# Docker: scripts/docker-up.md
+```
 
 ## License
 

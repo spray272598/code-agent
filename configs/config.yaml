@@ -9,13 +9,16 @@ agent:
   timeout_sec: 180
   token_budget: 32000
   workspace_root: "./workspace"
+  # Primary orchestrator: CloudWeGo Eino. Falls back to native-offline when use_mock/no key.
+  orchestrator: "eino"
+  eino_stream: false
 
 llm:
   provider: "openai_compatible"
   model: "deepseek-ai/DeepSeek-V3"
-  api_key: ""
+  api_key: ""              # set LLM_API_KEY + LLM_USE_MOCK=false for Eino primary path
   api_base: "https://api.siliconflow.cn/v1"
-  use_mock: true
+  use_mock: true           # true → native-offline for local/CI
 
 database:
   type: "memory"   # mysql | memory — set mysql when docker compose up

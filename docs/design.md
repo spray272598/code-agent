@@ -4,7 +4,9 @@
 > **仓库**：`git@github.com:spray272598/code-agent.git`  
 > **本地路径**：`D:\project_go\code-agent`  
 > **参考**：`walicode-server`（领域与 Agent 深度）、`walissh-client`（流式交互）、`ai-desktop-assistant`（可迁移底座）  
-> **状态**：方案已定，按阶段实现  
+> **状态**：Phase 1–6 + Eino 混合编排已落地  
+> **编排**：**默认 Eino ReAct**；无 Key/mock → `native-offline`。边界见 [boundary.md](./boundary.md)。  
+
 
 ---
 

@@ -3,9 +3,9 @@
 ## 1 分钟项目介绍
 
 > 我做了一个类 Claude Code 的 **Coding Agent 运行时**（Go 服务端 + CLI）。  
-> 主链路是 ReAct：意图/Skill → 规划 → 工具调用 → 权限门 → 观察 → 反思/收尾。  
-> 核心六工具 + MCP 热装 + Skill/Slash/Hook；记忆分 user/project；上下文 L0–L3 压缩（含 LLM 摘要）。  
-> 支持 SubAgent 并行与 worktree 隔离。工程上 DDD 分层与依赖倒置，MySQL/Redis/对象存储，SSE 可观测与审计。
+> **编排默认 CloudWeGo Eino ReAct**（tool-calling/图/多代理）；**安全与业务执行自研**：GuardedTool 横切、五层权限、Workspace 工具、HITL。  
+> MCP 热装为 `server__tool` 与 core 工具同一 Guard；Skill/记忆/L0–L3 压缩/SSE/审计/限流仍在 domain+trigger。  
+> 无 API Key 时自动 **native-offline** 兜底，方便本地与 CI。
 
 ## 架构分层（必画）
 

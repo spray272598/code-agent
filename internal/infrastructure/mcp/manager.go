@@ -301,7 +301,6 @@ func (m *Manager) refreshTools(ctx context.Context) ([]model.ToolDef, error) {
 
 	route := map[string]string{}
 	var defs []model.ToolDef
-	nameCount := map[string]int{}
 	type pair struct {
 		c     mcpport.IMCPClient
 		tools []model.ToolDef
@@ -313,24 +312,17 @@ func (m *Manager) refreshTools(ctx context.Context) ([]model.ToolDef, error) {
 			log.Printf("[mcp] list tools %s: %v\n", c.Name(), err)
 			continue
 		}
-		for _, t := range tools {
-			nameCount[t.Name]++
-		}
 		pairs = append(pairs, pair{c: c, tools: tools})
 	}
 	for _, p := range pairs {
 		for _, t := range p.tools {
-			name := t.Name
-			if nameCount[t.Name] > 1 {
-				name = p.c.Name() + "__" + t.Name
-			}
+			// Always server__tool: Guard MCP policy + no collision with core tools
+			name := p.c.Name() + "__" + t.Name
 			route[name] = p.c.Name() + "\x00" + t.Name
 			td := t
 			td.Name = name
 			td.ServerName = p.c.Name()
-			if name != t.Name {
-				td.Description = fmt.Sprintf("[%s] %s", p.c.Name(), t.Description)
-			}
+			td.Description = fmt.Sprintf("[MCP:%s] %s", p.c.Name(), t.Description)
 			defs = append(defs, td)
 		}
 	}

@@ -248,31 +248,34 @@ func Build(cfg *config.Config) (*App, error) {
 
 	perm := security.NewGuard(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite)
 
-	// Orchestrator: native (default) or CloudWeGo Eino ReAct
+	// Orchestrator: Eino is primary; native is offline/mock fallback only.
+	// All tools (core + MCP) live in MapRegistry → Eino path wraps every tool with GuardedTool.
 	var runner engine.Runner
 	orch := strings.ToLower(strings.TrimSpace(cfg.Agent.Orchestrator))
-	if orch == "eino" {
-		if cfg.LLM.APIKey == "" || cfg.LLM.UseMock {
-			log.Printf("[bootstrap] orchestrator=eino requires real LLM API key; falling back to native\n")
-			orch = "native"
-		} else {
-			er := einoorch.NewRunner(einoorch.Config{
-				APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
-				MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
-				TokenBudget: cfg.Agent.TokenBudget,
-			}, reg, perm, sessionRepo, messageRepo)
-			er.SetHooks(hooks)
-			er.SetAudit(auditRepo)
-			er.SetSummaryRepo(summaryRepo)
-			er.SetSkills(skillSvc)
-			er.SetMemory(memSvc)
-			// L3 summary uses same LLM port via domain summarizer
-			er.SetCompressorLLM(contextx.NewSummarizer(llmPort))
-			runner = er
-			log.Printf("[bootstrap] orchestrator=eino (ReAct+Guard+compress+hooks); tools domain-owned\n")
-		}
+	if orch == "" || orch == "eino" || orch == "default" {
+		orch = "eino"
 	}
-	if runner == nil {
+	wantEino := orch == "eino"
+	canEino := wantEino && cfg.LLM.APIKey != "" && !cfg.LLM.UseMock
+	if wantEino && !canEino {
+		log.Printf("[bootstrap] orchestrator=eino requested but LLM mock/no key → native (offline/mock)\n")
+	}
+	if canEino {
+		er := einoorch.NewRunner(einoorch.Config{
+			APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
+			MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
+			TokenBudget: cfg.Agent.TokenBudget,
+		}, reg, perm, sessionRepo, messageRepo)
+		er.SetHooks(hooks)
+		er.SetAudit(auditRepo)
+		er.SetSummaryRepo(summaryRepo)
+		er.SetSkills(skillSvc)
+		er.SetMemory(memSvc)
+		er.SetCompressorLLM(contextx.NewSummarizer(llmPort))
+		runner = er
+		orch = "eino"
+		log.Printf("[bootstrap] orchestrator=eino (primary) | GuardedTool cross-cuts on ALL tools incl. MCP\n")
+	} else {
 		loop := engine.NewLoop(llmPort, reg, sessionRepo, messageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
 		loop.SetSkills(skillSvc)
 		loop.SetHooks(hooks)
@@ -286,7 +289,8 @@ func Build(cfg *config.Config) (*App, error) {
 			loop.SetSubRunner(subRunner)
 		}
 		runner = loop
-		orch = "native"
+		orch = "native-offline"
+		log.Printf("[bootstrap] orchestrator=native-offline (mock/no API key; Guard still on all tools)\n")
 	}
 
 	var chatOpts []application.Option
@@ -308,8 +312,14 @@ func Build(cfg *config.Config) (*App, error) {
 		RateEnabled: cfg.RateLimit.Enabled, RatePerMin: cfg.RateLimit.PerMinute,
 	}, chatOpts...)
 
-	log.Printf("[bootstrap] db=%s tools=%d redis=%v mock_llm=%v workspace=%s mcp=%v subagent=%v orchestrator=%s\n",
-		cfg.Database.Type, len(reg.List()), rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, mcpMgr != nil, subRunner != nil, orch)
+	mcpN := 0
+	for _, t := range reg.List() {
+		if t != nil && strings.Contains(t.Name(), "__") {
+			mcpN++
+		}
+	}
+	log.Printf("[bootstrap] db=%s tools=%d (mcp=%d) redis=%v mock_llm=%v workspace=%s subagent=%v orchestrator=%s\n",
+		cfg.Database.Type, len(reg.List()), mcpN, rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, subRunner != nil, orch)
 
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,

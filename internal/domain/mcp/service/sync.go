@@ -86,6 +86,13 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) (tool.Result
 	if args == nil {
 		args = map[string]any{}
 	}
+	// Schema pre-check when available (security: fail closed on bad shape)
+	if t.def.InputSchema != nil {
+		if err := tool.ValidateArgs(t.def.InputSchema, args); err != nil {
+			return tool.Result{Text: "mcp validation: " + err.Error(), IsError: true}, nil
+		}
+	}
+	// Manager routes by registered name (server__tool)
 	text, err := t.mgr.CallTool(ctx, t.def.Name, args)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
