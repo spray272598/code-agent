@@ -16,6 +16,9 @@ const (
 	EventError      EventType = "error"
 	EventDone       EventType = "done"
 	EventResume     EventType = "resume"
+	EventSkill      EventType = "skill"
+	EventSlash      EventType = "slash"
+	EventHook       EventType = "hook"
 )
 
 type Event struct {

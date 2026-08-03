@@ -522,12 +522,14 @@ code-agent/
 
 **验收**：在配置的 workspace 内「搜索 → 读 → 改 → bash 测试」全程流式可见。
 
-### Phase 2 — 扩展生态
+### Phase 2 — 扩展生态 ✅ 主干已落地
 
-- MCP 安装热加载 + 市场
-- Skill + Slash + Hook
-- 对象存储：大 tool 结果落盘
-- Token 日配额
+- [x] MCP 安装热加载（stdio，DIP：`IMCPManagerPort`）+ `/api/v1/mcp/*`
+- [x] Skill 加载/匹配/注入 + `/api/v1/skills/*`
+- [x] Slash：`/help` `/tools` `/skills` `/mcp` `/compact` `/clear` `/cost` `/skill`
+- [x] Hook：SessionStart/End、Pre/PostToolUse、PreCompact、Permission
+- [ ] 对象存储：大 tool 结果落盘（接口已预留）
+- [x] Token 日配额 Redis 计数（启用 redis 时）
 
 ### Phase 3 — 记忆与压缩做深
 

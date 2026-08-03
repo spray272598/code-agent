@@ -32,7 +32,7 @@ func main() {
 		}
 	}
 	fmt.Printf("code-agent CLI  base=%s  session=%s\n", *base, sessionID)
-	fmt.Println("type message; /quit to exit; /continue after permission approve")
+	fmt.Println("type message; /quit exit; /continue after approve; /help /tools /skills /mcp on server")
 	fmt.Println("---")
 
 	in := bufio.NewScanner(os.Stdin)

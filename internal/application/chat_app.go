@@ -5,12 +5,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
+	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
+	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
+	"github.com/spray272598/code-agent/internal/domain/skill"
+	"github.com/spray272598/code-agent/internal/domain/slash"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 )
@@ -22,6 +27,9 @@ type ChatApp struct {
 	tools       *tool.MapRegistry
 	perm        *security.Guard
 	redis       *redisx.Client
+	skills      *skill.Service
+	slash       *slash.Registry
+	mcp         mcpport.IMCPManagerPort
 	timeoutSec  int
 	workspace   string
 	rateEnabled bool
@@ -55,7 +63,31 @@ func NewChatApp(
 		loop: loop, sessions: sessions, messages: messages, tools: tools, perm: perm,
 		redis: redis, timeoutSec: timeoutSec, workspace: workspace,
 		rateEnabled: rateEnabled, ratePerMin: ratePerMin, apiKeys: km,
+		slash: slash.NewRegistry(),
 	}
+}
+
+func (a *ChatApp) SetSkills(s *skill.Service)      { a.skills = s }
+func (a *ChatApp) SetMCP(m mcpport.IMCPManagerPort) { a.mcp = m }
+func (a *ChatApp) Slash() *slash.Registry           { return a.slash }
+func (a *ChatApp) Skills() *skill.Service           { return a.skills }
+func (a *ChatApp) MCP() mcpport.IMCPManagerPort     { return a.mcp }
+
+// InstallMCP installs/updates an MCP server via domain port.
+func (a *ChatApp) InstallMCP(ctx context.Context, name, transport, command string, args []string, env map[string]string, url string, enabled bool, timeout int) error {
+	if a.mcp == nil {
+		return fmt.Errorf("mcp disabled")
+	}
+	if transport == "" {
+		transport = "stdio"
+	}
+	if timeout <= 0 {
+		timeout = 60
+	}
+	return a.mcp.AddOrUpdate(ctx, mcpmodel.ServerConfig{
+		Name: name, Transport: transport, Command: command, Args: args,
+		Env: env, URL: url, Enabled: enabled, TimeoutSec: timeout,
+	})
 }
 
 func (a *ChatApp) Auth(apiKey string) bool {
@@ -107,9 +139,81 @@ type ChatResponse struct {
 	NeedPermission bool   `json:"needPermission,omitempty"`
 	Pending        any    `json:"pendingPermission,omitempty"`
 	ErrorClass     string `json:"errorClass,omitempty"`
+	Slash          bool   `json:"slash,omitempty"`
+}
+
+func (a *ChatApp) slashCtx() slash.Context {
+	return slash.Context{
+		ListTools: a.ListTools,
+		ListSkills: func() string {
+			if a.skills == nil {
+				return "(no skills)"
+			}
+			list := a.skills.List()
+			if len(list) == 0 {
+				return "(empty skills dir)"
+			}
+			var b strings.Builder
+			for _, sk := range list {
+				b.WriteString(fmt.Sprintf("- %s (%s): %s\n", sk.ID, sk.Name, sk.Description))
+			}
+			return b.String()
+		},
+		ListMCP: func() string {
+			if a.mcp == nil {
+				return "(mcp disabled)"
+			}
+			hs := a.mcp.Health(context.Background())
+			if len(hs) == 0 {
+				return "(no mcp servers installed)"
+			}
+			var b strings.Builder
+			for _, h := range hs {
+				on := "off"
+				if h.Online {
+					on = "online"
+				}
+				b.WriteString(fmt.Sprintf("- %s [%s] tools=%d %s\n", h.Name, on, h.ToolCount, h.LastError))
+			}
+			return b.String()
+		},
+	}
+}
+
+func (a *ChatApp) trySlash(req *ChatRequest) (*ChatResponse, bool, bool) {
+	// returns (resp, handled, forceCompact) — if rewrite, handled=false forceCompact may set
+	if a.slash == nil || !strings.HasPrefix(strings.TrimSpace(req.Message), "/") {
+		return nil, false, false
+	}
+	ctx := a.slashCtx()
+	ctx.SessionID = req.SessionID
+	ctx.UserID = req.UserID
+	res := a.slash.Try(req.Message, ctx)
+	if res.Rewrite != "" {
+		req.Message = res.Rewrite
+		return nil, false, res.ForceCompact
+	}
+	if !res.Handled {
+		return nil, false, res.ForceCompact
+	}
+	// ensure session id
+	sid := req.SessionID
+	if sid == "" {
+		if s, err := a.CreateSession(req.UserID, req.ProjectID, "slash"); err == nil {
+			sid = s.ID
+		}
+	}
+	return &ChatResponse{SessionID: sid, Response: res.Response, Slash: true}, true, false
 }
 
 func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
+	forceCompact := false
+	if resp, handled, fc := a.trySlash(&req); handled {
+		return resp, nil
+	} else {
+		forceCompact = fc
+	}
+
 	session, err := a.resolveSession(req)
 	if err != nil {
 		return nil, err
@@ -122,14 +226,13 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	if a.redis != nil && a.redis.Enabled() {
 		_ = a.redis.Set(ctx, "sess:hot:"+session.ID, req.Message, 24*time.Hour)
 	}
-	res, err := a.loop.Run(ctx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove})
+	res, err := a.loop.Run(ctx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
 	if err != nil && res == nil {
 		return nil, err
 	}
 	if res == nil {
 		return nil, fmt.Errorf("empty result")
 	}
-	// token meter
 	if a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
 		day := time.Now().Format("20060102")
 		_, _ = a.redis.IncrBy(ctx, fmt.Sprintf("token:user:%s:%s", session.UserID, day), int64(res.TokenUsed), 48*time.Hour)
@@ -143,6 +246,23 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 }
 
 func (a *ChatApp) ChatStream(req ChatRequest) (<-chan *engine.Event, *sessmodel.Session, error) {
+	forceCompact := false
+	if resp, handled, fc := a.trySlash(&req); handled {
+		ch := make(chan *engine.Event, 4)
+		go func() {
+			defer close(ch)
+			sid := resp.SessionID
+			ch <- &engine.Event{Type: engine.EventSlash, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}
+			ch <- &engine.Event{Type: engine.EventAnswer, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}
+			ch <- &engine.Event{Type: engine.EventDone, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}
+			_ = sid
+		}()
+		s := &sessmodel.Session{ID: resp.SessionID}
+		return ch, s, nil
+	} else {
+		forceCompact = fc
+	}
+
 	session, err := a.resolveSession(req)
 	if err != nil {
 		return nil, nil, err
@@ -156,7 +276,7 @@ func (a *ChatApp) ChatStream(req ChatRequest) (<-chan *engine.Event, *sessmodel.
 	go func() {
 		defer close(ch)
 		defer cancel()
-		res, err := a.loop.Run(ctx, session, req.Message, ch, engine.RunOptions{AutoApprove: req.AutoApprove})
+		res, err := a.loop.Run(ctx, session, req.Message, ch, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
 		if err != nil && res == nil {
 			ch <- &engine.Event{Type: engine.EventError, Content: err.Error(), Completed: true, Timestamp: time.Now().UnixMilli()}
 		}

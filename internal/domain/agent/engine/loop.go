@@ -12,9 +12,11 @@ import (
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/contextx"
+	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
+	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
@@ -22,14 +24,16 @@ import (
 const maxToolResultChars = 4000
 
 type Loop struct {
-	llm         port.ILLMPort
-	tools       *tool.MapRegistry
-	sessions    sessrepo.ISessionRepository
-	messages    sessrepo.IMessageRepository
-	perm        *security.Guard
-	compressor  *contextx.Compressor
-	maxRounds   int
-	tokenBudget int
+	llm          port.ILLMPort
+	tools        *tool.MapRegistry
+	sessions     sessrepo.ISessionRepository
+	messages     sessrepo.IMessageRepository
+	perm         *security.Guard
+	compressor   *contextx.Compressor
+	skills       *skill.Service
+	hooks        *hook.Bus
+	maxRounds    int
+	tokenBudget  int
 	systemPrompt string
 }
 
@@ -55,6 +59,9 @@ func NewLoop(
 	}
 }
 
+func (l *Loop) SetSkills(s *skill.Service) { l.skills = s }
+func (l *Loop) SetHooks(h *hook.Bus)       { l.hooks = h }
+
 func defaultSystem() string {
 	return `You are Code-Agent, a coding agent like Claude Code.
 You work inside a sandboxed project workspace.
@@ -68,7 +75,8 @@ Dangerous operations will require user confirmation.`
 }
 
 type RunOptions struct {
-	AutoApprove bool
+	AutoApprove  bool
+	ForceCompact bool
 }
 
 func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput string, eventCh chan<- *Event, opts RunOptions) (*Result, error) {
@@ -88,12 +96,28 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	}
 	continuing := isContinue(userInput)
 
+	if l.hooks != nil {
+		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionStart, SessionID: session.ID})
+	}
+
+	// skill match
+	var activeSkill *skill.Skill
+	if l.skills != nil && !continuing {
+		activeSkill = l.skills.Match(userInput)
+		if activeSkill != nil {
+			publish(&Event{Type: EventSkill, SubType: activeSkill.ID, Content: "skill: " + activeSkill.Name, Data: activeSkill, Timestamp: now()})
+		}
+	}
+
 	// save user message
 	_ = l.messages.Save(ctx, sessmodel.NewMessage(id("msg"), session.ID, "user", userInput))
 	session.AddTokens(common.EstimateTokens(userInput))
 
 	history, _ := l.messages.ListAsMaps(ctx, session.ID, 100)
-	if l.compressor.Needs(history) {
+	if opts.ForceCompact || l.compressor.Needs(history) {
+		if l.hooks != nil {
+			l.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
+		}
 		var saved int
 		history, saved = l.compressor.Compress(history)
 		publish(&Event{Type: EventCompress, Content: fmt.Sprintf("compressed history, ~%d tokens saved", saved), Timestamp: now()})
@@ -101,6 +125,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 
 	toolDesc := l.tools.Descriptions()
 	sys := l.systemPrompt + "\n\n## Available tools\n" + formatTools(toolDesc)
+	if activeSkill != nil && l.skills != nil {
+		sys += "\n" + l.skills.PromptSection(activeSkill)
+	}
 
 	messages := mapsToChat(history)
 	promptUser := userInput
@@ -204,6 +231,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			totalTools++
 			if l.perm != nil && !opts.AutoApprove {
 				dec := l.perm.Check(session.ID, tc.Name, tc.Args)
+				if l.hooks != nil {
+					l.hooks.Emit(ctx, hook.Event{Point: hook.Permission, SessionID: session.ID, Tool: tc.Name, Args: tc.Args, Decision: string(dec.Action)})
+				}
 				switch dec.Action {
 				case security.ActionDeny:
 					msg := fmt.Sprintf("DENIED [%s]: %s", dec.Layer, dec.Reason)
@@ -221,9 +251,15 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 					break
 				}
 			}
+			if l.hooks != nil {
+				l.hooks.Emit(ctx, hook.Event{Point: hook.PreToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args})
+			}
 			publish(&Event{Type: EventToolCall, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
 			resText, _ := l.execTool(ctx, tc.Name, tc.Args)
 			resText = budget(resText)
+			if l.hooks != nil {
+				l.hooks.Emit(ctx, hook.Event{Point: hook.PostToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args, Result: resText})
+			}
 			publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(resText, 800), Timestamp: now()})
 			callID := ensureID(tc)
 			_ = l.messages.Save(ctx, &sessmodel.Message{
@@ -243,6 +279,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	}
 	session.AddTokens(totalTokens)
 	_ = l.sessions.Save(ctx, session)
+	if l.hooks != nil {
+		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionEnd, SessionID: session.ID, Meta: map[string]any{"tokenUsed": totalTokens}})
+	}
 	publish(&Event{Type: EventDone, Content: final, Completed: true, Data: map[string]any{"tokenUsed": totalTokens, "toolCalls": totalTools}, Timestamp: now()})
 
 	res := &Result{

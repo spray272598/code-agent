@@ -45,9 +45,21 @@ curl -H "X-API-Key: dev-key" http://127.0.0.1:8080/health
 - 上下文 Hybrid 压缩
 - API Key 鉴权（`X-API-Key` / Bearer）
 
-### 待做（见 design.md）
+### Phase 2 已加
 
-MCP 热装、Skill/Slash/Hook、对象存储落大结果、记忆 user/project、SubAgent、Worktree
+- MCP stdio 热装 + 自动加载 `mcp-demo`；API `/api/v1/mcp/*`
+- Skill（`skills/*/SKILL.md`）+ `/api/v1/skills/*`
+- Slash：`/help` `/tools` `/skills` `/mcp` `/compact` …
+- Hook 生命周期日志（Session/Tool/Permission/Compact）
+
+```bash
+go build -o mcp-demo.exe ./cmd/mcp-demo   # 供 MCP demo 热装
+go run ./cmd/server -config configs/config.yaml
+```
+
+### 待做
+
+对象存储落大结果、记忆 user/project、SubAgent、Worktree（见 design.md Phase 3+）
 
 ## 文档
 

@@ -33,6 +33,13 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/permission/pending", s.handlePermPending)
 	mux.HandleFunc("/api/v1/permission/approve", s.handlePermApprove)
 	mux.HandleFunc("/api/v1/permission/reject", s.handlePermReject)
+	mux.HandleFunc("/api/v1/mcp/servers", s.handleMCPServers)
+	mux.HandleFunc("/api/v1/mcp/health", s.handleMCPHealth)
+	mux.HandleFunc("/api/v1/mcp/tools", s.handleMCPTools)
+	mux.HandleFunc("/api/v1/skills", s.handleSkills)
+	mux.HandleFunc("/api/v1/skills/install", s.handleSkillInstall)
+	mux.HandleFunc("/api/v1/skills/uninstall", s.handleSkillUninstall)
+	mux.HandleFunc("/api/v1/skills/reload", s.handleSkillReload)
 
 	s.srv = &http.Server{Addr: s.addr, Handler: cors(auth(s.app, mux)), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("[http] listening on %s\n", s.addr)
@@ -234,6 +241,207 @@ func (s *Server) handlePermReject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]bool{"rejected": true}})
+}
+
+func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
+	m := s.app.MCP()
+	if m == nil {
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": m.Health(r.Context())})
+	case http.MethodPost:
+		var body struct {
+			Name       string            `json:"name"`
+			Transport  string            `json:"transport"`
+			Command    string            `json:"command"`
+			Args       []string          `json:"args"`
+			Env        map[string]string `json:"env"`
+			URL        string            `json:"url"`
+			Enabled    *bool             `json:"enabled"`
+			TimeoutSec int               `json:"timeoutSec"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, 400, errMap(err))
+			return
+		}
+		en := true
+		if body.Enabled != nil {
+			en = *body.Enabled
+		}
+		cfg := struct {
+			// use model via map rebuild
+		}{}
+		_ = cfg
+		// import model in handler - use mcp through app method Install
+		type serverCfg = struct {
+			Name, Transport, Command, URL string
+			Args                          []string
+			Env                           map[string]string
+			Enabled                       bool
+			TimeoutSec                    int
+		}
+		// call via interface extension — install on manager through ChatApp helper
+		err := s.installMCP(r.Context(), body.Name, body.Transport, body.Command, body.Args, body.Env, body.URL, en, body.TimeoutSec)
+		if err != nil {
+			writeJSON(w, 400, errMap(err))
+			return
+		}
+		tools, _ := m.ListTools(r.Context())
+		names := make([]string, 0)
+		for _, t := range tools {
+			if t.ServerName == body.Name || strings.HasPrefix(t.Name, body.Name+"__") {
+				names = append(names, t.Name)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+			"ok": true, "name": body.Name, "toolCount": len(names), "tools": names,
+		}})
+	case http.MethodDelete:
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			var body struct {
+				Name string `json:"name"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			name = body.Name
+		}
+		if err := m.Remove(name); err != nil {
+			writeJSON(w, 400, errMap(err))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]bool{"deleted": true}})
+	default:
+		writeJSON(w, 405, map[string]any{"code": "405"})
+	}
+}
+
+func (s *Server) installMCP(ctx context.Context, name, transport, command string, args []string, env map[string]string, url string, enabled bool, timeout int) error {
+	m := s.app.MCP()
+	if m == nil {
+		return fmt.Errorf("mcp disabled")
+	}
+	// use type from domain model via bootstrap-installed manager — dynamic import
+	return s.app.InstallMCP(ctx, name, transport, command, args, env, url, enabled, timeout)
+}
+
+func (s *Server) handleMCPHealth(w http.ResponseWriter, r *http.Request) {
+	m := s.app.MCP()
+	if m == nil {
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": m.Health(r.Context())})
+}
+
+func (s *Server) handleMCPTools(w http.ResponseWriter, r *http.Request) {
+	m := s.app.MCP()
+	if m == nil {
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+		return
+	}
+	list, err := m.ListTools(r.Context())
+	if err != nil {
+		writeJSON(w, 500, errMap(err))
+		return
+	}
+	server := r.URL.Query().Get("server")
+	out := make([]map[string]any, 0, len(list))
+	for _, t := range list {
+		if server != "" && t.ServerName != server {
+			continue
+		}
+		out = append(out, map[string]any{"name": t.Name, "description": t.Description, "server": t.ServerName})
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": out})
+}
+
+func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
+	sk := s.app.Skills()
+	if sk == nil {
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+		return
+	}
+	if id := r.URL.Query().Get("id"); id != "" {
+		one := sk.Get(id)
+		if one == nil {
+			writeJSON(w, 404, map[string]any{"code": "404", "message": "not found"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": one})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": sk.List()})
+}
+
+func (s *Server) handleSkillInstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	sk := s.app.Skills()
+	if sk == nil {
+		writeJSON(w, 400, map[string]any{"message": "skills disabled"})
+		return
+	}
+	var body struct {
+		Path string `json:"path"`
+		ID   string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
+		writeJSON(w, 400, map[string]any{"message": "path required"})
+		return
+	}
+	installed, err := sk.InstallFromPath(body.Path, body.ID)
+	if err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": installed})
+}
+
+func (s *Server) handleSkillUninstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	sk := s.app.Skills()
+	if sk == nil {
+		writeJSON(w, 400, map[string]any{"message": "skills disabled"})
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.ID == "" {
+		writeJSON(w, 400, map[string]any{"message": "id required"})
+		return
+	}
+	if err := sk.Uninstall(body.ID); err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]bool{"uninstalled": true}})
+}
+
+func (s *Server) handleSkillReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	sk := s.app.Skills()
+	if sk == nil {
+		writeJSON(w, 400, map[string]any{"message": "skills disabled"})
+		return
+	}
+	if err := sk.Reload(); err != nil {
+		writeJSON(w, 500, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"reloaded": true, "count": len(sk.List())}})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
