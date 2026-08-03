@@ -24,6 +24,7 @@ type Metrics struct {
 	TokensTotal    atomic.Int64
 	ReflectTotal   atomic.Int64
 	CompressTotal  atomic.Int64
+	BlobOffload    atomic.Int64
 
 	// latency sum/count for averages
 	LLMLatencySumMs  atomic.Int64
@@ -59,7 +60,7 @@ func (m *Metrics) Snapshot() map[string]any {
 		"tool_calls": m.ToolCalls.Load(), "permission_deny": m.PermissionDeny.Load(),
 		"memory_writes": m.MemoryWrites.Load(), "memory_reads": m.MemoryReads.Load(),
 		"tokens_total": m.TokensTotal.Load(), "reflect_total": m.ReflectTotal.Load(),
-		"compress_total": m.CompressTotal.Load(),
+		"compress_total": m.CompressTotal.Load(), "blob_offload_total": m.BlobOffload.Load(),
 		"llm_latency_avg_ms": llmAvg, "llm_latency_count": llmN,
 		"tool_latency_avg_ms": toolAvg, "tool_latency_count": toolN,
 	}

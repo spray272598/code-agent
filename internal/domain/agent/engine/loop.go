@@ -13,6 +13,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/agent/plan"
 	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/domain/contextx"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -43,6 +44,8 @@ type Loop struct {
 	memCtx       *coding.MemoryContext
 	audit        audit.Repository
 	subRunner    *subagent.Runner
+	blobs        blob.Store
+	blobThresh   int
 	maxRounds    int
 	tokenBudget  int
 	systemPrompt string
@@ -80,7 +83,29 @@ func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
 }
 func (l *Loop) SetAudit(a audit.Repository)                  { l.audit = a }
 func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository) { l.summaries = s }
-func (l *Loop) SetSubRunner(r *subagent.Runner)              { l.subRunner = r }
+func (l *Loop) SetSubRunner(r *subagent.Runner) { l.subRunner = r }
+func (l *Loop) SetBlobStore(s blob.Store, threshold int) {
+	l.blobs = s
+	if threshold <= 0 {
+		threshold = blob.DefaultThreshold
+	}
+	l.blobThresh = threshold
+}
+
+func (l *Loop) maybeOffload(ctx context.Context, sessionID, toolName, resText string) string {
+	if l.blobs == nil {
+		return budget(resText)
+	}
+	or := blob.OffloadIfLarge(ctx, l.blobs, sessionID, toolName, resText, l.blobThresh)
+	if or.Offloaded {
+		observability.Global.BlobOffload.Add(1)
+		observability.Trace.Event(map[string]any{
+			"event": "blob_offload", "session": sessionID, "tool": toolName, "bytes": or.Bytes, "key": or.ObjectKey,
+		})
+		return or.Preview
+	}
+	return budget(resText)
+}
 
 func defaultSystem() string {
 	return `You are Code-Agent, a coding agent like Claude Code.
@@ -229,6 +254,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			t0 := time.Now()
 			resText, _ := l.execTool(ctx, r.Tool, r.Args)
 			observability.Global.ObserveTool(time.Since(t0))
+			resText = l.maybeOffload(ctx, session.ID, r.Tool, resText)
 			totalTools++
 			publish(&Event{Type: EventToolCall, SubType: r.Tool, Content: r.Tool, Data: r.Args, Timestamp: now()})
 			publish(&Event{Type: EventToolResult, SubType: r.Tool, Content: truncate(resText, 800), Timestamp: now()})
@@ -368,7 +394,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			resText, _ := l.execTool(ctx, tc.Name, tc.Args)
 			lat := time.Since(t0)
 			observability.Global.ObserveTool(lat)
-			resText = budget(resText)
+			resText = l.maybeOffload(ctx, session.ID, tc.Name, resText)
 			failed := isToolFail(resText)
 			if failed {
 				toolFailStreak++

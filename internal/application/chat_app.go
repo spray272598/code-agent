@@ -10,6 +10,7 @@ import (
 
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/blob"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -36,6 +37,7 @@ type ChatApp struct {
 	mcp         mcpport.IMCPManagerPort
 	memSvc      *memory.Service
 	auditRepo   audit.Repository
+	blobs       blob.Store
 	timeoutSec  int
 	workspace   string
 	rateEnabled bool
@@ -76,12 +78,21 @@ func NewChatApp(
 func (a *ChatApp) SetSkills(s *skill.Service)      { a.skills = s }
 func (a *ChatApp) SetMCP(m mcpport.IMCPManagerPort) { a.mcp = m }
 func (a *ChatApp) SetMemory(s *memory.Service)     { a.memSvc = s }
-func (a *ChatApp) SetAudit(r audit.Repository)     { a.auditRepo = r }
-func (a *ChatApp) Slash() *slash.Registry           { return a.slash }
-func (a *ChatApp) Skills() *skill.Service           { return a.skills }
-func (a *ChatApp) MCP() mcpport.IMCPManagerPort     { return a.mcp }
-func (a *ChatApp) Memory() *memory.Service          { return a.memSvc }
-func (a *ChatApp) Audit() audit.Repository          { return a.auditRepo }
+func (a *ChatApp) SetAudit(r audit.Repository) { a.auditRepo = r }
+func (a *ChatApp) SetBlobStore(s blob.Store)   { a.blobs = s }
+func (a *ChatApp) Slash() *slash.Registry      { return a.slash }
+func (a *ChatApp) Skills() *skill.Service      { return a.skills }
+func (a *ChatApp) MCP() mcpport.IMCPManagerPort { return a.mcp }
+func (a *ChatApp) Memory() *memory.Service     { return a.memSvc }
+func (a *ChatApp) Audit() audit.Repository     { return a.auditRepo }
+func (a *ChatApp) Blobs() blob.Store           { return a.blobs }
+
+func (a *ChatApp) GetBlob(ctx context.Context, key string) ([]byte, error) {
+	if a.blobs == nil {
+		return nil, fmt.Errorf("blob store disabled")
+	}
+	return a.blobs.Get(ctx, key)
+}
 
 func (a *ChatApp) ListAudit(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
 	if a.auditRepo == nil {

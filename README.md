@@ -86,9 +86,17 @@ go run ./cmd/server -config configs/config.yaml
 ]}}
 ```
 
-### 待做
+### Phase 6 — 抛光
 
-对象存储落大结果、OTLP、Host Executor（本机侧车）
+- 大 tool 结果 offload → 本地对象存储 `./data/objects`，`GET /api/v1/blobs?key=`
+- Prometheus：`GET /metrics`（text）；JSON：`/api/v1/metrics`
+- Host Executor：`host.mode=server|host`（host 为侧车 stub）
+- 评测：`powershell -File scripts/eval_smoke.ps1`
+- 面试：`docs/interview-guide.md`
+
+### 后续演进（非必须）
+
+- 真 MinIO/S3 SDK、Host Agent WebSocket 侧车、OTLP Trace
 
 ## 文档
 

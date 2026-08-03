@@ -45,6 +45,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/memory", s.handleMemory)
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
+	mux.HandleFunc("/api/v1/blobs", s.handleBlobGet)
+	mux.HandleFunc("/metrics", observability.WritePrometheus) // Prometheus scrape (auth-skipped)
 
 	handler := cors(auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux))))
 	s.srv = &http.Server{Addr: s.addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -61,7 +63,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func auth(app *application.ChatApp, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -517,6 +519,37 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
+}
+
+func (s *Server) handleBlobGet(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		writeJSON(w, 400, map[string]any{"message": "key required"})
+		return
+	}
+	data, err := s.app.GetBlob(r.Context(), key)
+	if err != nil {
+		writeJSON(w, 404, errMap(err))
+		return
+	}
+	// raw download when format=raw
+	if r.URL.Query().Get("format") == "raw" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(data)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"key": key, "size": len(data),
+		"preview": truncateStr(string(data), 500),
+	}})
+}
+
+func truncateStr(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

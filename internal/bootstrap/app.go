@@ -11,7 +11,9 @@ import (
 	"github.com/spray272598/code-agent/internal/application"
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/domain/hook"
+	"github.com/spray272598/code-agent/internal/domain/host"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
@@ -28,6 +30,7 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/mysql"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
+	"github.com/spray272598/code-agent/internal/infrastructure/storage"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 )
@@ -42,6 +45,8 @@ type App struct {
 	Skills *skill.Service
 	Memory *memory.Service
 	Hooks  *hook.Bus
+	Blobs  blob.Store
+	Host   host.Executor
 	Closer func()
 }
 
@@ -89,7 +94,31 @@ func Build(cfg *config.Config) (*App, error) {
 	rdb := redisx.New(cfg.Redis)
 	llmPort := llm.NewFromConfig(cfg)
 
-	ws := coding.NewWorkspace(cfg.Agent.WorkspaceRoot)
+	// host executor mode (server default; host is stub roadmap)
+	var hostExec host.Executor = &host.ServerExecutor{Root: cfg.Agent.WorkspaceRoot}
+	if cfg.Host.Mode == "host" {
+		hostExec = &host.HostExecutor{Endpoint: cfg.Host.Endpoint, FallbackRoot: cfg.Agent.WorkspaceRoot}
+		log.Printf("[bootstrap] host executor mode=host endpoint=%s (side-car not wired; tools use fallback workspace)\n", cfg.Host.Endpoint)
+	}
+	workspaceRoot := hostExec.WorkspaceRoot()
+
+	// blob store
+	var blobStore blob.Store
+	if cfg.Storage.Enabled {
+		localDir := cfg.Storage.LocalFallbackDir
+		if localDir == "" {
+			localDir = "./data/objects"
+		}
+		ls, err := storage.NewLocalStore(localDir)
+		if err != nil {
+			log.Printf("[bootstrap] blob store: %v\n", err)
+		} else {
+			blobStore = ls
+			log.Printf("[bootstrap] blob store local=%s\n", ls.Root())
+		}
+	}
+
+	ws := coding.NewWorkspace(workspaceRoot)
 	reg := tool.NewRegistry()
 	reg.Register(coding.NewReadFile(ws))
 	reg.Register(coding.NewWriteFile(ws))
@@ -103,14 +132,14 @@ func Build(cfg *config.Config) (*App, error) {
 	// SubAgent + worktree + teams
 	var subRunner *subagent.Runner
 	if cfg.SubAgent.Enabled {
-		subRunner = subagent.NewRunner(llmPort, reg, cfg.Agent.WorkspaceRoot)
+		subRunner = subagent.NewRunner(llmPort, reg, workspaceRoot)
 		if cfg.SubAgent.MaxConcurrent > 0 {
 			subRunner.MaxConcurrent = cfg.SubAgent.MaxConcurrent
 		}
 		if cfg.SubAgent.DefaultSteps > 0 {
 			subRunner.DefaultSteps = cfg.SubAgent.DefaultSteps
 		}
-		subRunner.Worktrees = worktree.NewManager(cfg.Agent.WorkspaceRoot)
+		subRunner.Worktrees = worktree.NewManager(workspaceRoot)
 		if cfg.Teams.Enabled && cfg.Teams.File != "" {
 			if tc, err := team.LoadYAML(cfg.Teams.File); err == nil {
 				team.ApplyToRunner(subRunner, tc)
@@ -159,25 +188,31 @@ func Build(cfg *config.Config) (*App, error) {
 		}
 	}
 
-	perm := security.NewGuard(cfg.Agent.WorkspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite)
+	perm := security.NewGuard(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite)
 	loop := engine.NewLoop(llmPort, reg, sessionRepo, messageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
 	loop.SetSkills(skillSvc)
 	loop.SetHooks(hooks)
 	loop.SetMemory(memSvc, memCtx)
 	loop.SetAudit(auditRepo)
 	loop.SetSummaryRepo(summaryRepo)
+	if blobStore != nil {
+		loop.SetBlobStore(blobStore, 4000)
+	}
 	if subRunner != nil {
 		loop.SetSubRunner(subRunner)
 	}
 
 	chat := application.NewChatApp(
 		loop, sessionRepo, messageRepo, reg, perm, rdb,
-		cfg.Agent.TimeoutSec, cfg.Agent.WorkspaceRoot,
+		cfg.Agent.TimeoutSec, workspaceRoot,
 		cfg.RateLimit.Enabled, cfg.RateLimit.PerMinute, cfg.Security.APIKeys,
 	)
 	chat.SetSkills(skillSvc)
 	chat.SetMemory(memSvc)
 	chat.SetAudit(auditRepo)
+	if blobStore != nil {
+		chat.SetBlobStore(blobStore)
+	}
 	if mcpMgr != nil {
 		chat.SetMCP(mcpMgr)
 	}
@@ -188,6 +223,7 @@ func Build(cfg *config.Config) (*App, error) {
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,
 		MCP: mcpMgr, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
+		Blobs: blobStore, Host: hostExec,
 		Closer: func() {
 			if mcpMgr != nil {
 				_ = mcpMgr.Close()

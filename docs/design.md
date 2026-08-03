@@ -552,9 +552,13 @@ code-agent/
 - [x] `isolation=worktree` → git worktree 或目录降级（`.code-agent/worktrees/`）
 - [x] `teams/default.yaml` 角色 → 工具白名单 + max_steps
 
-### Phase 6 — 抛光
+### Phase 6 — 抛光 ✅
 
-- 文档、面试稿、Demo 脚本、安全审计说明
+- [x] 对象存储：本地 blob store + 大 tool 结果 offload（`/api/v1/blobs?key=`）
+- [x] Prometheus text：`GET /metrics` + JSON `/api/v1/metrics`
+- [x] Host Executor 接口/配置 stub（默认 server workspace）
+- [x] `scripts/eval_smoke.ps1` 冒烟评测
+- [x] `docs/interview-guide.md` 面试稿
 
 ---
 

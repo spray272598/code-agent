@@ -27,6 +27,7 @@ type Config struct {
 	Logging    LoggingConfig    `yaml:"logging"`
 	Teams      TeamsConfig      `yaml:"teams"`
 	SubAgent   SubAgentConfig   `yaml:"subagent"`
+	Host       HostConfig       `yaml:"host"`
 }
 
 type ServerConfig struct {
@@ -141,6 +142,12 @@ type SubAgentConfig struct {
 	DefaultSteps  int  `yaml:"default_steps"`
 }
 
+// HostConfig tool execution location (server default; host is roadmap stub).
+type HostConfig struct {
+	Mode     string `yaml:"mode"` // server | host
+	Endpoint string `yaml:"endpoint"`
+}
+
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{Host: "0.0.0.0", Port: 8080, Mode: "debug"},
@@ -169,6 +176,7 @@ func Default() *Config {
 		Logging:  LoggingConfig{Level: "info"},
 		Teams:    TeamsConfig{Enabled: true, File: "./teams/default.yaml"},
 		SubAgent: SubAgentConfig{Enabled: true, MaxConcurrent: 3, DefaultSteps: 8},
+		Host:     HostConfig{Mode: "server"},
 	}
 }
 
