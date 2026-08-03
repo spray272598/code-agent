@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+// built-in slash commands for local completion (mirrors server slash registry)
+var slashCmds = []string{
+	"/help", "/quit", "/exit", "/continue", "/tools", "/skills", "/mcp",
+	"/clear", "/compact", "/approve", "/reject", "/memory", "/metrics",
+}
+
 func main() {
 	base := flag.String("base", "http://127.0.0.1:8080", "server base URL")
 	apiKey := flag.String("key", envOr("CODE_AGENT_API_KEY", "dev-key"), "API key")
@@ -32,7 +38,8 @@ func main() {
 		}
 	}
 	fmt.Printf("code-agent CLI  base=%s  session=%s\n", *base, sessionID)
-	fmt.Println("type message; /quit exit; /continue after approve; /help /tools /skills /mcp on server")
+	fmt.Println("type message; /quit exit; Tab-like: type / then prefix + ? for complete")
+	fmt.Println("examples: /h? → /help ; /continue after approve")
 	fmt.Println("---")
 
 	in := bufio.NewScanner(os.Stdin)
@@ -43,6 +50,19 @@ func main() {
 		}
 		line := strings.TrimSpace(in.Text())
 		if line == "" {
+			continue
+		}
+		// slash completion: /to? or /to<TAB> style via trailing ?
+		if strings.HasPrefix(line, "/") && strings.HasSuffix(line, "?") {
+			prefix := strings.TrimSuffix(line, "?")
+			matches := completeSlash(prefix)
+			if len(matches) == 0 {
+				fmt.Println("(no matches)")
+			} else if len(matches) == 1 {
+				fmt.Println("→", matches[0])
+			} else {
+				fmt.Println("completions:", strings.Join(matches, "  "))
+			}
 			continue
 		}
 		if line == "/quit" || line == "/exit" {
@@ -59,6 +79,14 @@ func main() {
 			}
 			pretty, _ := json.MarshalIndent(body["data"], "", "  ")
 			fmt.Println(string(pretty))
+			continue
+		}
+		if line == "/help" {
+			fmt.Println("Slash (local + server):")
+			for _, c := range slashCmds {
+				fmt.Println(" ", c)
+			}
+			fmt.Println("  /prefix?  — complete slash commands")
 			continue
 		}
 
@@ -88,6 +116,17 @@ func main() {
 		}
 		fmt.Println()
 	}
+}
+
+func completeSlash(prefix string) []string {
+	prefix = strings.ToLower(prefix)
+	var out []string
+	for _, c := range slashCmds {
+		if strings.HasPrefix(strings.ToLower(c), prefix) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func streamChat(url, key string, req map[string]any, sessionID *string) error {
@@ -143,6 +182,10 @@ func handleEvent(event, data string, sessionID *string) {
 		if c, ok := m["content"].(string); ok {
 			fmt.Printf("\n· %s\n", c)
 		}
+	case "observation", "action":
+		if c, ok := m["content"].(string); ok {
+			fmt.Printf("\n○ %s %s\n", event, trim(c, 120))
+		}
 	case "tool_call":
 		fmt.Printf("\n⚙ tool %v %v\n", m["subType"], m["data"])
 	case "tool_result":
@@ -154,11 +197,6 @@ func handleEvent(event, data string, sessionID *string) {
 	case "compress":
 		fmt.Printf("\n📦 %v\n", m["content"])
 	case "answer":
-		// already streamed via text_delta often
-		if c, ok := m["content"].(string); ok && c != "" {
-			// if no deltas were printed, show answer
-			_ = c
-		}
 		fmt.Println()
 	case "error":
 		fmt.Printf("\n✖ %v\n", m["content"])

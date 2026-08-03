@@ -48,9 +48,20 @@ func main() {
 	}
 	defer app.Closer()
 
+	observability.ApplyLogLevelFromEnv()
+	if cfg.Logging.Level != "" {
+		observability.SetLogLevel(cfg.Logging.Level)
+	}
+
 	srv := httpserver.New(app.Chat, cfg.Addr()).WithHost(app.HostHub, app.Bridge)
 	go func() {
-		if err := srv.Start(); err != nil {
+		var err error
+		if cfg.Server.TLSCert != "" && cfg.Server.TLSKey != "" {
+			err = srv.StartTLS(cfg.Server.TLSCert, cfg.Server.TLSKey)
+		} else {
+			err = srv.Start()
+		}
+		if err != nil {
 			log.Printf("server stopped: %v", err)
 		}
 	}()

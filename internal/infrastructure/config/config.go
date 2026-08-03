@@ -32,9 +32,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
-	Mode string `yaml:"mode"`
+	Host    string `yaml:"host"`
+	Port    int    `yaml:"port"`
+	Mode    string `yaml:"mode"`
+	TLSCert string `yaml:"tls_cert"` // PEM cert path; if set with tls_key → HTTPS
+	TLSKey  string `yaml:"tls_key"`
 }
 
 type AgentConfig struct {

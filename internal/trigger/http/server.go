@@ -35,6 +35,11 @@ func (s *Server) WithHost(hub *ws.HostHub, bridge *host.Bridge) *Server {
 }
 
 func (s *Server) Start() error {
+	return s.StartTLS("", "")
+}
+
+// StartTLS serves HTTPS when certFile and keyFile are non-empty; otherwise HTTP.
+func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/session", s.handleSession)
@@ -57,6 +62,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/blobs", s.handleBlobGet)
 	mux.HandleFunc("/api/v1/host/devices", s.handleHostDevices)
+	mux.HandleFunc("/api/v1/admin/log-level", s.handleLogLevel)
+	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("/docs", s.handleSwaggerUI)
 	mux.HandleFunc("/metrics", observability.WritePrometheus) // Prometheus scrape (auth-skipped)
 	if s.hostHub != nil {
 		mux.Handle("/ws/host", s.hostHub)
@@ -65,6 +73,10 @@ func (s *Server) Start() error {
 
 	handler := cors(auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux))))
 	s.srv = &http.Server{Addr: s.addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	if certFile != "" && keyFile != "" {
+		log.Printf("[http] listening TLS on %s cert=%s\n", s.addr, certFile)
+		return s.srv.ListenAndServeTLS(certFile, keyFile)
+	}
 	log.Printf("[http] listening on %s\n", s.addr)
 	return s.srv.ListenAndServe()
 }
@@ -78,8 +90,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func auth(app *application.ChatApp, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// public / health / metrics / host ws (ws auth itself)
-		if r.URL.Path == "/health" || r.URL.Path == "/metrics" || r.URL.Path == "/ws/host" {
+		// public / health / metrics / openapi / host ws (ws auth itself)
+		switch r.URL.Path {
+		case "/health", "/metrics", "/ws/host", "/api/v1/openapi.json", "/docs":
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -589,3 +602,87 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func errMap(err error) map[string]any {
 	return map[string]any{"code": "400", "message": err.Error()}
 }
+
+func (s *Server) handleLogLevel(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"level": observability.LogLevel()}})
+	case http.MethodPost, http.MethodPut:
+		var body struct {
+			Level string `json:"level"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, 400, errMap(err))
+			return
+		}
+		observability.SetLogLevel(body.Level)
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"level": observability.LogLevel()}})
+	default:
+		writeJSON(w, 405, map[string]any{"code": "405"})
+	}
+}
+
+func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(openAPISpec))
+}
+
+func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(`<!DOCTYPE html>
+<html><head><title>Code-Agent API</title>
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
+</head><body>
+<div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+SwaggerUIBundle({url:'/api/v1/openapi.json', dom_id:'#swagger-ui'});
+</script>
+</body></html>`))
+}
+
+// Minimal OpenAPI 3.0 for interview / client generation.
+const openAPISpec = `{
+  "openapi": "3.0.3",
+  "info": {"title": "Code-Agent API", "version": "1.0.0",
+    "description": "Claude Code-like coding agent: chat, tools, MCP, skills, memory, permissions."},
+  "servers": [{"url": "/"}],
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
+      "BearerAuth": {"type": "http", "scheme": "bearer"}
+    }
+  },
+  "security": [{"ApiKeyAuth": []}, {"BearerAuth": []}],
+  "paths": {
+    "/health": {"get": {"summary": "Health", "security": [], "responses": {"200": {"description": "ok"}}}},
+    "/api/v1/session": {
+      "post": {"summary": "Create session", "responses": {"200": {"description": "session"}}},
+      "get": {"summary": "Get session by id query", "parameters": [{"name":"id","in":"query","schema":{"type":"string"}}], "responses": {"200": {"description": "ok"}}}
+    },
+    "/api/v1/session/list": {"get": {"summary": "List sessions", "parameters": [{"name":"userId","in":"query","schema":{"type":"string"}}], "responses": {"200": {"description": "ok"}}}},
+    "/api/v1/chat": {"post": {"summary": "Chat (sync)", "requestBody": {"content": {"application/json": {"schema": {"type":"object","properties": {
+      "sessionId":{"type":"string"},"userId":{"type":"string"},"message":{"type":"string"},"autoApprove":{"type":"boolean"}
+    }}}}}, "responses": {"200": {"description": "chat result"}}}},
+    "/api/v1/chat/stream": {"post": {"summary": "Chat SSE stream", "responses": {"200": {"description": "text/event-stream"}}}},
+    "/api/v1/tools": {"get": {"summary": "List tools", "responses": {"200": {"description": "ok"}}}},
+    "/api/v1/permission/pending": {"get": {"summary": "Pending permissions", "responses": {"200": {"description": "ok"}}}},
+    "/api/v1/permission/approve": {"post": {"summary": "Approve permission", "responses": {"200": {"description": "ok"}}}},
+    "/api/v1/permission/reject": {"post": {"summary": "Reject permission", "responses": {"200": {"description": "ok"}}}},
+    "/api/v1/mcp/servers": {"get": {"summary": "MCP servers"}, "post": {"summary": "Install/update MCP"}},
+    "/api/v1/mcp/health": {"get": {"summary": "MCP health"}},
+    "/api/v1/mcp/tools": {"get": {"summary": "MCP tools"}},
+    "/api/v1/skills": {"get": {"summary": "List skills"}},
+    "/api/v1/skills/install": {"post": {"summary": "Install skill"}},
+    "/api/v1/skills/uninstall": {"post": {"summary": "Uninstall skill"}},
+    "/api/v1/skills/reload": {"post": {"summary": "Reload skills"}},
+    "/api/v1/memory": {"get": {"summary": "List/search memory"}, "post": {"summary": "Save memory"}},
+    "/api/v1/metrics": {"get": {"summary": "JSON metrics"}},
+    "/api/v1/audit": {"get": {"summary": "Audit log"}},
+    "/api/v1/blobs": {"get": {"summary": "Get blob by key"}},
+    "/api/v1/host/devices": {"get": {"summary": "Host agents"}},
+    "/api/v1/admin/log-level": {"get": {"summary": "Get log level"}, "post": {"summary": "Set log level"}},
+    "/metrics": {"get": {"summary": "Prometheus text", "security": []}},
+    "/docs": {"get": {"summary": "Swagger UI", "security": []}}
+  }
+}`

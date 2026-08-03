@@ -33,7 +33,10 @@ type Spec struct {
 	Role      string   `json:"role"` // explore|verify|general|custom
 	Tools     []string `json:"tools,omitempty"`
 	MaxSteps  int      `json:"maxSteps,omitempty"`
-	Isolation string   `json:"isolation,omitempty"` // "" | worktree
+	// Isolation: "" | "worktree" | "process"
+	// worktree = git worktree filesystem isolation
+	// process  = run bash via separate OS process group (crash isolation)
+	Isolation string `json:"isolation,omitempty"`
 }
 
 // Result of one subagent.
@@ -200,9 +203,14 @@ func (r *Runner) buildRegistry(spec Spec, workDir string) *tool.MapRegistry {
 	// tools bound to this workDir
 	ws := coding.NewWorkspace(workDir)
 	local := tool.NewRegistry()
+	bash := coding.NewBash(ws, 45)
+	if strings.EqualFold(spec.Isolation, "process") || strings.EqualFold(spec.Isolation, "worktree") {
+		// process-level isolation for shell (worktree also gets isolated bash)
+		bash = coding.NewBashIsolated(ws, 45)
+	}
 	candidates := []tool.ITool{
 		coding.NewReadFile(ws), coding.NewWriteFile(ws), coding.NewEditFile(ws),
-		coding.NewBash(ws, 45), coding.NewGlob(ws), coding.NewGrep(ws),
+		bash, coding.NewGlob(ws), coding.NewGrep(ws),
 	}
 	// also allow parent tools that are not fs-bound if allowlisted (e.g. memory_search)
 	if r.ParentTools != nil {

@@ -15,6 +15,9 @@ import (
 type BashTool struct {
 	ws      *Workspace
 	timeout time.Duration
+	// ProcessIsolate puts the command in a new process group (Unix) so kills
+	// don't take down the agent; on Windows uses CREATE_NEW_PROCESS_GROUP.
+	ProcessIsolate bool
 }
 
 func NewBash(ws *Workspace, timeoutSec int) *BashTool {
@@ -22,6 +25,13 @@ func NewBash(ws *Workspace, timeoutSec int) *BashTool {
 		timeoutSec = 60
 	}
 	return &BashTool{ws: ws, timeout: time.Duration(timeoutSec) * time.Second}
+}
+
+// NewBashIsolated creates a bash tool with process-level isolation.
+func NewBashIsolated(ws *Workspace, timeoutSec int) *BashTool {
+	b := NewBash(ws, timeoutSec)
+	b.ProcessIsolate = true
+	return b
 }
 
 func (t *BashTool) Name() string { return "bash" }
@@ -49,6 +59,9 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) (tool.Resul
 		cmd = exec.CommandContext(cctx, "bash", "-lc", cmdStr)
 	}
 	cmd.Dir = t.ws.Root
+	if t.ProcessIsolate {
+		setProcessIsolate(cmd)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -2,6 +2,8 @@ package hook
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 )
@@ -18,6 +20,21 @@ const (
 	Permission   Point = "PermissionDecision"
 )
 
+// ErrAbort is returned by handlers to cancel tool execution (Claude Code PreToolUse abort).
+var ErrAbort = errors.New("hook abort")
+
+// Abort wraps a reason as a sentinel abort error.
+func Abort(reason string) error {
+	if reason == "" {
+		return ErrAbort
+	}
+	return fmt.Errorf("%w: %s", ErrAbort, reason)
+}
+
+func IsAbort(err error) bool {
+	return err != nil && errors.Is(err, ErrAbort)
+}
+
 type Event struct {
 	Point     Point
 	SessionID string
@@ -30,7 +47,9 @@ type Event struct {
 
 type Handler func(ctx context.Context, ev Event) error
 
-// Bus runs registered handlers. Failures are logged; abort=false by default.
+// Bus runs registered handlers.
+// PreToolUse: first Abort error cancels the tool.
+// Other points: errors are logged only.
 type Bus struct {
 	mu       sync.RWMutex
 	handlers map[Point][]Handler
@@ -49,18 +68,28 @@ func (b *Bus) On(point Point, h Handler) {
 	b.mu.Unlock()
 }
 
+// Emit runs handlers; non-abort errors are logged. Does not abort.
 func (b *Bus) Emit(ctx context.Context, ev Event) {
+	_, _ = b.EmitCheck(ctx, ev)
+}
+
+// EmitCheck runs handlers. For PreToolUse, returns abort error if any handler aborts.
+func (b *Bus) EmitCheck(ctx context.Context, ev Event) (aborted bool, err error) {
 	if b == nil {
-		return
+		return false, nil
 	}
 	b.mu.RLock()
 	hs := append([]Handler{}, b.handlers[ev.Point]...)
 	b.mu.RUnlock()
 	for _, h := range hs {
-		if err := h(ctx, ev); err != nil {
-			log.Printf("[hook] %s error: %v\n", ev.Point, err)
+		if e := h(ctx, ev); e != nil {
+			if IsAbort(e) {
+				return true, e
+			}
+			log.Printf("[hook] %s error: %v\n", ev.Point, e)
 		}
 	}
+	return false, nil
 }
 
 // DefaultLogger registers a debug logger for all points.

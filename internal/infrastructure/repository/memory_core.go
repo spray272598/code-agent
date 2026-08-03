@@ -5,18 +5,38 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 )
 
+// MemoryCoreRepo in-memory store with inverted index + importance/LRU eviction.
 type MemoryCoreRepo struct {
-	mu   sync.RWMutex
-	seq  atomic.Int64
-	data []memport.MemoryItem
+	mu      sync.RWMutex
+	seq     atomic.Int64
+	data    []memItem
+	index   map[string]map[int64]struct{} // token -> set of ids
+	maxItems int
+}
+
+type memItem struct {
+	item     memport.MemoryItem
+	lastUsed time.Time
 }
 
 func NewMemoryCoreRepo() *MemoryCoreRepo {
-	return &MemoryCoreRepo{data: make([]memport.MemoryItem, 0)}
+	return &MemoryCoreRepo{
+		data:     make([]memItem, 0),
+		index:    map[string]map[int64]struct{}{},
+		maxItems: 2000,
+	}
+}
+
+// SetMaxItems for eviction cap (0 = default 2000).
+func (r *MemoryCoreRepo) SetMaxItems(n int) {
+	if n > 0 {
+		r.maxItems = n
+	}
 }
 
 func (r *MemoryCoreRepo) Save(_ context.Context, item *memport.MemoryItem) error {
@@ -25,14 +45,18 @@ func (r *MemoryCoreRepo) Save(_ context.Context, item *memport.MemoryItem) error
 	if item.ID == 0 {
 		item.ID = r.seq.Add(1)
 	}
-	// upsert by id
+	// upsert
 	for i := range r.data {
-		if r.data[i].ID == item.ID {
-			r.data[i] = *item
+		if r.data[i].item.ID == item.ID {
+			r.unindex(r.data[i].item)
+			r.data[i] = memItem{item: *item, lastUsed: time.Now()}
+			r.indexItem(*item)
 			return nil
 		}
 	}
-	r.data = append(r.data, *item)
+	r.data = append(r.data, memItem{item: *item, lastUsed: time.Now()})
+	r.indexItem(*item)
+	r.evictLocked()
 	return nil
 }
 
@@ -41,7 +65,7 @@ func (r *MemoryCoreRepo) List(_ context.Context, userID, projectID string, scope
 	defer r.mu.RUnlock()
 	var out []memport.MemoryItem
 	for i := len(r.data) - 1; i >= 0; i-- {
-		it := r.data[i]
+		it := r.data[i].item
 		if it.UserID != userID {
 			continue
 		}
@@ -56,7 +80,6 @@ func (r *MemoryCoreRepo) List(_ context.Context, userID, projectID string, scope
 			break
 		}
 	}
-	// sort by importance desc (simple insertion)
 	for i := 0; i < len(out); i++ {
 		for j := i + 1; j < len(out); j++ {
 			if out[j].Importance > out[i].Importance {
@@ -68,38 +91,57 @@ func (r *MemoryCoreRepo) List(_ context.Context, userID, projectID string, scope
 }
 
 func (r *MemoryCoreRepo) Search(_ context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	tokens := memport.Tokenize(query)
 	type scored struct {
-		it    memport.MemoryItem
+		idx   int
 		score int
 	}
-	var ranked []scored
-	for _, it := range r.data {
-		if it.UserID != userID {
-			continue
+	// candidate ids from inverted index
+	candidates := map[int64]int{}
+	if len(tokens) == 0 {
+		for i := range r.data {
+			candidates[r.data[i].item.ID] = 1
 		}
-		if it.Scope == memport.ScopeProject && projectID != "" && it.ProjectID != projectID && it.ProjectID != "" {
-			// allow user-scope always; project-scope only matching project
+	} else {
+		for _, t := range tokens {
+			if ids, ok := r.index[t]; ok {
+				for id := range ids {
+					candidates[id] += 10
+				}
+			}
+		}
+	}
+	var ranked []scored
+	for i, mi := range r.data {
+		it := mi.item
+		if it.UserID != userID {
 			continue
 		}
 		if it.Scope == memport.ScopeProject && projectID != "" && it.ProjectID != projectID {
 			continue
 		}
-		content := strings.ToLower(it.Content + " " + it.Category)
-		sc := it.Importance / 10
-		if query != "" && strings.Contains(content, strings.ToLower(query)) {
-			sc += 50
-		}
-		for _, t := range tokens {
-			if t != "" && strings.Contains(content, t) {
-				sc += 10
+		base, ok := candidates[it.ID]
+		if !ok && query != "" {
+			// fallback substring for short queries / CJK
+			content := strings.ToLower(it.Content + " " + it.Category)
+			if query != "" && strings.Contains(content, strings.ToLower(query)) {
+				base = 50
+			} else {
+				continue
 			}
 		}
-		if sc > 0 || query == "" {
-			ranked = append(ranked, scored{it: it, score: sc})
+		sc := base + it.Importance/10
+		if query != "" && strings.Contains(strings.ToLower(it.Content), strings.ToLower(query)) {
+			sc += 50
 		}
+		// recency boost
+		age := time.Since(mi.lastUsed)
+		if age < time.Hour {
+			sc += 5
+		}
+		ranked = append(ranked, scored{idx: i, score: sc})
 	}
 	for i := 0; i < len(ranked); i++ {
 		for j := i + 1; j < len(ranked); j++ {
@@ -112,8 +154,10 @@ func (r *MemoryCoreRepo) Search(_ context.Context, userID, projectID, query stri
 		limit = 10
 	}
 	out := make([]memport.MemoryItem, 0, limit)
+	now := time.Now()
 	for i := 0; i < len(ranked) && i < limit; i++ {
-		out = append(out, ranked[i].it)
+		r.data[ranked[i].idx].lastUsed = now
+		out = append(out, r.data[ranked[i].idx].item)
 	}
 	return out, nil
 }
@@ -122,10 +166,70 @@ func (r *MemoryCoreRepo) Delete(_ context.Context, id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.data {
-		if r.data[i].ID == id {
+		if r.data[i].item.ID == id {
+			r.unindex(r.data[i].item)
 			r.data = append(r.data[:i], r.data[i+1:]...)
 			return nil
 		}
 	}
 	return nil
+}
+
+func (r *MemoryCoreRepo) indexItem(it memport.MemoryItem) {
+	for _, t := range memport.Tokenize(it.Content + " " + it.Category) {
+		if t == "" {
+			continue
+		}
+		if r.index[t] == nil {
+			r.index[t] = map[int64]struct{}{}
+		}
+		r.index[t][it.ID] = struct{}{}
+	}
+}
+
+func (r *MemoryCoreRepo) unindex(it memport.MemoryItem) {
+	for _, t := range memport.Tokenize(it.Content + " " + it.Category) {
+		if ids, ok := r.index[t]; ok {
+			delete(ids, it.ID)
+			if len(ids) == 0 {
+				delete(r.index, t)
+			}
+		}
+	}
+}
+
+// evictLocked: importance-based + LRU when over maxItems.
+// Protect high importance (>=80); drop lowest score first.
+func (r *MemoryCoreRepo) evictLocked() {
+	for len(r.data) > r.maxItems {
+		worst := -1
+		worstScore := 1 << 30
+		now := time.Now()
+		for i, mi := range r.data {
+			if mi.item.Importance >= 80 {
+				continue // never auto-evict critical
+			}
+			// score: higher = keep; lower = evict first
+			ageMin := int(now.Sub(mi.lastUsed).Minutes())
+			sc := mi.item.Importance*10 - ageMin
+			if sc < worstScore {
+				worstScore = sc
+				worst = i
+			}
+		}
+		if worst < 0 {
+			// all critical — drop oldest non-critical by lastUsed among all
+			worst = 0
+			for i := 1; i < len(r.data); i++ {
+				if r.data[i].lastUsed.Before(r.data[worst].lastUsed) && r.data[i].item.Importance < 80 {
+					worst = i
+				}
+			}
+			if r.data[worst].item.Importance >= 80 {
+				return // cannot free
+			}
+		}
+		r.unindex(r.data[worst].item)
+		r.data = append(r.data[:worst], r.data[worst+1:]...)
+	}
 }

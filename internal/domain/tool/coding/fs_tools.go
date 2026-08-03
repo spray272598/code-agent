@@ -356,19 +356,31 @@ type GrepTool struct{ ws *Workspace }
 func NewGrep(ws *Workspace) *GrepTool { return &GrepTool{ws: ws} }
 func (t *GrepTool) Name() string      { return "grep" }
 func (t *GrepTool) Description() string {
-	return "Search file contents by regex. Args: pattern, path? (subdir), glob? (e.g. *.go)"
+	return "Search file contents by regex. Args: pattern, path?, glob?, context|context_before|context_after (like -C/-B/-A)"
 }
 func (t *GrepTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"pattern": map[string]any{"type": "string"},
-		"path":    map[string]any{"type": "string"},
-		"glob":    map[string]any{"type": "string"},
+		"pattern":         map[string]any{"type": "string"},
+		"path":            map[string]any{"type": "string"},
+		"glob":            map[string]any{"type": "string"},
+		"context":         map[string]any{"type": "integer", "description": "lines of context before and after (-C)"},
+		"context_before":  map[string]any{"type": "integer"},
+		"context_after":   map[string]any{"type": "integer"},
 	}, "required": []string{"pattern"}}
 }
 func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
 	pat, _ := args["pattern"].(string)
 	sub, _ := args["path"].(string)
 	gfilter, _ := args["glob"].(string)
+	ctxN := intArg(args, "context", 0)
+	before := intArg(args, "context_before", -1)
+	after := intArg(args, "context_after", -1)
+	if before < 0 {
+		before = ctxN
+	}
+	if after < 0 {
+		after = ctxN
+	}
 	re, err := regexp.Compile(pat)
 	if err != nil {
 		return tool.Result{Text: "invalid regex: " + err.Error(), IsError: true}, nil
@@ -378,6 +390,7 @@ func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result,
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
 	var lines []string
+	matchCount := 0
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -385,10 +398,10 @@ func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result,
 		if gfilter != "" {
 			ok, _ := filepath.Match(gfilter, filepath.Base(p))
 			if !ok {
+				// also try doublestar-style on full rel? keep base Match
 				return nil
 			}
 		}
-		// skip huge/binary-ish
 		info, _ := d.Info()
 		if info != nil && info.Size() > 1<<20 {
 			return nil
@@ -398,12 +411,60 @@ func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result,
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
-		for i, line := range strings.Split(string(b), "\n") {
+		rel = filepath.ToSlash(rel)
+		fileLines := strings.Split(string(b), "\n")
+		// collect match line indices
+		var hits []int
+		for i, line := range fileLines {
 			if re.MatchString(line) {
-				lines = append(lines, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(rel), i+1, common.TruncateRunes(line, 200)))
-				if len(lines) >= 100 {
-					return fs.SkipAll
+				hits = append(hits, i)
+			}
+		}
+		if len(hits) == 0 {
+			return nil
+		}
+		// expand with context, merge overlapping ranges
+		type rng struct{ lo, hi int }
+		var ranges []rng
+		for _, h := range hits {
+			lo := h - before
+			if lo < 0 {
+				lo = 0
+			}
+			hi := h + after
+			if hi >= len(fileLines) {
+				hi = len(fileLines) - 1
+			}
+			if len(ranges) > 0 && lo <= ranges[len(ranges)-1].hi+1 {
+				if hi > ranges[len(ranges)-1].hi {
+					ranges[len(ranges)-1].hi = hi
 				}
+			} else {
+				ranges = append(ranges, rng{lo, hi})
+			}
+		}
+		for _, rg := range ranges {
+			if len(lines) > 0 {
+				lines = append(lines, "--")
+			}
+			for i := rg.lo; i <= rg.hi; i++ {
+				sep := ":"
+				// mark context vs match
+				isHit := false
+				for _, h := range hits {
+					if h == i {
+						isHit = true
+						break
+					}
+				}
+				if !isHit && (before > 0 || after > 0) {
+					sep = "-"
+				}
+				lines = append(lines, fmt.Sprintf("%s%s%d%s%s", rel, sep, i+1, sep, common.TruncateRunes(fileLines[i], 200)))
+			}
+			matchCount += 1
+			if matchCount >= 100 || len(lines) >= 400 {
+				return fs.SkipAll
 			}
 		}
 		return nil

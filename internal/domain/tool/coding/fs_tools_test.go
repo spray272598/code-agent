@@ -66,6 +66,23 @@ func TestEditFileRegexCaptureGroup(t *testing.T) {
 	}
 }
 
+func TestGrepContext(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewWorkspace(dir)
+	content := "a\nb\nMATCH\nc\nd\n"
+	_ = os.WriteFile(filepath.Join(dir, "g.txt"), []byte(content), 0o644)
+	g := NewGrep(ws)
+	r, err := g.Execute(context.Background(), map[string]any{
+		"pattern": "MATCH", "context": 1,
+	})
+	if err != nil || r.IsError {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if !strings.Contains(r.Text, "b") || !strings.Contains(r.Text, "c") {
+		t.Fatalf("want context lines, got %q", r.Text)
+	}
+}
+
 func TestGlobDoublestar(t *testing.T) {
 	dir := t.TempDir()
 	ws := NewWorkspace(dir)

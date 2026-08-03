@@ -1,0 +1,54 @@
+{
+  "title": "Code-Agent",
+  "uid": "code-agent",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["code-agent", "llm", "agent"],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Chat Total",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "code_agent_chat_total", "legendFormat": "chats"}]
+    },
+    {
+      "type": "stat",
+      "title": "Tool Calls",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "code_agent_tool_calls_total", "legendFormat": "tools"}]
+    },
+    {
+      "type": "stat",
+      "title": "Permission Denies",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "code_agent_permission_deny_total", "legendFormat": "denies"}]
+    },
+    {
+      "type": "stat",
+      "title": "Tokens",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "targets": [{"expr": "code_agent_tokens_total", "legendFormat": "tokens"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "LLM latency (observe via app metrics)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [{"expr": "rate(code_agent_chat_total[1m])", "legendFormat": "chat/s"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Compress / Reflect / Blob",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {"expr": "code_agent_compress_total", "legendFormat": "compress"},
+        {"expr": "code_agent_reflect_total", "legendFormat": "reflect"},
+        {"expr": "code_agent_blob_offload_total", "legendFormat": "blob"}
+      ]
+    }
+  ],
+  "annotations": {"list": []},
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"}
+}

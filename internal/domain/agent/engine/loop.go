@@ -47,6 +47,7 @@ type Loop struct {
 	subRunner    *subagent.Runner
 	blobs        blob.Store
 	blobThresh   int
+	toolCache    *tool.ResultCache
 	maxRounds    int
 	tokenBudget  int
 	systemPrompt string
@@ -73,6 +74,7 @@ func NewLoop(
 		perm: perm, compressor: comp,
 		maxRounds: maxRounds, tokenBudget: tokenBudget,
 		systemPrompt: defaultSystem(),
+		toolCache:    tool.NewResultCache(30*time.Second, 128),
 	}
 }
 
@@ -118,18 +120,20 @@ You MUST reason actively before acting. Each assistant turn uses this format:
 Thought: <your analysis of the goal, what you know, what to do next>
 Action: {"name":"tool_name","args":{...}}
   — or multiple tools: Action: [{"name":"...","args":{...}}, ...]
-  — or pure JSON tool call(s) without the Action: label is also accepted
+    (read-only tools execute in parallel; write/bash serially)
+  — pure JSON tool call(s) without the Action: label is also accepted
 Final Answer: <user-facing answer when no more tools are needed>
 
 After tools run, you will receive Observation(...): results. Then emit a new Thought and either another Action or Final Answer.
 Do NOT skip Thought. Reflection on failure is part of Thought, not a separate mode.
+Respect token budget: be concise; prefer Final Answer when enough evidence is collected.
 
 ## Tools
 Core: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_search, delegate.
 - memory_save / memory_search for durable user/project facts
 - delegate for SubAgents (roles: explore|verify|general)
 - edit_file supports multi-line exact replace and regex (regex=true)
-- glob supports ** via doublestar
+- glob supports ** via doublestar; grep supports context (context_before/after or -C)
 
 Prefer edit_file over full write for existing files. Be concise.
 Dangerous operations require user confirmation. All tools (including MCP server__tool) go through permission checks.
@@ -210,8 +214,11 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		}
 	}
 
-	_ = l.messages.Save(ctx, sessmodel.NewMessage(id("msg"), session.ID, "user", userInput))
-	session.AddTokens(common.EstimateTokens(userInput))
+	um := sessmodel.NewMessage(id("msg"), session.ID, "user", userInput)
+	um.Priority = messagePriority("user", userInput)
+	um.TokenCount = common.EstimateTokens(userInput)
+	_ = l.messages.Save(ctx, um)
+	session.AddTokens(um.TokenCount)
 
 	history, _ := l.messages.ListAsMaps(ctx, session.ID, 120)
 	priorSummary := ""
@@ -235,10 +242,25 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		observability.Trace.Event(map[string]any{"event": "compress", "session": session.ID, "level": cr.Level, "saved": cr.Saved})
 	}
 
-	toolDesc := l.tools.Descriptions()
+	// skill tools: merge depends allowlists
+	var skillForTools *skill.Skill
+	if activeSkill != nil {
+		skillForTools = activeSkill
+		if l.skills != nil {
+			if merged := l.skills.MergedTools(activeSkill); len(merged) > 0 {
+				cp := *activeSkill
+				cp.Tools = merged
+				skillForTools = &cp
+			}
+		}
+	}
+	toolDesc := filterToolDescriptions(l.tools.Descriptions(), skillForTools)
 	sys := l.systemPrompt + "\n\n## Available tools\n" + formatTools(toolDesc)
 	if activeSkill != nil && l.skills != nil {
 		sys += "\n" + l.skills.PromptSection(activeSkill)
+		if skillForTools != nil && len(skillForTools.Tools) > 0 {
+			sys += "\nYou may ONLY use these tools while this skill is active: " + strings.Join(skillForTools.Tools, ", ") + "\n"
+		}
 	}
 	if l.memSvc != nil {
 		memBlock := l.memSvc.FormatForPrompt(ctx, session.UserID, session.ProjectID, userInput, 8)
@@ -303,6 +325,31 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		default:
 		}
 
+		// Active token budget check (proactive, not only pre-run compress)
+		ctxTokens := estimateMessageTokens(messages, sys)
+		if totalTokens+ctxTokens >= l.tokenBudget {
+			publish(&Event{Type: EventCompress, Content: fmt.Sprintf("token budget pressure used=%d ctx=%d budget=%d", totalTokens, ctxTokens, l.tokenBudget), Timestamp: now()})
+			if l.hooks != nil {
+				l.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
+			}
+			// emergency: drop middle tool observations, keep last 6 turns
+			if len(messages) > 10 {
+				head := messages[:2]
+				tail := messages[len(messages)-6:]
+				messages = append(append([]port.ChatMessage{}, head...), tail...)
+				messages = append([]port.ChatMessage{{
+					Role: "user", Content: "[TOKEN_BUDGET] Context trimmed mid-loop. Continue with remaining budget; prefer Final Answer if possible.",
+				}}, messages...)
+				observability.Global.CompressTotal.Add(1)
+				auditLog("compress", "", "mid_loop_budget", "ok", 0)
+			}
+			if totalTokens >= l.tokenBudget {
+				final = fmt.Sprintf("stopped: token budget exhausted (used=%d budget=%d)", totalTokens, l.tokenBudget)
+				publish(&Event{Type: EventError, SubType: "budget", Content: final, Completed: true, Timestamp: now()})
+				break
+			}
+		}
+
 		tLLM := time.Now()
 		llmCtx, llmSpan := observability.StartSpan(ctx, "llm.generate", attribute.Int("step", step))
 		resp, err := l.llm.Generate(llmCtx, &port.ChatRequest{
@@ -352,7 +399,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 						port.ChatMessage{Role: "assistant", Content: resp.Content},
 						port.ChatMessage{Role: "user", Content: msg},
 					)
-					_ = l.messages.Save(ctx, sessmodel.NewMessage(id("msg"), session.ID, "assistant", final))
+					am := sessmodel.NewMessage(id("msg"), session.ID, "assistant", final)
+					am.Priority = messagePriority("assistant", final)
+					_ = l.messages.Save(ctx, am)
 					continue
 				}
 				publish(&Event{Type: EventReview, Content: "plan review pass", Data: taskPlan, Timestamp: now()})
@@ -360,8 +409,11 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			for _, chunk := range chunkText(final, 40) {
 				publish(&Event{Type: EventTextDelta, Content: chunk, Timestamp: now()})
 			}
-			_ = l.messages.Save(ctx, sessmodel.NewMessage(id("msg"), session.ID, "assistant", final))
-			session.AddTokens(common.EstimateTokens(final))
+			am := sessmodel.NewMessage(id("msg"), session.ID, "assistant", final)
+			am.Priority = messagePriority("assistant", final)
+			am.TokenCount = common.EstimateTokens(final)
+			_ = l.messages.Save(ctx, am)
+			session.AddTokens(am.TokenCount)
 			publish(&Event{Type: EventAnswer, Content: final, Completed: true, Timestamp: now()})
 			break
 		}
@@ -387,91 +439,25 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			asst = "Thought: " + react.Thought + "\nAction: " + mustJSON(calls)
 		}
 		messages = append(messages, port.ChatMessage{Role: "assistant", Content: asst})
-		_ = l.messages.Save(ctx, sessmodel.NewMessage(id("msg"), session.ID, "assistant", asst))
+		am := sessmodel.NewMessage(id("msg"), session.ID, "assistant", asst)
+		am.Priority = messagePriority("assistant", asst)
+		am.TokenCount = common.EstimateTokens(asst)
+		_ = l.messages.Save(ctx, am)
 
-		needBreak := false
-		for _, tc := range calls {
-			totalTools++
-			publish(&Event{Type: EventAction, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
-
-			// Permission guard for ALL tools including MCP (server__tool)
-			if l.perm != nil && !opts.AutoApprove {
-				dec := l.perm.Check(session.ID, tc.Name, tc.Args)
-				if l.hooks != nil {
-					l.hooks.Emit(ctx, hook.Event{Point: hook.Permission, SessionID: session.ID, Tool: tc.Name, Args: tc.Args, Decision: string(dec.Action)})
-				}
-				switch dec.Action {
-				case security.ActionDeny:
-					msg := fmt.Sprintf("DENIED [%s]: %s", dec.Layer, dec.Reason)
-					observability.Global.PermissionDeny.Add(1)
-					publish(&Event{Type: EventPermission, SubType: "deny", Content: msg, Data: dec, Timestamp: now()})
-					auditLog("permission", tc.Name, dec.Reason, "deny", 0)
-					obs := FormatObservation(tc.Name, msg)
-					messages = append(messages, port.ChatMessage{Role: "tool", Content: obs, Name: tc.Name, ToolCallID: ensureID(tc)})
-					publish(&Event{Type: EventObservation, SubType: tc.Name, Content: msg, Step: step, Timestamp: now()})
-					continue
-				case security.ActionConfirm:
-					p := l.perm.CreatePending(session.ID, tc.Name, tc.Args, dec)
-					pending = p
-					msg := fmt.Sprintf("CONFIRM required [%s] tool=%s reason=%s id=%s\nApprove via CLI or POST /api/v1/permission/approve then send 继续",
-						dec.Layer, tc.Name, dec.Reason, p.ID)
-					publish(&Event{Type: EventPermission, SubType: "confirm", Content: msg, Data: p, Completed: true, Timestamp: now()})
-					auditLog("permission", tc.Name, dec.Reason, "confirm", 0)
-					final = msg
-					needBreak = true
-					break
-				}
-			}
-			if l.hooks != nil {
-				l.hooks.Emit(ctx, hook.Event{Point: hook.PreToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args})
-			}
-			publish(&Event{Type: EventToolCall, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
-			observability.Global.ToolCalls.Add(1)
-			t0 := time.Now()
-			var resText string
-			_ = observability.SpanTool(ctx, tc.Name, func(tctx context.Context) error {
-				resText, _ = l.execTool(tctx, tc.Name, tc.Args)
-				return nil
-			})
-			lat := time.Since(t0)
-			observability.Global.ObserveTool(lat)
-			resText = l.maybeOffload(ctx, session.ID, tc.Name, resText)
-			failed := isToolFail(resText)
-			if failed {
-				toolFailStreak++
-			} else {
-				toolFailStreak = 0
-				if taskPlan != nil {
-					taskPlan.Advance(true, tc.Name)
-				}
-			}
-			if l.hooks != nil {
-				l.hooks.Emit(ctx, hook.Event{Point: hook.PostToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args, Result: resText})
-			}
-			obs := FormatObservation(tc.Name, resText)
-			publish(&Event{Type: EventObservation, SubType: tc.Name, Step: step, Content: truncate(resText, 800), Timestamp: now()})
-			publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(resText, 800), Timestamp: now()})
-			auditLog("tool_call", tc.Name, truncate(resText, 300), map[bool]string{true: "error", false: "ok"}[failed], lat.Milliseconds())
-			callID := ensureID(tc)
-			_ = l.messages.Save(ctx, &sessmodel.Message{
-				ID: id("msg"), SessionID: session.ID, Role: "tool", Content: resText,
-				ToolName: tc.Name, ToolCallID: callID, Step: step, CreatedAt: time.Now(),
-			})
-			messages = append(messages, port.ChatMessage{Role: "tool", Content: obs, Name: tc.Name, ToolCallID: callID})
-
-			// On failure: inject structured Thought seed (active ReAct, not silent retry)
-			if failed && toolFailStreak >= 1 {
-				ref := l.reflect(ctx, fmt.Sprintf("tool %s failed: %s", tc.Name, truncate(resText, 200)), mustJSON(tc.Args))
-				publish(&Event{Type: EventReflect, Content: ref, Step: step, Timestamp: now()})
-				observability.Global.ReflectTotal.Add(1)
-				auditLog("reflect", tc.Name, ref, "ok", 0)
-				messages = append(messages, port.ChatMessage{Role: "user", Content:
-					"Observation indicated failure. Next turn MUST start with Thought diagnosing the failure, then Action or Final Answer.\n" +
-						"Failure analysis:\n" + ref})
-				if taskPlan != nil {
-					taskPlan.Advance(false, truncate(resText, 80))
-				}
-			}
+		// Batch tools: parallel read-only, serial writes; validate + skill + hook abort + permission
+		outcomes, p, needBreak := l.runToolCalls(ctx, session, step, calls, skillForTools, opts.AutoApprove, publish, auditLog)
+		totalTools += len(outcomes)
+		if p != nil {
+			pending = p
+			final = fmt.Sprintf("CONFIRM required tool=%s id=%s", p.Tool, p.ID)
+		}
+		var advance func(bool, string)
+		if taskPlan != nil {
+			advance = func(ok bool, note string) { taskPlan.Advance(ok, note) }
+		}
+		streak, _ := l.applyOutcomes(ctx, session, step, outcomes, &messages, auditLog, publish, advance)
+		if streak > toolFailStreak {
+			toolFailStreak = streak
 		}
 		if needBreak {
 			break

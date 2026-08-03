@@ -14,22 +14,92 @@ import (
 
 // Manager implements mcpport.IMCPManagerPort. Lives in infrastructure only.
 type Manager struct {
-	mu        sync.RWMutex
-	clients   map[string]mcpport.IMCPClient
-	configs   map[string]model.ServerConfig
-	toolRoute map[string]string // toolName -> server\x00realName
-	toolDefs  []model.ToolDef
-	onChange  func([]model.ToolDef)
-	lastErr   map[string]string
+	mu          sync.RWMutex
+	clients     map[string]mcpport.IMCPClient
+	configs     map[string]model.ServerConfig
+	toolRoute   map[string]string // toolName -> server\x00realName
+	toolDefs    []model.ToolDef
+	onChange    func([]model.ToolDef)
+	lastErr     map[string]string
+	stopWatch   chan struct{}
+	watchOnce   sync.Once
+	reconnectMu sync.Mutex
 }
 
 func NewManager() *Manager {
-	return &Manager{
-		clients: make(map[string]mcpport.IMCPClient),
-		configs: make(map[string]model.ServerConfig),
+	m := &Manager{
+		clients:   make(map[string]mcpport.IMCPClient),
+		configs:   make(map[string]model.ServerConfig),
 		toolRoute: make(map[string]string),
-		lastErr: make(map[string]string),
+		lastErr:   make(map[string]string),
+		stopWatch: make(chan struct{}),
 	}
+	m.startWatchdog()
+	return m
+}
+
+// startWatchdog periodically restarts offline enabled servers.
+func (m *Manager) startWatchdog() {
+	m.watchOnce.Do(func() {
+		go func() {
+			t := time.NewTicker(15 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-m.stopWatch:
+					return
+				case <-t.C:
+					m.reconnectOffline()
+				}
+			}
+		}()
+	})
+}
+
+func (m *Manager) reconnectOffline() {
+	m.mu.RLock()
+	var need []model.ServerConfig
+	for name, cfg := range m.configs {
+		if !cfg.Enabled {
+			continue
+		}
+		if _, online := m.clients[name]; !online {
+			need = append(need, cfg)
+		}
+	}
+	m.mu.RUnlock()
+	for _, cfg := range need {
+		log.Printf("[mcp] watchdog reconnect %s\n", cfg.Name)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err := m.reconnect(ctx, cfg.Name)
+		cancel()
+		if err != nil {
+			log.Printf("[mcp] reconnect %s failed: %v\n", cfg.Name, err)
+		}
+	}
+}
+
+// reconnect restarts a server by name using stored config.
+func (m *Manager) reconnect(ctx context.Context, name string) error {
+	m.reconnectMu.Lock()
+	defer m.reconnectMu.Unlock()
+	m.mu.RLock()
+	cfg, ok := m.configs[name]
+	m.mu.RUnlock()
+	if !ok || !cfg.Enabled {
+		return fmt.Errorf("no config for %s", name)
+	}
+	if err := m.startOne(ctx, cfg); err != nil {
+		m.mu.Lock()
+		m.lastErr[name] = err.Error()
+		m.mu.Unlock()
+		return err
+	}
+	m.mu.Lock()
+	delete(m.lastErr, name)
+	m.mu.Unlock()
+	_, err := m.refreshTools(ctx)
+	return err
 }
 
 func (m *Manager) OnToolsChanged(cb func([]model.ToolDef)) {
@@ -130,13 +200,42 @@ func (m *Manager) CallTool(ctx context.Context, name string, args map[string]any
 	if len(parts) != 2 {
 		return "", fmt.Errorf("invalid route")
 	}
+	serverName, realName := parts[0], parts[1]
 	m.mu.RLock()
-	client := m.clients[parts[0]]
+	client := m.clients[serverName]
 	m.mu.RUnlock()
 	if client == nil {
-		return "", fmt.Errorf("mcp server offline: %s", parts[0])
+		// auto-reconnect once
+		if err := m.reconnect(ctx, serverName); err != nil {
+			return "", fmt.Errorf("mcp server offline: %s (%v)", serverName, err)
+		}
+		m.mu.RLock()
+		client = m.clients[serverName]
+		m.mu.RUnlock()
+		if client == nil {
+			return "", fmt.Errorf("mcp server offline: %s", serverName)
+		}
 	}
-	return client.CallTool(ctx, parts[1], args)
+	text, err := client.CallTool(ctx, realName, args)
+	if err != nil {
+		// process crash / broken pipe → reconnect and retry once
+		low := strings.ToLower(err.Error())
+		if strings.Contains(low, "broken pipe") || strings.Contains(low, "eof") ||
+			strings.Contains(low, "exit") || strings.Contains(low, "closed") ||
+			strings.Contains(low, "process") {
+			log.Printf("[mcp] call failed, reconnect %s: %v\n", serverName, err)
+			if rerr := m.reconnect(ctx, serverName); rerr == nil {
+				m.mu.RLock()
+				client = m.clients[serverName]
+				m.mu.RUnlock()
+				if client != nil {
+					return client.CallTool(ctx, realName, args)
+				}
+			}
+		}
+		return "", err
+	}
+	return text, nil
 }
 
 func (m *Manager) IsOnline(name string) bool {
@@ -177,6 +276,11 @@ func (m *Manager) ListServers() []model.ServerConfig {
 }
 
 func (m *Manager) Close() error {
+	select {
+	case <-m.stopWatch:
+	default:
+		close(m.stopWatch)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for n, c := range m.clients {

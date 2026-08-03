@@ -113,27 +113,81 @@ func (s *Service) PromptSection(sk *Skill) string {
 	if sk == nil {
 		return ""
 	}
+	// compose depends (one level + transitive with cycle guard)
+	composed := s.Compose(sk)
 	var b strings.Builder
-	b.WriteString("## Active Skill: ")
-	b.WriteString(sk.Name)
-	b.WriteString(" (")
-	b.WriteString(sk.ID)
-	b.WriteString(")\n")
-	if sk.Description != "" {
-		b.WriteString(sk.Description)
-		b.WriteString("\n")
-	}
-	if len(sk.Tools) > 0 {
-		b.WriteString("Prefer tools: ")
-		b.WriteString(strings.Join(sk.Tools, ", "))
-		b.WriteString("\n")
-	}
-	if sk.Body != "" {
-		b.WriteString("\n### Skill guide\n")
-		b.WriteString(sk.Body)
-		b.WriteString("\n")
+	for i, c := range composed {
+		if i == 0 {
+			b.WriteString("## Active Skill: ")
+		} else {
+			b.WriteString("\n## Dependent Skill: ")
+		}
+		b.WriteString(c.Name)
+		b.WriteString(" (")
+		b.WriteString(c.ID)
+		b.WriteString(")\n")
+		if c.Description != "" {
+			b.WriteString(c.Description)
+			b.WriteString("\n")
+		}
+		if len(c.Tools) > 0 {
+			b.WriteString("Allowed tools: ")
+			b.WriteString(strings.Join(c.Tools, ", "))
+			b.WriteString("\n")
+		}
+		if c.Body != "" {
+			b.WriteString("\n### Skill guide\n")
+			b.WriteString(c.Body)
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
+}
+
+// Compose returns skill + dependencies (depth-first, cycle-safe).
+func (s *Service) Compose(sk *Skill) []*Skill {
+	if sk == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []*Skill
+	var walk func(*Skill)
+	walk = func(cur *Skill) {
+		if cur == nil || seen[cur.ID] {
+			return
+		}
+		seen[cur.ID] = true
+		out = append(out, cur)
+		for _, dep := range cur.Depends {
+			walk(s.Get(dep))
+		}
+	}
+	walk(sk)
+	return out
+}
+
+// MergedTools unions tools from skill + depends; empty means unrestricted.
+func (s *Service) MergedTools(sk *Skill) []string {
+	composed := s.Compose(sk)
+	var all []string
+	empty := false
+	seen := map[string]bool{}
+	for _, c := range composed {
+		if len(c.Tools) == 0 {
+			empty = true
+			continue
+		}
+		for _, t := range c.Tools {
+			if !seen[t] {
+				seen[t] = true
+				all = append(all, t)
+			}
+		}
+	}
+	if empty && len(all) == 0 {
+		return nil // unrestricted
+	}
+	return all
 }
 
 func (s *Service) InstallFromPath(srcPath, id string) (*Skill, error) {
@@ -201,6 +255,12 @@ func parseSkillDir(dir string) (*Skill, error) {
 	}
 	if v := meta["tools"]; v != "" {
 		sk.Tools = splitCSV(v)
+	}
+	if v := meta["depends"]; v != "" {
+		sk.Depends = splitCSV(v)
+	}
+	if v := meta["dependencies"]; v != "" {
+		sk.Depends = append(sk.Depends, splitCSV(v)...)
 	}
 	return sk, nil
 }
