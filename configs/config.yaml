@@ -1,0 +1,74 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"
+
+agent:
+  name: "Code-Agent"
+  max_steps: 20
+  timeout_sec: 180
+  token_budget: 32000
+  workspace_root: "./workspace"
+
+llm:
+  provider: "openai_compatible"
+  model: "deepseek-ai/DeepSeek-V3"
+  api_key: ""
+  api_base: "https://api.siliconflow.cn/v1"
+  use_mock: true
+
+database:
+  type: "memory"   # mysql | memory — set mysql when docker compose up
+  auto_migrate: true
+  schema_path: "scripts/sql/01_schema.sql"
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    database: "code_agent"
+    username: "root"
+    password: "123456"
+
+redis:
+  enabled: false
+  host: "127.0.0.1"
+  port: 6379
+
+rate_limit:
+  enabled: true
+  per_minute: 60
+
+token_quota:
+  enabled: true
+  per_user_per_day: 2000000
+
+storage:
+  enabled: false
+  endpoint: "http://127.0.0.1:9000"
+  bucket: "code-agent"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  use_path_style: true
+  local_fallback_dir: "./data/objects"
+
+security:
+  api_keys:
+    - "dev-key"
+  path_sandbox: true
+  default_confirm_write: true
+
+mcp:
+  enabled: true
+
+skills:
+  enabled: true
+  dir: "./skills"
+
+hooks:
+  enabled: true
+  dir: "./hooks"
+
+commands:
+  dir: "./commands"
+
+logging:
+  level: "info"

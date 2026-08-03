@@ -503,21 +503,22 @@ code-agent/
 
 ## 10. 分阶段实施计划
 
-### Phase 0 — 建仓与 DIP 骨架（当前）
+### Phase 0 — 建仓与 DIP 骨架
 
 - [x] 仓库初始化 + remote
 - [x] `docs/design.md`
-- [ ] go.mod、配置骨架、docker-compose、SQL 草案
-- [ ] domain ports 空接口 + 目录
-- [ ] CI：`go test ./...` 绿
+- [x] go.mod、配置骨架、docker-compose、SQL 草案
+- [x] domain ports + 目录
+- [x] `go test ./...` 绿
 
-### Phase 1 — Server MVP + CLI 流式（投递最小闭环）
+### Phase 1 — Server MVP + CLI 流式（投递最小闭环）✅ 进行中/主干已通
 
-- 会话 CRUD、Chat SSE、Mock/真 LLM 流式
-- 六大工具 + PathSandbox
-- 5 层权限（至少 L1–L4）+ 确认恢复
-- MySQL 落库 + Redis 限流
-- CLI REPL 渲染事件
+- [x] 会话 CRUD、Chat SSE、Mock/真 LLM
+- [x] 六大工具 + PathSandbox
+- [x] 5 层权限（L1–L5 骨架）+ 确认恢复
+- [x] MySQL 或 memory 仓储；Redis 限流/token（可选）
+- [x] CLI REPL 渲染 SSE 事件
+- [ ] 真模型端到端长任务压测（需 `LLM_API_KEY`）
 
 **验收**：在配置的 workspace 内「搜索 → 读 → 改 → bash 测试」全程流式可见。
 

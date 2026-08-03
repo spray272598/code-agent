@@ -1,14 +1,44 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"flag"
+	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/spray272598/code-agent/internal/bootstrap"
+	"github.com/spray272598/code-agent/internal/infrastructure/config"
+	httpserver "github.com/spray272598/code-agent/internal/trigger/http"
 )
 
-// Server entrypoint — Phase 0 stub.
-// Full bootstrap lands in Phase 1 (see docs/design.md).
 func main() {
-	fmt.Fprintln(os.Stderr, "code-agent server: scaffold only — implement Phase 1 (docs/design.md)")
-	fmt.Fprintln(os.Stderr, "config example: configs/config.example.yaml")
-	os.Exit(0)
+	cfgPath := flag.String("config", "configs/config.yaml", "config path")
+	flag.Parse()
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	app, err := bootstrap.Build(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer app.Closer()
+
+	srv := httpserver.New(app.Chat, cfg.Addr())
+	go func() {
+		if err := srv.Start(); err != nil {
+			log.Printf("server stopped: %v", err)
+		}
+	}()
+
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	<-ch
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
 }
