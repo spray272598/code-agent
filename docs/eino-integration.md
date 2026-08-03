@@ -57,9 +57,16 @@ llm:
 
 > 我们早期自研 ReAct 跑通安全与 MCP；编排层后续接入 Eino，把模型 tool-calling 与图执行交给框架，**权限门仍挂在工具适配器上**，避免框架绕过企业安全策略。
 
-## 后续可演进
+## 已加强（持续）
 
-1. Eino callbacks → 映射 SSE `tool_call` / `observation` 细粒度事件  
-2. Eino interrupt/resume ↔ 现有 permission approve  
-3. DeepAgent / multi-agent 替换部分 SubAgent  
-4. 保留 native 作为无 API Key 本地 mock 路径  
+1. **Callbacks → SSE**：ChatModel / Tool OnStart/OnEnd → `thought` `action` `tool_call` `observation` `permission` `text_delta`
+2. **HITL**：`StatefulInterrupt` on CONFIRM；`继续` 时 `TakeReadyResume` 先执行再进 ReAct
+3. **Multi-agent**：`/team` 或 `/parallel` 触发 explore+verify 并行 Eino 子代理再 merge
+4. **Stream**：`agent.eino_stream: true` 走 `agent.Stream` 推 `text_delta`
+
+## 仍可演进
+
+1. 正式 CheckPoint store 持久化 interrupt（跨进程 resume）
+2. DeepAgent 图替换部分 SubAgent YAML
+3. 更细的 token usage 从 model.CallbackOutput 上报  
+

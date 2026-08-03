@@ -47,6 +47,11 @@ CLI ──SSE/HTTP──► trigger ──► application ──► domain
 | S3/MinIO | **minio-go** 优先，失败回落本地目录 |
 | OTLP | **OTLP HTTP** 导出（Jaeger all-in-one）；另有 Prometheus `/metrics` |
 | Teams | 角色工具白名单 YAML，非多 Agent 组织 OS |
+| 编排 | **默认自研 Loop**；可选 **CloudWeGo Eino ReAct**（`orchestrator: eino`），工具仍过 Guard；callbacks→SSE；`/team` 并行子代理 |
+
+### 编排怎么讲
+
+> 主链路自研 ReAct 把权限/MCP 做深；编排层可切换 Eino，tool-calling 与图执行交给框架，GuardedTool 仍挂五层权限，避免框架绕过安全。
 
 ## 代码阅读路径（20 分钟）
 

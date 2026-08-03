@@ -257,7 +257,7 @@ func Build(cfg *config.Config) (*App, error) {
 		} else {
 			runner = einoorch.NewRunner(einoorch.Config{
 				APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
-				MaxSteps: cfg.Agent.MaxSteps,
+				MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
 			}, reg, perm, sessionRepo, messageRepo)
 			log.Printf("[bootstrap] orchestrator=eino (CloudWeGo ReAct); tools still guarded by domain Guard\n")
 		}

@@ -11,6 +11,7 @@ agent:
   workspace_root: "./workspace"
   # native = self-built Loop (default); eino = CloudWeGo Eino ReAct (needs real LLM key)
   orchestrator: "native"
+  # eino_stream: true  # optional text_delta streaming when orchestrator=eino
 
 llm:
   provider: "openai_compatible"

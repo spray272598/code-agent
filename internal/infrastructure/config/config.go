@@ -47,6 +47,8 @@ type AgentConfig struct {
 	WorkspaceRoot string `yaml:"workspace_root"`
 	// Orchestrator: "native" (default, self-built Loop) | "eino" (CloudWeGo Eino ReAct)
 	Orchestrator string `yaml:"orchestrator"`
+	// EinoStream enables streaming text_delta from Eino (orchestrator=eino only)
+	EinoStream bool `yaml:"eino_stream"`
 }
 
 type LLMConfig struct {
