@@ -18,6 +18,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/contextx"
+	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	"github.com/spray272598/code-agent/internal/domain/security"
@@ -184,6 +185,9 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		_ = r.messages.Save(ctx, um)
 	}
 
+	if r.Multi != nil && looksDeep(userInput) {
+		return r.Multi.RunDeep(ctx, session, userInput, publish, opts)
+	}
 	if r.Multi != nil && looksMulti(userInput) {
 		return r.Multi.RunParallel(ctx, session, userInput, publish, opts)
 	}
@@ -463,6 +467,8 @@ func defaultPersona() string {
 Sandboxed workspace. Use tools for file/shell. Prefer edit_file.
 If a tool returns DENIED or CONFIRM, explain what the user must approve.
 For multi-step independent research, you may use the delegate tool when available.
+Prefer code_search for symbol/file discovery before blind glob.
+For deep multi-step implementation use prefix /deep ; for parallel roles use /team .
 Be concise.`
 }
 
@@ -475,6 +481,10 @@ func looksMulti(s string) bool {
 	ls := strings.ToLower(s)
 	return strings.HasPrefix(ls, "/team") || strings.HasPrefix(ls, "/parallel") ||
 		strings.Contains(ls, "parallel explore") || strings.Contains(ls, "team mode")
+}
+
+func looksDeep(s string) bool {
+	return deepagent.LooksDeep(s)
 }
 
 func firstPending(g *security.Guard, sessionID string) *security.PendingConfirm {

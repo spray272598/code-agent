@@ -564,6 +564,10 @@ code-agent/
 - [x] 本机一键：`scripts/dev_local.ps1` + `configs/config.host.yaml` + host `--reconnect`
 - [x] Eval 数字报告：`scripts/eval_report.ps1` → `reports/eval-latest.{json,md}`
 - [x] 演示文档：`docs/local-demo.md`
+- [x] 跨进程 Checkpoint / Cancel：`internal/domain/checkpoint` + `/api/v1/session/{cancel,checkpoint}`
+- [x] Code Index / Retriever：`code_search` / `code_index` + `/api/v1/index/*`
+- [x] DeepAgent vs Teams：`/deep` 串行 vs `/team` 并行 + `docs/deepagent-vs-teams.md`
+- [x] 真模型压测：`scripts/llm_stress.ps1` → `reports/llm-stress-latest.{json,md}`
 
 ---
 

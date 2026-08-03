@@ -106,13 +106,26 @@ powershell -File scripts/eval_report.ps1   # → reports/eval-latest.json + .md
 
 详见 [docs/local-demo.md](docs/local-demo.md)。
 
-## 评测 / Docker
+## 评测 / Docker / 真模型压测
 
 ```powershell
 # 轻量冒烟
 powershell -File scripts/eval_smoke.ps1
 # 数字报告（pass_rate / 每 case 延迟）
 powershell -File scripts/eval_report.ps1
+
+# 真模型长任务压测（Key 只走环境变量，勿写入仓库）
+$env:LLM_API_KEY="sk-..."
+$env:LLM_BASE_URL="https://api.siliconflow.cn/v1"
+$env:LLM_MODEL="Qwen/Qwen2.5-32B-Instruct"
+$env:LLM_USE_MOCK="false"
+powershell -File scripts/llm_stress.ps1
+# → reports/llm-stress-latest.json + .md
+```
+
+文档：[checkpoint-index.md](docs/checkpoint-index.md) · [deepagent-vs-teams.md](docs/deepagent-vs-teams.md)
+
+```powershell
 # Docker: scripts/docker-up.md
 ```
 

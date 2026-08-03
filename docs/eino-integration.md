@@ -107,6 +107,6 @@ go test ./internal/infrastructure/einoorch/ -count=1 -v
 
 ## 后续
 
-1. 跨进程 Checkpoint 持久化 Interrupt  
-2. DeepAgent 替换部分 Teams  
+1. ~~跨进程 Checkpoint 持久化 Interrupt~~ → `docs/checkpoint-index.md`  
+2. ~~DeepAgent vs Teams~~ → `/deep` + `docs/deepagent-vs-teams.md`  
 3. CallbackOutput.TokenUsage 进 Prometheus  

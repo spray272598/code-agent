@@ -85,8 +85,12 @@ func NewRegistry() *Registry {
 	r.Register("memory", "Hint for memory tools / API", func(args string, ctx Context) Result {
 		return Result{Handled: true, Response: "Use tools memory_save / memory_search, or GET/POST /api/v1/memory. Scopes: user | project."}
 	})
-	r.Register("teams", "SubAgent roles / teams", func(args string, ctx Context) Result {
-		return Result{Handled: true, Response: "Roles: explore (read-only), verify (bash+read), general (full), docs. Tool: delegate with role/tasks/isolation=worktree. Config: teams/default.yaml"}
+	r.Register("teams", "SubAgent roles / teams (help)", func(args string, ctx Context) Result {
+		return Result{Handled: true, Response: "Roles: explore / verify / general / docs. Parallel run: /team <goal>. Deep sequential: /deep <goal>. Config: teams/default.yaml"}
+	})
+	// note: /team and /parallel are pass-through to Eino multi-agent (not local handlers)
+	r.Register("index", "Hint for code_search / code_index tools", func(args string, ctx Context) Result {
+		return Result{Handled: true, Response: "Tools: code_search (query), code_index (rebuild). API: GET /api/v1/index/search?q=  POST /api/v1/index/rebuild"}
 	})
 	return r
 }
@@ -135,6 +139,11 @@ func (r *Registry) Try(input string, ctx Context) Result {
 	h := r.cmds[name]
 	r.mu.RUnlock()
 	if h == nil {
+		// pass-through agent routing prefixes (not local slash handlers)
+		switch name {
+		case "team", "parallel", "deep":
+			return Result{Handled: false, Rewrite: input}
+		}
 		return Result{Handled: true, Response: fmt.Sprintf("unknown command /%s — try /help", name)}
 	}
 	return h(args, ctx)

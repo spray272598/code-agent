@@ -14,7 +14,10 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
+	"github.com/spray272598/code-agent/internal/domain/checkpoint"
+	"github.com/spray272598/code-agent/internal/domain/codeindex"
 	"github.com/spray272598/code-agent/internal/domain/contextx"
+	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/host"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
@@ -22,6 +25,7 @@ import (
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	"github.com/spray272598/code-agent/internal/domain/skill"
+	"github.com/spray272598/code-agent/internal/domain/slash"
 	"github.com/spray272598/code-agent/internal/domain/subagent"
 	"github.com/spray272598/code-agent/internal/domain/team"
 	"github.com/spray272598/code-agent/internal/domain/tool"
@@ -52,6 +56,9 @@ type App struct {
 	Memory  *memory.Service
 	Hooks   *hook.Bus
 	Blobs   blob.Store
+	Index   *codeindex.Index
+	CKStore checkpoint.Store
+	Runs    *checkpoint.RunRegistry
 	Host    host.Executor
 	Bridge  *host.Bridge
 	HostHub *ws.HostHub
@@ -187,6 +194,26 @@ func Build(cfg *config.Config) (*App, error) {
 	reg.Register(coding.NewMemorySave(memCtx))
 	reg.Register(coding.NewMemorySearch(memCtx))
 
+	// Code index / retriever tools
+	codeIdx := codeindex.New(workspaceRoot)
+	if st, err := codeIdx.Build(context.Background()); err != nil {
+		log.Printf("[bootstrap] code index: %v\n", err)
+	} else {
+		log.Printf("[bootstrap] code index files=%d tokens=%d\n", st.Files, st.Tokens)
+	}
+	reg.Register(codeindex.NewSearchTool(codeIdx))
+	reg.Register(codeindex.NewRebuildTool(codeIdx))
+
+	// Durable checkpoint + in-process run cancel
+	var ckStore checkpoint.Store
+	if fs, errCK := checkpoint.NewFileStore("./data/checkpoints"); errCK != nil {
+		log.Printf("[bootstrap] checkpoint file store: %v → memory\n", errCK)
+		ckStore = checkpoint.NewMemoryStore()
+	} else {
+		ckStore = fs
+	}
+	runReg := checkpoint.NewRunRegistry()
+
 	// SubAgent + worktree + teams
 	var subRunner *subagent.Runner
 	if cfg.SubAgent.Enabled {
@@ -299,6 +326,7 @@ func Build(cfg *config.Config) (*App, error) {
 		application.WithMemory(memSvc),
 		application.WithAudit(auditRepo),
 		application.WithKeyStore(keyStore),
+		application.WithCheckpoint(ckStore, runReg),
 	)
 	if blobStore != nil {
 		chatOpts = append(chatOpts, application.WithBlobStore(blobStore))
@@ -312,6 +340,28 @@ func Build(cfg *config.Config) (*App, error) {
 		RateEnabled: cfg.RateLimit.Enabled, RatePerMin: cfg.RateLimit.PerMinute,
 	}, chatOpts...)
 
+	// rehydrate HITL pendings from durable checkpoints (cross-process interrupt)
+	if n, err := chat.RestoreCheckpoints(context.Background()); err != nil {
+		log.Printf("[bootstrap] restore checkpoints: %v\n", err)
+	} else if n > 0 {
+		log.Printf("[bootstrap] restored %d interrupt checkpoint(s)\n", n)
+	}
+
+	// slash: deep vs teams comparison + routing hints
+	if s := chat.Slash(); s != nil {
+		s.Register("deep", "DeepAgent Plan→Act→Reflect — chat: /deep <goal>", func(args string, _ slash.Context) slash.Result {
+			goal := strings.TrimSpace(args)
+			if goal == "" {
+				return slash.Result{Handled: true, Response: "Usage: /deep <goal>\n\n" + deepagent.ComparisonDoc()}
+			}
+			// rewrite keeps /deep prefix so Eino Runner.looksDeep routes sequential phases
+			return slash.Result{Handled: false, Rewrite: "/deep " + goal}
+		})
+		s.Register("compare-agents", "DeepAgent vs Teams comparison", func(string, slash.Context) slash.Result {
+			return slash.Result{Handled: true, Response: deepagent.ComparisonDoc()}
+		})
+	}
+
 	mcpN := 0
 	for _, t := range reg.List() {
 		if t != nil && strings.Contains(t.Name(), "__") {
@@ -324,7 +374,8 @@ func Build(cfg *config.Config) (*App, error) {
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,
 		MCP: mcpMgr, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
-		Blobs: blobStore, Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
+		Blobs: blobStore, Index: codeIdx, CKStore: ckStore, Runs: runReg,
+		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
 		Closer: func() {
 			if mcpMgr != nil {
 				_ = mcpMgr.Close()

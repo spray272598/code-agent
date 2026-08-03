@@ -14,6 +14,7 @@ import (
 
 	"github.com/spray272598/code-agent/internal/api/dto"
 	"github.com/spray272598/code-agent/internal/application"
+	"github.com/spray272598/code-agent/internal/domain/codeindex"
 	"github.com/spray272598/code-agent/internal/domain/host"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/observability"
@@ -26,6 +27,7 @@ type Server struct {
 	srv         *http.Server
 	hostHub     *ws.HostHub
 	bridge      *host.Bridge
+	index       *codeindex.Index
 	corsOrigins []string
 	maxBody     int64
 }
@@ -42,6 +44,12 @@ func New(app *application.ChatApp, addr string) *Server {
 func (s *Server) WithHost(hub *ws.HostHub, bridge *host.Bridge) *Server {
 	s.hostHub = hub
 	s.bridge = bridge
+	return s
+}
+
+// WithIndex attaches workspace code index for HTTP search/rebuild.
+func (s *Server) WithIndex(idx *codeindex.Index) *Server {
+	s.index = idx
 	return s
 }
 
@@ -84,6 +92,13 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/blobs", s.handleBlobGet)
 	mux.HandleFunc("/api/v1/host/devices", s.handleHostDevices)
+	mux.HandleFunc("/api/v1/session/cancel", s.handleSessionCancel)
+	mux.HandleFunc("/api/v1/session/checkpoint", s.handleSessionCheckpoint)
+	mux.HandleFunc("/api/v1/session/checkpoints", s.handleSessionCheckpoints)
+	mux.HandleFunc("/api/v1/session/runs", s.handleSessionRuns)
+	mux.HandleFunc("/api/v1/index/search", s.handleIndexSearch)
+	mux.HandleFunc("/api/v1/index/rebuild", s.handleIndexRebuild)
+	mux.HandleFunc("/api/v1/index/stats", s.handleIndexStats)
 	mux.HandleFunc("/api/v1/admin/log-level", s.handleLogLevel)
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/docs", s.handleSwaggerUI)
@@ -713,6 +728,118 @@ func (s *Server) handleBlobGet(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "405", "POST only")
+		return
+	}
+	var body struct {
+		SessionID string `json:"sessionId"`
+		Reason    string `json:"reason"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.SessionID == "" {
+		body.SessionID = r.URL.Query().Get("sessionId")
+	}
+	if body.SessionID == "" {
+		writeErr(w, 400, "400", "sessionId required")
+		return
+	}
+	ok, err := s.app.CancelSession(body.SessionID, body.Reason)
+	if err != nil {
+		writeErr(w, 400, "400", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"cancelled": ok, "sessionId": body.SessionID,
+	}})
+}
+
+func (s *Server) handleSessionCheckpoint(w http.ResponseWriter, r *http.Request) {
+	sid := r.URL.Query().Get("sessionId")
+	if sid == "" {
+		writeErr(w, 400, "400", "sessionId required")
+		return
+	}
+	snap, err := s.app.GetCheckpoint(r.Context(), sid)
+	if err != nil {
+		writeErr(w, 400, "400", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": snap, "running": s.app.IsSessionRunning(sid)})
+}
+
+func (s *Server) handleSessionCheckpoints(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	list, err := s.app.ListCheckpoints(r.Context(), status, 50)
+	if err != nil {
+		writeErr(w, 400, "400", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
+}
+
+func (s *Server) handleSessionRuns(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"active": s.app.ActiveRuns(),
+	}})
+}
+
+func (s *Server) handleIndexSearch(w http.ResponseWriter, r *http.Request) {
+	if s.index == nil {
+		writeErr(w, 503, "503", "index unavailable")
+		return
+	}
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		q = r.URL.Query().Get("query")
+	}
+	if q == "" {
+		writeErr(w, 400, "400", "q required")
+		return
+	}
+	k := 8
+	if v := r.URL.Query().Get("top_k"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &k); n == 1 && err == nil && k > 0 {
+			// ok
+		}
+	}
+	if s.index.Stats().Files == 0 {
+		_, _ = s.index.Build(r.Context())
+	}
+	hits := s.index.Search(q, k)
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"query": q, "hits": hits, "stats": s.index.Stats(),
+	}})
+}
+
+func (s *Server) handleIndexRebuild(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "405", "POST only")
+		return
+	}
+	if s.index == nil {
+		writeErr(w, 503, "503", "index unavailable")
+		return
+	}
+	st, err := s.index.Build(r.Context())
+	if err != nil {
+		writeErr(w, 500, "500", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": st})
+}
+
+func (s *Server) handleIndexStats(w http.ResponseWriter, r *http.Request) {
+	if s.index == nil {
+		writeErr(w, 503, "503", "index unavailable")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": s.index.Stats()})
+}
+
 func truncateStr(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
@@ -832,6 +959,13 @@ const openAPISpec = `{
     "/api/v1/audit": {"get": {"summary": "Audit log", "parameters":[{"name":"sessionId","in":"query","schema":{"type":"string"}}]}},
     "/api/v1/blobs": {"get": {"summary": "Get blob", "parameters":[{"name":"key","in":"query","required":true,"schema":{"type":"string"}}]}},
     "/api/v1/host/devices": {"get": {"summary": "Host agents online"}},
+    "/api/v1/session/cancel": {"post": {"summary": "Cancel active agent run + checkpoint"}},
+    "/api/v1/session/checkpoint": {"get": {"summary": "Get session checkpoint", "parameters":[{"name":"sessionId","in":"query","required":true,"schema":{"type":"string"}}]}},
+    "/api/v1/session/checkpoints": {"get": {"summary": "List checkpoints", "parameters":[{"name":"status","in":"query","schema":{"type":"string"}}]}},
+    "/api/v1/session/runs": {"get": {"summary": "Active in-process runs"}},
+    "/api/v1/index/search": {"get": {"summary": "Code index search", "parameters":[{"name":"q","in":"query","required":true,"schema":{"type":"string"}}]}},
+    "/api/v1/index/rebuild": {"post": {"summary": "Rebuild code index"}},
+    "/api/v1/index/stats": {"get": {"summary": "Code index stats"}},
     "/api/v1/admin/log-level": {"get": {"summary": "Get log level"}, "post": {"summary": "Set log level"}},
     "/api/v1/openapi.json": {"get": {"summary": "This document", "security": []}},
     "/metrics": {"get": {"summary": "Prometheus text", "security": []}},

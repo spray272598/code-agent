@@ -12,6 +12,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
+	"github.com/spray272598/code-agent/internal/domain/checkpoint"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -39,6 +40,8 @@ type ChatApp struct {
 	memSvc      *memory.Service
 	auditRepo   audit.Repository
 	blobs       blob.Store
+	ckStore     checkpoint.Store
+	runs        *checkpoint.RunRegistry
 	timeoutSec  int
 	workspace   string
 	rateEnabled bool
@@ -252,15 +255,27 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 		}
 	}
 	observability.Global.ChatTotal.Add(1)
-	res, err := a.loop.Run(ctx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
+	runCtx, runCancel := context.WithCancel(ctx)
+	if a.runs != nil {
+		a.runs.Register(session.ID, runCancel)
+		defer a.runs.Unregister(session.ID, runCancel)
+	}
+	a.markRun(session, req, checkpoint.StatusRunning, nil, "")
+	res, err := a.loop.Run(runCtx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
 	if err != nil && res == nil {
 		observability.Global.ChatErrors.Add(1)
+		if runCtx.Err() != nil {
+			a.markRun(session, req, checkpoint.StatusCancelled, nil, "cancel")
+			return &ChatResponse{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}, nil
+		}
+		a.markRun(session, req, checkpoint.StatusFailed, nil, "error")
 		return nil, err
 	}
 	if res == nil {
 		observability.Global.ChatErrors.Add(1)
 		return nil, fmt.Errorf("empty result")
 	}
+	a.persistResultCheckpoint(session, req, res, runCtx.Err())
 	if a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
 		day := time.Now().Format("20060102")
 		if _, err := a.redis.IncrBy(ctx, fmt.Sprintf("token:user:%s:%s", session.UserID, day), int64(res.TokenUsed), 48*time.Hour); err != nil {
@@ -313,21 +328,46 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 	if err != nil {
 		return nil, nil, err
 	}
-	// nest timeout under request ctx — cancel on client disconnect OR timeout
+	// nest timeout under request ctx — cancel on client disconnect OR timeout OR CancelSession
 	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(a.timeoutSec)*time.Second)
 	if err := a.checkRate(ctx, req.UserID); err != nil {
 		cancel()
 		return nil, nil, err
 	}
+	if a.runs != nil {
+		a.runs.Register(session.ID, cancel)
+	}
+	a.markRun(session, req, checkpoint.StatusRunning, nil, "")
 	ch := make(chan *engine.Event, 128)
 	go func() {
 		defer close(ch)
 		defer cancel()
+		if a.runs != nil {
+			defer a.runs.Unregister(session.ID, cancel)
+		}
 		res, err := a.loop.Run(ctx, session, req.Message, ch, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
 		if err != nil && res == nil {
-			select {
-			case ch <- &engine.Event{Type: engine.EventError, Content: err.Error(), Completed: true, Timestamp: time.Now().UnixMilli()}:
-			case <-ctx.Done():
+			if ctx.Err() != nil {
+				a.markRun(session, req, checkpoint.StatusCancelled, nil, "cancel")
+				select {
+				case ch <- &engine.Event{Type: engine.EventCancel, Content: "cancelled", Completed: true, Timestamp: time.Now().UnixMilli()}:
+				default:
+				}
+			} else {
+				a.markRun(session, req, checkpoint.StatusFailed, nil, "error")
+				select {
+				case ch <- &engine.Event{Type: engine.EventError, Content: err.Error(), Completed: true, Timestamp: time.Now().UnixMilli()}:
+				case <-ctx.Done():
+				}
+			}
+		}
+		if res != nil {
+			a.persistResultCheckpoint(session, req, res, ctx.Err())
+			if res.NeedPermission {
+				select {
+				case ch <- &engine.Event{Type: engine.EventCheckpoint, SubType: checkpoint.StatusInterrupt, Content: "checkpoint saved", Data: res.Pending, Timestamp: time.Now().UnixMilli()}:
+				default:
+				}
 			}
 		}
 		if res != nil && a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
@@ -338,6 +378,134 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 		}
 	}()
 	return ch, session, nil
+}
+
+// CancelSession interrupts an in-process run and writes a cancelled checkpoint.
+func (a *ChatApp) CancelSession(sessionID, reason string) (bool, error) {
+	if sessionID == "" {
+		return false, fmt.Errorf("sessionId required")
+	}
+	ok := false
+	if a.runs != nil {
+		ok = a.runs.Cancel(sessionID)
+	}
+	if a.ckStore != nil {
+		snap := &checkpoint.Snapshot{
+			SessionID: sessionID, Status: checkpoint.StatusCancelled,
+			ErrorClass: "cancel", Meta: map[string]any{"reason": reason, "hadActive": ok},
+			UpdatedAt: time.Now(), CreatedAt: time.Now(),
+		}
+		if prev, _ := a.ckStore.Get(context.Background(), sessionID); prev != nil {
+			snap.Goal = prev.Goal
+			snap.LastInput = prev.LastInput
+			snap.UserID = prev.UserID
+			snap.CreatedAt = prev.CreatedAt
+		}
+		_ = a.ckStore.Save(context.Background(), snap)
+	}
+	return ok, nil
+}
+
+// GetCheckpoint returns durable snapshot for a session.
+func (a *ChatApp) GetCheckpoint(ctx context.Context, sessionID string) (*checkpoint.Snapshot, error) {
+	if a.ckStore == nil {
+		return nil, fmt.Errorf("checkpoint store disabled")
+	}
+	return a.ckStore.Get(ctx, sessionID)
+}
+
+// ListCheckpoints lists durable snapshots (optional status filter).
+func (a *ChatApp) ListCheckpoints(ctx context.Context, status string, limit int) ([]*checkpoint.Snapshot, error) {
+	if a.ckStore == nil {
+		return nil, fmt.Errorf("checkpoint store disabled")
+	}
+	return a.ckStore.List(ctx, status, limit)
+}
+
+// IsSessionRunning reports in-process active agent loop.
+func (a *ChatApp) IsSessionRunning(sessionID string) bool {
+	if a.runs == nil {
+		return false
+	}
+	return a.runs.IsRunning(sessionID)
+}
+
+// ActiveRuns lists session IDs with in-process runs.
+func (a *ChatApp) ActiveRuns() []string {
+	if a.runs == nil {
+		return nil
+	}
+	return a.runs.Active()
+}
+
+// RestoreCheckpoints rehydrates pending confirms from durable store (process start).
+func (a *ChatApp) RestoreCheckpoints(ctx context.Context) (int, error) {
+	if a.ckStore == nil || a.perm == nil {
+		return 0, nil
+	}
+	list, err := a.ckStore.List(ctx, checkpoint.StatusInterrupt, 200)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, s := range list {
+		if s == nil || s.Pending == nil {
+			continue
+		}
+		p := &security.PendingConfirm{
+			ID: s.Pending.ID, SessionID: s.Pending.SessionID, Tool: s.Pending.Tool,
+			Args: s.Pending.Args, Reason: s.Pending.Reason, RuleID: s.Pending.RuleID,
+			Layer: s.Pending.Layer, CreatedAt: s.Pending.CreatedAt,
+		}
+		a.perm.RestorePending(p)
+		n++
+	}
+	return n, nil
+}
+
+func (a *ChatApp) markRun(session *sessmodel.Session, req ChatRequest, status string, pending *security.PendingConfirm, errClass string) {
+	if a.ckStore == nil || session == nil {
+		return
+	}
+	snap := &checkpoint.Snapshot{
+		SessionID: session.ID, UserID: session.UserID, ProjectID: session.ProjectID,
+		Status: status, Goal: req.Message, LastInput: req.Message, ErrorClass: errClass,
+		UpdatedAt: time.Now(), CreatedAt: time.Now(),
+	}
+	if pending != nil {
+		snap.Pending = &checkpoint.PendingTool{
+			ID: pending.ID, SessionID: pending.SessionID, Tool: pending.Tool, Args: pending.Args,
+			Reason: pending.Reason, RuleID: pending.RuleID, Layer: pending.Layer, CreatedAt: pending.CreatedAt,
+		}
+	}
+	if prev, _ := a.ckStore.Get(context.Background(), session.ID); prev != nil && !prev.CreatedAt.IsZero() {
+		snap.CreatedAt = prev.CreatedAt
+	}
+	_ = a.ckStore.Save(context.Background(), snap)
+}
+
+func (a *ChatApp) persistResultCheckpoint(session *sessmodel.Session, req ChatRequest, res *engine.Result, ctxErr error) {
+	if a.ckStore == nil || session == nil || res == nil {
+		return
+	}
+	status := checkpoint.StatusCompleted
+	if ctxErr != nil {
+		status = checkpoint.StatusCancelled
+		res.ErrorClass = "cancel"
+	} else if res.NeedPermission {
+		status = checkpoint.StatusInterrupt
+	} else if res.ErrorClass != "" && res.ErrorClass != "permission" {
+		status = checkpoint.StatusFailed
+	}
+	var pend *security.PendingConfirm
+	if p, ok := res.Pending.(*security.PendingConfirm); ok {
+		pend = p
+	} else if res.NeedPermission && a.perm != nil {
+		if list := a.perm.ListPending(session.ID); len(list) > 0 {
+			pend = list[0]
+		}
+	}
+	a.markRun(session, req, status, pend, res.ErrorClass)
 }
 
 func (a *ChatApp) resolveSession(req ChatRequest) (*sessmodel.Session, error) {

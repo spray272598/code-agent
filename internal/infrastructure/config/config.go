@@ -242,8 +242,15 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LLM_API_BASE"); v != "" {
 		cfg.LLM.APIBase = v
 	}
+	// alias used by many Python projects
+	if v := os.Getenv("LLM_BASE_URL"); v != "" {
+		cfg.LLM.APIBase = v
+	}
 	if v := os.Getenv("LLM_MODEL"); v != "" {
 		cfg.LLM.Model = v
+	}
+	if v := os.Getenv("LLM_PROVIDER"); v != "" {
+		cfg.LLM.Provider = v
 	}
 	if v := os.Getenv("LLM_USE_MOCK"); v != "" {
 		cfg.LLM.UseMock = strings.EqualFold(v, "true") || v == "1"
@@ -265,6 +272,16 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("WORKSPACE_ROOT"); v != "" {
 		cfg.Agent.WorkspaceRoot = v
+	}
+	if v := os.Getenv("AGENT_TIMEOUT_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Agent.TimeoutSec = n
+		}
+	}
+	if v := os.Getenv("AGENT_MAX_STEPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Agent.MaxSteps = n
+		}
 	}
 	if v := os.Getenv("AGENT_ORCHESTRATOR"); v != "" {
 		cfg.Agent.Orchestrator = v

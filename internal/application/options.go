@@ -5,6 +5,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
+	"github.com/spray272598/code-agent/internal/domain/checkpoint"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	"github.com/spray272598/code-agent/internal/domain/security"
@@ -57,6 +58,17 @@ func WithKeyStore(k *auth.KeyStore) Option {
 	return func(a *ChatApp) {
 		if k != nil {
 			a.keys = k
+		}
+	}
+}
+
+// WithCheckpoint injects durable interrupt store + run registry.
+func WithCheckpoint(store checkpoint.Store, runs *checkpoint.RunRegistry) Option {
+	return func(a *ChatApp) {
+		a.ckStore = store
+		a.runs = runs
+		if a.runs == nil {
+			a.runs = checkpoint.NewRunRegistry()
 		}
 	}
 }

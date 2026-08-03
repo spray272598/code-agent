@@ -55,6 +55,7 @@ func main() {
 
 	srv := httpserver.New(app.Chat, cfg.Addr()).
 		WithHost(app.HostHub, app.Bridge).
+		WithIndex(app.Index).
 		WithSecurity(cfg.Security.CORSOrigins, cfg.Security.MaxBodyBytes)
 	go func() {
 		var err error

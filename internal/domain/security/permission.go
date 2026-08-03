@@ -84,6 +84,7 @@ func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
 		mcpConfirm:   true,
 		readTools: map[string]bool{
 			"read_file": true, "glob": true, "grep": true, "memory_search": true,
+			"code_search": true, "code_index": true,
 		},
 		writeTools: map[string]bool{
 			"write_file": true, "edit_file": true, "memory_save": true,
@@ -414,6 +415,41 @@ func (g *Guard) TakeReadyResume(sessionID string) *AwaitingResume {
 	}
 	delete(g.awaiting, sessionID)
 	cp := *a
+	return &cp
+}
+
+// RestorePending rehydrates a pending confirm after process restart (checkpoint).
+func (g *Guard) RestorePending(p *PendingConfirm) {
+	if g == nil || p == nil || p.ID == "" || p.SessionID == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	cp := *p
+	if cp.Args == nil {
+		cp.Args = map[string]any{}
+	}
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = time.Now()
+	}
+	g.pending[cp.ID] = &cp
+	g.awaiting[cp.SessionID] = &AwaitingResume{
+		SessionID: cp.SessionID, Tool: cp.Tool, Args: cp.Args, PermID: cp.ID, Ready: false,
+	}
+}
+
+// ExportPending returns a copy of a pending by id (for checkpoint save).
+func (g *Guard) ExportPending(id string) *PendingConfirm {
+	if g == nil || id == "" {
+		return nil
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	p, ok := g.pending[id]
+	if !ok || p == nil {
+		return nil
+	}
+	cp := *p
 	return &cp
 }
 

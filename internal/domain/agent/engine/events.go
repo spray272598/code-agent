@@ -24,6 +24,8 @@ const (
 	EventSubAgent    EventType = "subagent"
 	EventObservation EventType = "observation"
 	EventAction      EventType = "action"
+	EventCheckpoint  EventType = "checkpoint"
+	EventCancel      EventType = "cancel"
 )
 
 type Event struct {

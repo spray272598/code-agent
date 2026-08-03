@@ -70,11 +70,24 @@ Run-Case "openapi" {
 Run-Case "tools_core" {
   $r = Invoke-RestMethod -Uri "$Base/api/v1/tools" -Headers $h
   $names = @($r.data | ForEach-Object { $_.name })
-  $need = @("read_file","write_file","edit_file","bash","glob","grep","memory_save","memory_search")
+  $need = @("read_file","write_file","edit_file","bash","glob","grep","memory_save","memory_search","code_search","code_index")
   foreach ($n in $need) {
     if ($names -notcontains $n) { throw "missing $n" }
   }
   "count=$($names.Count)"
+}
+
+Run-Case "index_search" {
+  $r = Invoke-RestMethod -Uri "$Base/api/v1/index/search?q=checkpoint" -Headers $h -TimeoutSec 30
+  # may be empty if workspace empty; rebuild first
+  Invoke-RestMethod -Uri "$Base/api/v1/index/rebuild" -Method POST -Headers $h -TimeoutSec 60 | Out-Null
+  $r = Invoke-RestMethod -Uri "$Base/api/v1/index/search?q=read_file" -Headers $h
+  "hits=$(@($r.data.hits).Count) files=$($r.data.stats.files)"
+}
+
+Run-Case "checkpoint_list" {
+  $r = Invoke-RestMethod -Uri "$Base/api/v1/session/checkpoints" -Headers $h
+  "n=$(@($r.data).Count)"
 }
 
 Run-Case "tools_delegate" {

@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
+	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	domtool "github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/types/common"
@@ -132,7 +133,86 @@ func (m *MultiAgent) RunParallel(
 	}, nil
 }
 
+// RunDeep executes sequential Plan → Act → Reflect (DeepAgent), contrasting parallel Teams.
+func (m *MultiAgent) RunDeep(
+	ctx context.Context,
+	session *sessmodel.Session,
+	userInput string,
+	publish EventSink,
+	opts engine.RunOptions,
+) (*engine.Result, error) {
+	if m == nil || m.parent == nil {
+		return nil, fmt.Errorf("deep-agent unavailable")
+	}
+	goal := deepagent.StripPrefix(userInput)
+	if goal == "" {
+		goal = userInput
+	}
+	phases := deepagent.Expand(goal)
+	publish(&engine.Event{
+		Type: engine.EventSubAgent, SubType: "deep-start",
+		Content: fmt.Sprintf("DeepAgent phases=%d goal=%s", len(phases), truncate(goal, 80)),
+		Timestamp: nowMs(),
+	})
+
+	var chain strings.Builder
+	chain.WriteString("Goal: " + goal + "\n")
+	type part struct{ ID, Name, Output string }
+	var parts []part
+	steps := 0
+	for _, ph := range phases {
+		if err := ctx.Err(); err != nil {
+			return &engine.Result{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}, err
+		}
+		publish(&engine.Event{
+			Type: engine.EventPlan, SubType: ph.ID,
+			Content: "DeepAgent phase: " + ph.Name, Timestamp: nowMs(),
+		})
+		prompt := ph.Prompt + "\n\n## Prior phase notes\n" + chain.String()
+		max := ph.MaxSteps
+		text, err := m.runOneMax(ctx, session.ID, prompt, ph.Tools, opts.AutoApprove, publish, max)
+		if err != nil && text == "" {
+			text = "phase error: " + err.Error()
+		}
+		parts = append(parts, part{ID: ph.ID, Name: ph.Name, Output: text})
+		chain.WriteString(fmt.Sprintf("\n### %s\n%s\n", ph.Name, truncate(text, 2000)))
+		steps++
+		publish(&engine.Event{
+			Type: engine.EventSubAgent, SubType: ph.ID,
+			Content: "done " + ph.Name + ": " + truncate(text, 100), Timestamp: nowMs(),
+		})
+	}
+	// final answer = reflect phase if present, else concat
+	final := ""
+	if len(parts) > 0 {
+		final = strings.TrimSpace(parts[len(parts)-1].Output)
+	}
+	if final == "" {
+		var b strings.Builder
+		for _, p := range parts {
+			b.WriteString("## " + p.Name + "\n" + p.Output + "\n")
+		}
+		final = b.String()
+	}
+	if final == "" {
+		final = "DeepAgent finished with empty phases."
+	}
+	m.parent.persistAssistant(ctx, session, final)
+	publish(&engine.Event{Type: engine.EventAnswer, Content: final, Completed: true, Timestamp: nowMs()})
+	publish(&engine.Event{Type: engine.EventDone, Content: final, Completed: true, Data: map[string]any{
+		"orchestrator": "eino-deep", "phases": len(parts), "mode": deepagent.ModeDeep,
+	}, Timestamp: nowMs()})
+	return &engine.Result{
+		SessionID: session.ID, Response: final, Steps: steps,
+		ToolCalls: steps, TokenUsed: common.EstimateTokens(final),
+	}, nil
+}
+
 func (m *MultiAgent) runOne(ctx context.Context, sessionID, prompt string, allow []string, auto bool, publish EventSink) (string, error) {
+	return m.runOneMax(ctx, sessionID, prompt, allow, auto, publish, 6)
+}
+
+func (m *MultiAgent) runOneMax(ctx context.Context, sessionID, prompt string, allow []string, auto bool, publish EventSink, maxStep int) (string, error) {
 	cm, err := m.parent.newChatModel(ctx)
 	if err != nil {
 		return "", err
@@ -150,8 +230,9 @@ func (m *MultiAgent) runOne(ctx context.Context, sessionID, prompt string, allow
 		}
 		tools = WrapRegistryCross(reg, m.parent.perm, cross)
 	}
-	// cap steps for sub agents
-	maxStep := 6
+	if maxStep <= 0 {
+		maxStep = 6
+	}
 	if m.parent.cfg.MaxSteps > 0 && m.parent.cfg.MaxSteps < maxStep {
 		maxStep = m.parent.cfg.MaxSteps
 	}
@@ -168,8 +249,12 @@ func (m *MultiAgent) runOne(ctx context.Context, sessionID, prompt string, allow
 	tctx := WithSession(ctx, sessionID, auto)
 	stats := &runStats{}
 	opt := agentOptions(publish, stats)
-	// short timeout per subagent
-	cctx, cancel := context.WithTimeout(tctx, 90*time.Second)
+	// timeout scales with max steps
+	to := time.Duration(30+maxStep*15) * time.Second
+	if to > 180*time.Second {
+		to = 180 * time.Second
+	}
+	cctx, cancel := context.WithTimeout(tctx, to)
 	defer cancel()
 	out, err := ag.Generate(cctx, []*schema.Message{schema.UserMessage(prompt)}, opt)
 	if err != nil {
