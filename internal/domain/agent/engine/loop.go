@@ -26,6 +26,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
 	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/types/common"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const maxToolResultChars = 4000
@@ -128,6 +129,12 @@ type RunOptions struct {
 }
 
 func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput string, eventCh chan<- *Event, opts RunOptions) (*Result, error) {
+	ctx, span := observability.StartSpan(ctx, "agent.run",
+		attribute.String("session.id", session.ID),
+		attribute.String("user.id", session.UserID),
+	)
+	defer span.End()
+
 	publish := func(ev *Event) {
 		if eventCh == nil || ev == nil {
 			return
@@ -283,11 +290,13 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		publish(NewEvent(EventThought, step, fmt.Sprintf("step %d", step)))
 
 		tLLM := time.Now()
-		resp, err := l.llm.Generate(ctx, &port.ChatRequest{
+		llmCtx, llmSpan := observability.StartSpan(ctx, "llm.generate", attribute.Int("step", step))
+		resp, err := l.llm.Generate(llmCtx, &port.ChatRequest{
 			SystemPrompt: sys,
 			Messages:     messages,
 			Temperature:  0.2,
 		})
+		llmSpan.End()
 		observability.Global.ObserveLLM(time.Since(tLLM))
 		if err != nil {
 			publish(&Event{Type: EventError, SubType: "llm", Content: err.Error(), Completed: true, Timestamp: now()})
@@ -391,7 +400,11 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			publish(&Event{Type: EventToolCall, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
 			observability.Global.ToolCalls.Add(1)
 			t0 := time.Now()
-			resText, _ := l.execTool(ctx, tc.Name, tc.Args)
+			var resText string
+			_ = observability.SpanTool(ctx, tc.Name, func(tctx context.Context) error {
+				resText, _ = l.execTool(tctx, tc.Name, tc.Args)
+				return nil
+			})
 			lat := time.Since(t0)
 			observability.Global.ObserveTool(lat)
 			resText = l.maybeOffload(ctx, session.ID, tc.Name, resText)

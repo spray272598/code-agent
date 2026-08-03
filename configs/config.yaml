@@ -51,8 +51,15 @@ storage:
   local_fallback_dir: "./data/objects"
 
 host:
-  mode: "server"   # server | host (host side-car is stub)
-  endpoint: "ws://127.0.0.1:9090"
+  mode: "server"          # server | host
+  prefer_host: false      # true: coding tools go to host-agent when online
+  endpoint: "ws://127.0.0.1:8080/ws/host"
+
+otlp:
+  enabled: false          # docker compose jaeger: set true + endpoint localhost:4318
+  endpoint: "localhost:4318"
+  insecure: true
+  service: "code-agent"
 
 security:
   api_keys:

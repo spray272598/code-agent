@@ -10,18 +10,28 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/application"
+	"github.com/spray272598/code-agent/internal/domain/host"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/observability"
+	"github.com/spray272598/code-agent/internal/trigger/ws"
 )
 
 type Server struct {
-	app  *application.ChatApp
-	addr string
-	srv  *http.Server
+	app     *application.ChatApp
+	addr    string
+	srv     *http.Server
+	hostHub *ws.HostHub
+	bridge  *host.Bridge
 }
 
 func New(app *application.ChatApp, addr string) *Server {
 	return &Server{app: app, addr: addr}
+}
+
+func (s *Server) WithHost(hub *ws.HostHub, bridge *host.Bridge) *Server {
+	s.hostHub = hub
+	s.bridge = bridge
+	return s
 }
 
 func (s *Server) Start() error {
@@ -46,7 +56,12 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/blobs", s.handleBlobGet)
+	mux.HandleFunc("/api/v1/host/devices", s.handleHostDevices)
 	mux.HandleFunc("/metrics", observability.WritePrometheus) // Prometheus scrape (auth-skipped)
+	if s.hostHub != nil {
+		mux.Handle("/ws/host", s.hostHub)
+		log.Printf("[http] host agent ws: /ws/host?token=&deviceId=\n")
+	}
 
 	handler := cors(auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux))))
 	s.srv = &http.Server{Addr: s.addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -63,7 +78,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func auth(app *application.ChatApp, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
+		// public / health / metrics / host ws (ws auth itself)
+		if r.URL.Path == "/health" || r.URL.Path == "/metrics" || r.URL.Path == "/ws/host" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -519,6 +535,18 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
+}
+
+func (s *Server) handleHostDevices(w http.ResponseWriter, r *http.Request) {
+	if s.bridge == nil {
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"online":  s.bridge.OnlineCount(),
+		"devices": s.bridge.ListDevices(),
+		"ws":      "/ws/host?token=<apiKey>&deviceId=local-dev",
+	}})
 }
 
 func (s *Server) handleBlobGet(w http.ResponseWriter, r *http.Request) {

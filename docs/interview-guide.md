@@ -43,9 +43,9 @@ CLI ──SSE/HTTP──► trigger ──► application ──► domain
 
 | 能力 | 状态 |
 |------|------|
-| Host Executor（本机侧车） | 接口/配置 stub，执行仍 server workspace |
-| S3/MinIO 远端 | 本地 FS store；API 兼容扩展 |
-| OTLP 分布式追踪 | Prometheus text `/metrics`，非完整 OTel |
+| Host Executor（本机侧车） | **已实现** `host-agent` WebSocket；`prefer_host` 时优先本机 |
+| S3/MinIO | **minio-go** 优先，失败回落本地目录 |
+| OTLP | **OTLP HTTP** 导出（Jaeger all-in-one）；另有 Prometheus `/metrics` |
 | Teams | 角色工具白名单 YAML，非多 Agent 组织 OS |
 
 ## 代码阅读路径（20 分钟）

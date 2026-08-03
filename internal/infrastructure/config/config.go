@@ -28,6 +28,7 @@ type Config struct {
 	Teams      TeamsConfig      `yaml:"teams"`
 	SubAgent   SubAgentConfig   `yaml:"subagent"`
 	Host       HostConfig       `yaml:"host"`
+	OTLP       OTLPConfig       `yaml:"otlp"`
 }
 
 type ServerConfig struct {
@@ -142,10 +143,22 @@ type SubAgentConfig struct {
 	DefaultSteps  int  `yaml:"default_steps"`
 }
 
-// HostConfig tool execution location (server default; host is roadmap stub).
+// HostConfig tool execution location.
+// mode=server: tools on server workspace
+// mode=host: prefer connected host-agent WebSocket (fallback local)
 type HostConfig struct {
 	Mode     string `yaml:"mode"` // server | host
 	Endpoint string `yaml:"endpoint"`
+	// PreferHost when true and a host is online, route coding tools to host
+	PreferHost bool `yaml:"prefer_host"`
+}
+
+// OTLPConfig OpenTelemetry export.
+type OTLPConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Endpoint string `yaml:"endpoint"` // host:port for OTLP HTTP, e.g. localhost:4318
+	Insecure bool   `yaml:"insecure"`
+	Service  string `yaml:"service"`
 }
 
 func Default() *Config {
@@ -176,7 +189,8 @@ func Default() *Config {
 		Logging:  LoggingConfig{Level: "info"},
 		Teams:    TeamsConfig{Enabled: true, File: "./teams/default.yaml"},
 		SubAgent: SubAgentConfig{Enabled: true, MaxConcurrent: 3, DefaultSteps: 8},
-		Host:     HostConfig{Mode: "server"},
+		Host: HostConfig{Mode: "server", PreferHost: false},
+		OTLP: OTLPConfig{Enabled: false, Endpoint: "localhost:4318", Insecure: true, Service: "code-agent"},
 	}
 }
 
@@ -232,6 +246,18 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("WORKSPACE_ROOT"); v != "" {
 		cfg.Agent.WorkspaceRoot = v
+	}
+	if v := os.Getenv("OTLP_ENABLED"); v != "" {
+		cfg.OTLP.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("OTLP_ENDPOINT"); v != "" {
+		cfg.OTLP.Endpoint = v
+	}
+	if v := os.Getenv("HOST_PREFER"); v != "" {
+		cfg.Host.PreferHost = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("MINIO_ENDPOINT"); v != "" {
+		cfg.Storage.Endpoint = v
 	}
 	// empty key → mock for local dev
 	if cfg.LLM.APIKey == "" {

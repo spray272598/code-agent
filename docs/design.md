@@ -554,11 +554,11 @@ code-agent/
 
 ### Phase 6 — 抛光 ✅
 
-- [x] 对象存储：本地 blob store + 大 tool 结果 offload（`/api/v1/blobs?key=`）
-- [x] Prometheus text：`GET /metrics` + JSON `/api/v1/metrics`
-- [x] Host Executor 接口/配置 stub（默认 server workspace）
-- [x] `scripts/eval_smoke.ps1` 冒烟评测
-- [x] `docs/interview-guide.md` 面试稿
+- [x] 对象存储：minio-go + 本地 fallback；大 tool offload；`/api/v1/blobs`
+- [x] Prometheus：`GET /metrics` + JSON `/api/v1/metrics`
+- [x] Host Agent WebSocket：`/ws/host` + `cmd/host-agent` + ProxyTool（prefer_host）
+- [x] OTLP Trace（HTTP → Jaeger/Collector）
+- [x] `scripts/eval_smoke.ps1`、`scripts/docker-up.md`、`docs/interview-guide.md`
 
 ---
 

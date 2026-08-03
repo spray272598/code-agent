@@ -86,17 +86,21 @@ go run ./cmd/server -config configs/config.yaml
 ]}}
 ```
 
-### Phase 6 — 抛光
+### Phase 6 — 抛光 + 中间件能力
 
-- 大 tool 结果 offload → 本地对象存储 `./data/objects`，`GET /api/v1/blobs?key=`
-- Prometheus：`GET /metrics`（text）；JSON：`/api/v1/metrics`
-- Host Executor：`host.mode=server|host`（host 为侧车 stub）
-- 评测：`powershell -File scripts/eval_smoke.ps1`
-- 面试：`docs/interview-guide.md`
+- **对象存储**：minio-go 优先（Docker MinIO），失败回落 `./data/objects`；`GET /api/v1/blobs?key=`
+- **Prometheus**：`GET /metrics`；JSON：`/api/v1/metrics`
+- **Host Agent**：`cmd/host-agent` + 服务端 `/ws/host`；`host.prefer_host=true` 时工具转发本机
+- **OTLP Trace**：`otlp.enabled` → Jaeger（`:16686`）；agent.run / llm / tool spans
+- 评测：`scripts/eval_smoke.ps1`；Docker：`scripts/docker-up.md`
 
-### 后续演进（非必须）
-
-- 真 MinIO/S3 SDK、Host Agent WebSocket 侧车、OTLP Trace
+```powershell
+docker compose up -d
+$env:OTLP_ENABLED="true"
+go run ./cmd/server -config configs/config.yaml
+# 另一终端（本机执行工具）
+go run ./cmd/host-agent --server ws://127.0.0.1:8080/ws/host --token dev-key --workspace .
+```
 
 ## 文档
 

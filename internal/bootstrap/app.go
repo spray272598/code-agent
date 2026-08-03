@@ -31,23 +31,26 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
+	"github.com/spray272598/code-agent/internal/trigger/ws"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 )
 
 type App struct {
-	Config *config.Config
-	Chat   *application.ChatApp
-	Tools  *tool.MapRegistry
-	Perm   *security.Guard
-	Redis  *redisx.Client
-	MCP    *inframcp.Manager
-	Skills *skill.Service
-	Memory *memory.Service
-	Hooks  *hook.Bus
-	Blobs  blob.Store
-	Host   host.Executor
-	Closer func()
+	Config  *config.Config
+	Chat    *application.ChatApp
+	Tools   *tool.MapRegistry
+	Perm    *security.Guard
+	Redis   *redisx.Client
+	MCP     *inframcp.Manager
+	Skills  *skill.Service
+	Memory  *memory.Service
+	Hooks   *hook.Bus
+	Blobs   blob.Store
+	Host    host.Executor
+	Bridge  *host.Bridge
+	HostHub *ws.HostHub
+	Closer  func()
 }
 
 func Build(cfg *config.Config) (*App, error) {
@@ -94,38 +97,63 @@ func Build(cfg *config.Config) (*App, error) {
 	rdb := redisx.New(cfg.Redis)
 	llmPort := llm.NewFromConfig(cfg)
 
-	// host executor mode (server default; host is stub roadmap)
+	// host bridge always available for WS registration
+	hostBridge := host.NewBridge()
+	apiKey := "dev-key"
+	if len(cfg.Security.APIKeys) > 0 {
+		apiKey = cfg.Security.APIKeys[0]
+	}
+	hostHub := ws.NewHostHub(hostBridge, apiKey)
+
 	var hostExec host.Executor = &host.ServerExecutor{Root: cfg.Agent.WorkspaceRoot}
-	if cfg.Host.Mode == "host" {
+	preferHost := cfg.Host.PreferHost || cfg.Host.Mode == "host"
+	if preferHost {
 		hostExec = &host.HostExecutor{Endpoint: cfg.Host.Endpoint, FallbackRoot: cfg.Agent.WorkspaceRoot}
-		log.Printf("[bootstrap] host executor mode=host endpoint=%s (side-car not wired; tools use fallback workspace)\n", cfg.Host.Endpoint)
+		log.Printf("[bootstrap] host prefer_host=true (tools route to host-agent when online, fallback local)\n")
 	}
 	workspaceRoot := hostExec.WorkspaceRoot()
 
-	// blob store
+	// blob store: MinIO preferred, local fallback
 	var blobStore blob.Store
 	if cfg.Storage.Enabled {
-		localDir := cfg.Storage.LocalFallbackDir
-		if localDir == "" {
-			localDir = "./data/objects"
-		}
-		ls, err := storage.NewLocalStore(localDir)
+		st, err := storage.NewStoreFromConfig(cfg.Storage)
 		if err != nil {
 			log.Printf("[bootstrap] blob store: %v\n", err)
 		} else {
-			blobStore = ls
-			log.Printf("[bootstrap] blob store local=%s\n", ls.Root())
+			blobStore = st
 		}
 	}
 
 	ws := coding.NewWorkspace(workspaceRoot)
 	reg := tool.NewRegistry()
-	reg.Register(coding.NewReadFile(ws))
-	reg.Register(coding.NewWriteFile(ws))
-	reg.Register(coding.NewEditFile(ws))
-	reg.Register(coding.NewBash(ws, 60))
-	reg.Register(coding.NewGlob(ws))
-	reg.Register(coding.NewGrep(ws))
+	// local coding tools
+	localRead := coding.NewReadFile(ws)
+	localWrite := coding.NewWriteFile(ws)
+	localEdit := coding.NewEditFile(ws)
+	localBash := coding.NewBash(ws, 60)
+	localGlob := coding.NewGlob(ws)
+	localGrep := coding.NewGrep(ws)
+	if preferHost {
+		wrap := func(name, desc string, local tool.ITool) tool.ITool {
+			return &host.ProxyTool{
+				ToolName: name, Desc: desc, Local: local, Bridge: hostBridge,
+				PreferHost: true, Timeout: 90 * time.Second,
+			}
+		}
+		reg.Register(wrap("read_file", localRead.Description(), localRead))
+		reg.Register(wrap("write_file", localWrite.Description(), localWrite))
+		reg.Register(wrap("edit_file", localEdit.Description(), localEdit))
+		reg.Register(wrap("bash", localBash.Description(), localBash))
+		reg.Register(wrap("glob", localGlob.Description(), localGlob))
+		reg.Register(wrap("grep", localGrep.Description(), localGrep))
+	} else {
+		reg.Register(localRead)
+		reg.Register(localWrite)
+		reg.Register(localEdit)
+		reg.Register(localBash)
+		reg.Register(localGlob)
+		reg.Register(localGrep)
+	}
 	reg.Register(coding.NewMemorySave(memCtx))
 	reg.Register(coding.NewMemorySearch(memCtx))
 
@@ -223,7 +251,7 @@ func Build(cfg *config.Config) (*App, error) {
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,
 		MCP: mcpMgr, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
-		Blobs: blobStore, Host: hostExec,
+		Blobs: blobStore, Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
 		Closer: func() {
 			if mcpMgr != nil {
 				_ = mcpMgr.Close()
