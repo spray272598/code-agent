@@ -1,0 +1,85 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"
+
+agent:
+  name: "Code-Agent"
+  max_steps: 20
+  timeout_sec: 180
+  token_budget: 32000
+  workspace_root: "./workspace"
+
+llm:
+  provider: "openai_compatible"
+  model: "deepseek-ai/DeepSeek-V3"
+  api_key: ""          # env: LLM_API_KEY
+  api_base: ""         # env: LLM_API_BASE
+  use_mock: true
+
+database:
+  type: "mysql"
+  auto_migrate: true
+  schema_path: "scripts/sql/01_schema.sql"
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    database: "code_agent"
+    username: "root"
+    password: "123456"
+
+redis:
+  enabled: true
+  host: "127.0.0.1"
+  port: 6379
+  password: ""
+  db: 0
+
+rate_limit:
+  enabled: true
+  per_minute: 60
+
+token_quota:
+  enabled: true
+  per_user_per_day: 2000000
+
+storage:
+  enabled: true
+  # S3-compatible (MinIO / OSS / S3)
+  endpoint: "http://127.0.0.1:9000"
+  bucket: "code-agent"
+  region: "us-east-1"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  use_path_style: true
+  # 本地降级目录（storage.enabled 且 endpoint 不可用时）
+  local_fallback_dir: "./data/objects"
+
+mq:
+  enabled: false
+  driver: "redis_stream" # redis_stream | rabbitmq
+  stream: "code-agent-tasks"
+
+security:
+  api_keys: [] # 或使用 JWT；示例: ["dev-key-change-me"]
+  path_sandbox: true
+  default_confirm_write: true
+
+mcp:
+  enabled: true
+  servers: []
+
+skills:
+  enabled: true
+  dir: "./skills"
+
+hooks:
+  enabled: true
+  dir: "./hooks"
+
+commands:
+  dir: "./commands"
+
+logging:
+  level: "info"
+  file: "logs/code-agent.log"

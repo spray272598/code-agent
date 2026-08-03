@@ -1,0 +1,47 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+/server
+/cli
+/code-agent
+/mcp-demo
+
+# Workspace & runtime
+/workspace/
+/temp/
+/logs/
+/exports/
+/screenshots/
+*.log
+
+# Config secrets
+configs/config.local.yaml
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+coverage.out
+*.test
+
+# Node (if any debug ui)
+node_modules/
+web/dist/
+
+# MinIO / local data
+/data/
