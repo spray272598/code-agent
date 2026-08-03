@@ -250,11 +250,13 @@ func (l *Loop) applyOutcomes(
 		obs := FormatObservation(o.tc.Name, o.text)
 		callID := ensureID(o.tc)
 		pri := messagePriority("tool", o.text)
-		_ = l.messages.Save(ctx, &sessmodel.Message{
+		if err := l.messages.Save(ctx, &sessmodel.Message{
 			ID: id("msg"), SessionID: session.ID, Role: "tool", Content: o.text,
 			ToolName: o.tc.Name, ToolCallID: callID, Step: step, Priority: pri, CreatedAt: time.Now(),
 			TokenCount: common.EstimateTokens(o.text),
-		})
+		}); err != nil {
+			observability.Warnf("tool message save: %v", err)
+		}
 		*messages = append(*messages, port.ChatMessage{Role: "tool", Content: obs, Name: o.tc.Name, ToolCallID: callID})
 		decision := "ok"
 		if o.failed {

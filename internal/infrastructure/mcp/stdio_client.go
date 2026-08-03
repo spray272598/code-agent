@@ -58,6 +58,8 @@ func (c *StdioClient) Initialize(ctx context.Context) error {
 		}
 		c.cmd.Env = env
 	}
+	// Windows: hide console window for child MCP process
+	hideMCPWindow(c.cmd)
 	stdin, err := c.cmd.StdinPipe()
 	if err != nil {
 		return err

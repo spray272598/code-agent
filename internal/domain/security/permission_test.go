@@ -69,6 +69,44 @@ func TestNormalizeCommand(t *testing.T) {
 	}
 }
 
+func TestDenySemicolonVariant(t *testing.T) {
+	g := NewGuard("./workspace", true, true)
+	// payload after benign prefix via ;
+	attacks := []string{
+		"echo ok; rm -rf /",
+		"true && rm -rf /",
+		"rm  -rf  /",
+		"rm;-rf /",
+	}
+	for _, a := range attacks {
+		d := g.Check("s1", "bash", map[string]any{"command": a})
+		if d.Action != ActionDeny {
+			t.Fatalf("command %q should deny, got %s (%s)", a, d.Action, d.Reason)
+		}
+	}
+}
+
+func TestPathURLEncodeBypass(t *testing.T) {
+	g := NewGuard("./workspace", true, true)
+	// percent-encoded ../
+	d := g.Check("s1", "read_file", map[string]any{"path": "%2e%2e/secret"})
+	if d.Action != ActionDeny {
+		t.Fatalf("url-encoded ../ should deny, got %s", d.Action)
+	}
+	d2 := g.Check("s1", "read_file", map[string]any{"path": "..%2fsecret"})
+	if d2.Action != ActionDeny {
+		t.Fatalf("mixed encode should deny, got %s", d2.Action)
+	}
+}
+
+func TestMCPWriteNotAutoAllow(t *testing.T) {
+	g := NewGuard("./workspace", true, true)
+	d := g.Check("s1", "demo__write_file", map[string]any{"path": "a"})
+	if d.Action == ActionAllow {
+		t.Fatalf("mcp write should not auto-allow")
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		func() bool {

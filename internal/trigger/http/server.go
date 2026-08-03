@@ -2,10 +2,13 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,20 +20,38 @@ import (
 )
 
 type Server struct {
-	app     *application.ChatApp
-	addr    string
-	srv     *http.Server
-	hostHub *ws.HostHub
-	bridge  *host.Bridge
+	app         *application.ChatApp
+	addr        string
+	srv         *http.Server
+	hostHub     *ws.HostHub
+	bridge      *host.Bridge
+	corsOrigins []string
+	maxBody     int64
 }
 
 func New(app *application.ChatApp, addr string) *Server {
-	return &Server{app: app, addr: addr}
+	return &Server{
+		app: app, addr: addr,
+		// safe default: localhost only (never bare * with credentials)
+		corsOrigins: []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8080", "http://127.0.0.1:8080"},
+		maxBody:     2 << 20,
+	}
 }
 
 func (s *Server) WithHost(hub *ws.HostHub, bridge *host.Bridge) *Server {
 	s.hostHub = hub
 	s.bridge = bridge
+	return s
+}
+
+// WithSecurity sets CORS allowlist and max body size.
+func (s *Server) WithSecurity(corsOrigins []string, maxBody int64) *Server {
+	if len(corsOrigins) > 0 {
+		s.corsOrigins = corsOrigins
+	}
+	if maxBody > 0 {
+		s.maxBody = maxBody
+	}
 	return s
 }
 
@@ -71,14 +92,48 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 		log.Printf("[http] host agent ws: /ws/host?token=&deviceId=\n")
 	}
 
-	handler := cors(auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux))))
-	s.srv = &http.Server{Addr: s.addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	handler := s.corsMiddleware(limitBody(s.maxBody, auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux)))))
+	s.srv = &http.Server{
+		Addr:              s.addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		// WriteTimeout left 0 for long SSE streams
+	}
 	if certFile != "" && keyFile != "" {
+		if err := validateTLSFiles(certFile, keyFile); err != nil {
+			return fmt.Errorf("tls precheck: %w", err)
+		}
 		log.Printf("[http] listening TLS on %s cert=%s\n", s.addr, certFile)
 		return s.srv.ListenAndServeTLS(certFile, keyFile)
 	}
-	log.Printf("[http] listening on %s\n", s.addr)
+	log.Printf("[http] listening on %s (cors_origins=%d)\n", s.addr, len(s.corsOrigins))
 	return s.srv.ListenAndServe()
+}
+
+func validateTLSFiles(certFile, keyFile string) error {
+	if _, err := os.Stat(certFile); err != nil {
+		return fmt.Errorf("cert: %w", err)
+	}
+	if _, err := os.Stat(keyFile); err != nil {
+		return fmt.Errorf("key: %w", err)
+	}
+	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+		return fmt.Errorf("load pair: %w", err)
+	}
+	return nil
+}
+
+func limitBody(max int64, next http.Handler) http.Handler {
+	if max <= 0 {
+		max = 2 << 20
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			r.Body = http.MaxBytesReader(w, r.Body, max)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -110,17 +165,62 @@ func auth(app *application.ChatApp, next http.Handler) http.Handler {
 	})
 }
 
-func cors(next http.Handler) http.Handler {
+// corsMiddleware applies an origin allowlist. Never reflects arbitrary Origin with credentials.
+// Use cors_origins: ["*"] only for pure public demos (still no credentials header).
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	allow := map[string]bool{}
+	star := false
+	for _, o := range s.corsOrigins {
+		o = strings.TrimSpace(o)
+		if o == "*" {
+			star = true
+			continue
+		}
+		if o != "" {
+			allow[o] = true
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if star {
+				// demo mode: allow any origin but do NOT enable credentials
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			} else if allow[origin] {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+			// unknown origin: no ACAO → browser blocks credentialed cross-origin
+		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Max-Age", "600")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// decodeJSON reads JSON body with clear 400 messages (incl. body-too-large).
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(dst); err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "http: request body too large") || strings.Contains(msg, "request body too large") {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"code": "413", "message": "request body too large"})
+			return false
+		}
+		if err == io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "400", "message": "empty body"})
+			return false
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "400", "message": "invalid json: " + msg})
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +235,9 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			ProjectID string `json:"projectId"`
 			Title     string `json:"title"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeJSON(w, r, &body) {
+			return
+		}
 		sess, err := s.app.CreateSession(body.UserID, body.ProjectID, body.Title)
 		if err != nil {
 			writeJSON(w, 500, errMap(err))
@@ -173,12 +275,11 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]any{"code": "405"})
+		writeJSON(w, 405, map[string]any{"code": "405", "message": "method not allowed"})
 		return
 	}
 	var req application.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, errMap(err))
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	res, err := s.app.Chat(req)
@@ -191,15 +292,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]any{"code": "405"})
+		writeJSON(w, 405, map[string]any{"code": "405", "message": "method not allowed"})
 		return
 	}
 	var req application.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, errMap(err))
+	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ch, sess, err := s.app.ChatStream(req)
+	// bind to request context → client disconnect cancels agent loop
+	ch, sess, err := s.app.ChatStream(r.Context(), req)
 	if err != nil {
 		writeJSON(w, 400, errMap(err))
 		return
@@ -207,17 +308,40 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeJSON(w, 500, map[string]any{"message": "stream unsupported"})
+		writeJSON(w, 500, map[string]any{"code": "500", "message": "stream unsupported"})
 		return
 	}
 	fmt.Fprintf(w, "event: session\ndata: {\"sessionId\":%q}\n\n", sess.ID)
 	flusher.Flush()
-	for ev := range ch {
-		b, _ := json.Marshal(ev)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, string(b))
-		flusher.Flush()
+
+	// heartbeat keeps proxies from closing idle SSE connections
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			fmt.Fprintf(w, ": ping %d\n\n", time.Now().Unix())
+			flusher.Flush()
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			if ev == nil {
+				continue
+			}
+			b, err := json.Marshal(ev)
+			if err != nil {
+				observability.Warnf("sse marshal: %v", err)
+				continue
+			}
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, string(b))
+			flusher.Flush()
+		}
 	}
 }
 
@@ -239,9 +363,11 @@ func (s *Server) handlePermApprove(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"sessionId"`
 		UserID    string `json:"userId"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !decodeJSON(w, r, &body) {
+		return
+	}
 	if body.ID == "" {
-		writeJSON(w, 400, map[string]any{"message": "id required"})
+		writeJSON(w, 400, map[string]any{"code": "400", "message": "id required"})
 		return
 	}
 	if body.Scope == "" {
@@ -272,7 +398,9 @@ func (s *Server) handlePermReject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ID string `json:"id"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !decodeJSON(w, r, &body) {
+		return
+	}
 	if err := s.app.Permission().Reject(body.ID); err != nil {
 		writeJSON(w, 400, errMap(err))
 		return

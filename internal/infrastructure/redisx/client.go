@@ -14,12 +14,14 @@ type Client struct {
 	rdb     *redis.Client
 	enabled bool
 	// memory fallback rate limit
-	mu   sync.Mutex
-	hits map[string][]time.Time
+	mu       sync.Mutex
+	hits     map[string][]time.Time
+	lastGC   time.Time
+	maxKeys  int
 }
 
 func New(cfg config.RedisConfig) *Client {
-	c := &Client{hits: map[string][]time.Time{}}
+	c := &Client{hits: map[string][]time.Time{}, maxKeys: 10000}
 	if !cfg.Enabled {
 		return c
 	}
@@ -31,8 +33,10 @@ func New(cfg config.RedisConfig) *Client {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := c.rdb.Ping(ctx).Err(); err != nil {
-		fmt.Printf("[redis] unavailable (%v), fallback memory\n", err)
-		_ = c.rdb.Close()
+		fmt.Printf("[redis] unavailable (%v), fallback memory rate-limiter\n", err)
+		if cerr := c.rdb.Close(); cerr != nil {
+			fmt.Printf("[redis] close after failed ping: %v\n", cerr)
+		}
 		c.rdb = nil
 		return c
 	}
@@ -103,6 +107,11 @@ func (c *Client) memoryAllow(key string, limit int, window time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
+	// periodic GC of stale keys (at most every 30s)
+	if now.Sub(c.lastGC) > 30*time.Second {
+		c.gcHitsLocked(now, window)
+		c.lastGC = now
+	}
 	cut := now.Add(-window)
 	arr := c.hits[key]
 	var kept []time.Time
@@ -111,10 +120,59 @@ func (c *Client) memoryAllow(key string, limit int, window time.Duration) bool {
 			kept = append(kept, t)
 		}
 	}
+	if len(kept) == 0 {
+		// free empty entry
+		delete(c.hits, key)
+	}
 	if len(kept) >= limit {
-		c.hits[key] = kept
+		if len(kept) > 0 {
+			c.hits[key] = kept
+		}
 		return false
 	}
 	c.hits[key] = append(kept, now)
+	// hard cap map size
+	if len(c.hits) > c.maxKeys {
+		c.gcHitsLocked(now, window)
+		// if still over, drop arbitrary oldest keys
+		for k := range c.hits {
+			if len(c.hits) <= c.maxKeys {
+				break
+			}
+			if k != key {
+				delete(c.hits, k)
+			}
+		}
+	}
 	return true
+}
+
+func (c *Client) gcHitsLocked(now time.Time, window time.Duration) {
+	cut := now.Add(-window)
+	if window <= 0 {
+		cut = now.Add(-time.Minute)
+	}
+	for k, arr := range c.hits {
+		var kept []time.Time
+		for _, t := range arr {
+			if t.After(cut) {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			delete(c.hits, k)
+		} else {
+			c.hits[k] = kept
+		}
+	}
+}
+
+// MemoryKeyCount for tests / metrics.
+func (c *Client) MemoryKeyCount() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.hits)
 }

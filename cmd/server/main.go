@@ -53,7 +53,9 @@ func main() {
 		observability.SetLogLevel(cfg.Logging.Level)
 	}
 
-	srv := httpserver.New(app.Chat, cfg.Addr()).WithHost(app.HostHub, app.Bridge)
+	srv := httpserver.New(app.Chat, cfg.Addr()).
+		WithHost(app.HostHub, app.Bridge).
+		WithSecurity(cfg.Security.CORSOrigins, cfg.Security.MaxBodyBytes)
 	go func() {
 		var err error
 		if cfg.Server.TLSCert != "" && cfg.Server.TLSKey != "" {

@@ -11,6 +11,7 @@ import (
 	"github.com/spray272598/code-agent/internal/application"
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/host"
@@ -98,12 +99,11 @@ func Build(cfg *config.Config) (*App, error) {
 	llmPort := llm.NewFromConfig(cfg)
 
 	// host bridge always available for WS registration
+	// API keys hashed in KeyStore — never pass plaintext into long-lived structs
+	keyStore := auth.NewKeyStore(cfg.Security.APIKeys)
 	hostBridge := host.NewBridge()
-	apiKey := "dev-key"
-	if len(cfg.Security.APIKeys) > 0 {
-		apiKey = cfg.Security.APIKeys[0]
-	}
-	hostHub := ws.NewHostHub(hostBridge, apiKey)
+	hostHub := ws.NewHostHub(hostBridge, keyStore.Valid)
+	log.Printf("[bootstrap] api keys configured=%d (hashed, not logged)\n", len(cfg.Security.APIKeys))
 
 	var hostExec host.Executor = &host.ServerExecutor{Root: cfg.Agent.WorkspaceRoot}
 	preferHost := cfg.Host.PreferHost || cfg.Host.Mode == "host"

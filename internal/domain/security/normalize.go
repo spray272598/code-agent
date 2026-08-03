@@ -80,16 +80,67 @@ func NormalizeCommand(s string) string {
 }
 
 // CommandVariants returns forms to match against deny/confirm rules.
+// Includes whole command plus segments split by shell separators (; | && || \n).
 func CommandVariants(raw string) []string {
 	if raw == "" {
 		return nil
 	}
-	norm := NormalizeCommand(raw)
-	nospace := strings.ReplaceAll(norm, " ", "")
-	// also path-normalized slashes
-	slash := strings.ReplaceAll(norm, "\\", "/")
-	out := []string{raw, strings.ToLower(raw), norm, nospace, slash}
+	var out []string
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		norm := NormalizeCommand(s)
+		// strip separators so "rm;-rf" / "rm| -rf" collapse to "rm-rf"
+		nospace := strings.Map(func(r rune) rune {
+			switch r {
+			case ' ', '\t', ';', '|', '&', '\n', '\r':
+				return -1
+			default:
+				return r
+			}
+		}, norm)
+		// flag-jam: also remove $ and ()
+		jam := strings.Map(func(r rune) rune {
+			switch r {
+			case '$', '(', ')', '{', '}', '[', ']', '`':
+				return -1
+			default:
+				return r
+			}
+		}, nospace)
+		slash := strings.ReplaceAll(norm, "\\", "/")
+		out = append(out, s, strings.ToLower(s), norm, nospace, jam, slash)
+	}
+	add(raw)
+	// split compound commands — attacker may hide payload after ;
+	for _, seg := range splitShellSegments(raw) {
+		add(seg)
+	}
+	// also normalize then re-split
+	for _, seg := range splitShellSegments(NormalizeCommand(raw)) {
+		add(seg)
+	}
 	return uniqueNonEmpty(out)
+}
+
+func splitShellSegments(s string) []string {
+	// replace common separators with |
+	// note: bare "&" only as background if surrounded by spaces to avoid breaking flags
+	repl := strings.NewReplacer(
+		"&&", "\x00", "||", "\x00", ";", "\x00", "\n", "\x00", "\r", "\x00",
+		" | ", "\x00", "|", "\x00",
+	)
+	s = repl.Replace(s)
+	parts := strings.Split(s, "\x00")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func stripZeroWidth(s string) string {

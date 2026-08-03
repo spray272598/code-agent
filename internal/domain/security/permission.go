@@ -104,11 +104,13 @@ func (g *Guard) initRules() {
 			`(?i)\brm\s+-rf?\s+/?(\s|$)`,
 			`(?i)\brm\s+/s\s+/q\s+\\?\s*$`, // windows-ish
 			`rm-rf/`, `rm-fr/`,
+			// jammed / no-space / semicolon forms (matched on nospace variant)
+			`(?i)rm-rf/?`, `(?i)rm-fr/?`, `(?i)rmrf/`,
 		}},
 		{"rm_rf_star", "recursive delete wildcard", []string{
 			`(?i)\brm\s+(-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*)\s+\*`,
 			`(?i)\brm\s+-rf?\s+\*`,
-			`rm-rf\*`,
+			`rm-rf\*`, `(?i)rm-rf\*`, `(?i)rmrf\*`,
 		}},
 		{"format", "disk format", []string{`(?i)\b(format|mkfs(\.\w+)?)\b`}},
 		{"shutdown", "power control", []string{`(?i)\b(shutdown|poweroff|reboot|halt)\b`}},
@@ -194,15 +196,15 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 	}
 
-	// L2 path sandbox (also normalize path tricks)
+	// L2 path sandbox (also normalize path tricks / URL / Unicode)
 	if g.pathSandbox {
 		if p := pathArg(tool, args); p != "" {
-			p = NormalizePathArg(p)
-			if !g.underWorkspace(p) {
+			norm := NormalizePathArg(p)
+			if !g.underWorkspace(norm) {
 				g.incDeny(sessionID)
 				return Decision{Action: ActionDeny, Layer: "L2", RuleID: "path_sandbox", Reason: "path outside workspace", Tool: tool, Summary: summary}
 			}
-			if sensitivePath(p) {
+			if sensitivePath(norm) || sensitivePath(p) {
 				return Decision{Action: ActionConfirm, Layer: "L2", RuleID: "sensitive_path", Reason: "sensitive path", Tool: tool, Summary: summary}
 			}
 		}
@@ -228,10 +230,15 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "delegate", Reason: "subagent delegation requires confirm", Tool: tool, Summary: summary}
 	}
 
-	// MCP / unknown tools — never silent allow
+	// MCP / unknown tools — never silent allow; still scan string args for shell deny patterns
 	if g.mcpConfirm || isMCPTool(tool) {
-		// still allow known safe MCP names if clearly read-only
-		if looksReadOnlyMCP(tool) {
+		if r := matchAny(g.denyRules, variants); r != nil {
+			g.incDeny(sessionID)
+			return Decision{Action: ActionDeny, Layer: "L1", RuleID: "mcp_" + r.id, Reason: "mcp args matched deny: " + r.reason, Tool: tool, Summary: summary}
+		}
+		// path sandbox already applied when path arg present
+		// read-like MCP still requires confirm if args look like shell
+		if looksReadOnlyMCP(tool) && !looksDangerousArgs(args) {
 			return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: summary, Reason: "mcp read-like"}
 		}
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "mcp_or_unknown",
@@ -254,6 +261,12 @@ func isMCPTool(name string) bool {
 
 func looksReadOnlyMCP(name string) bool {
 	n := strings.ToLower(toolBaseName(name))
+	// write/exec names never auto-allow
+	for _, k := range []string{"write", "delete", "remove", "exec", "run", "bash", "shell", "eval", "put", "create", "drop"} {
+		if strings.Contains(n, k) {
+			return false
+		}
+	}
 	for _, k := range []string{"read", "get", "list", "search", "find", "fetch", "time", "echo", "info", "stat"} {
 		if strings.Contains(n, k) {
 			return true
@@ -262,36 +275,62 @@ func looksReadOnlyMCP(name string) bool {
 	return false
 }
 
-func NormalizePathArg(p string) string {
-	p = strings.TrimSpace(p)
-	p = strings.ReplaceAll(p, "\\", "/")
-	// collapse /./ and // 
-	for strings.Contains(p, "//") {
-		p = strings.ReplaceAll(p, "//", "/")
+func looksDangerousArgs(args map[string]any) bool {
+	if args == nil {
+		return false
 	}
-	return p
+	for _, v := range args {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		low := strings.ToLower(s)
+		if strings.Contains(low, "rm -") || strings.Contains(low, "curl ") ||
+			strings.Contains(low, "| sh") || strings.Contains(low, "| bash") ||
+			strings.Contains(low, "../") {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Guard) underWorkspace(p string) bool {
 	if g.workspace == "" {
 		return true
 	}
-	absW, _ := filepath.Abs(g.workspace)
-	candidate := p
-	if !filepath.IsAbs(p) {
-		candidate = filepath.Join(absW, filepath.FromSlash(p))
+	// reject invalid UTF-8 / null from NormalizePathArg
+	if p == "" || strings.Contains(p, "\x00") {
+		return false
 	}
-	absP, err := filepath.Abs(candidate)
+	absW, err := filepath.Abs(g.workspace)
 	if err != nil {
 		return false
 	}
-	// clean .. after abs
-	absP = filepath.Clean(absP)
-	rel, err := filepath.Rel(absW, absP)
-	if err != nil {
-		return false
+	// check all variants (encoding bypass)
+	for _, v := range PathVariants(p) {
+		if v == "" || strings.Contains(v, "\x00") {
+			return false
+		}
+		candidate := v
+		if !filepath.IsAbs(filepath.FromSlash(v)) {
+			candidate = filepath.Join(absW, filepath.FromSlash(v))
+		} else {
+			candidate = filepath.FromSlash(v)
+		}
+		absP, err := filepath.Abs(candidate)
+		if err != nil {
+			return false
+		}
+		absP = filepath.Clean(absP)
+		rel, err := filepath.Rel(absW, absP)
+		if err != nil {
+			return false
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return false
+		}
 	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return true
 }
 
 func sensitivePath(p string) bool {

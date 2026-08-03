@@ -109,6 +109,10 @@ type SecurityConfig struct {
 	APIKeys             []string `yaml:"api_keys"`
 	PathSandbox         bool     `yaml:"path_sandbox"`
 	DefaultConfirmWrite bool     `yaml:"default_confirm_write"`
+	// CORSOrigins allowlist; empty = same-origin only (no ACAO). Use ["*"] only for local demos.
+	CORSOrigins []string `yaml:"cors_origins"`
+	// MaxBodyBytes request body limit (default 2MiB)
+	MaxBodyBytes int64 `yaml:"max_body_bytes"`
 }
 
 type MCPConfig struct {
@@ -183,7 +187,11 @@ func Default() *Config {
 			AccessKey: "minioadmin", SecretKey: "minioadmin", UsePathStyle: true,
 			LocalFallbackDir: "./data/objects",
 		},
-		Security: SecurityConfig{PathSandbox: true, DefaultConfirmWrite: true, APIKeys: []string{"dev-key"}},
+		Security: SecurityConfig{
+			PathSandbox: true, DefaultConfirmWrite: true, APIKeys: []string{"dev-key"},
+			CORSOrigins:  []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8080", "http://127.0.0.1:8080"},
+			MaxBodyBytes: 2 << 20,
+		},
 		MCP:      MCPConfig{Enabled: true},
 		Skills:   SkillsConfig{Enabled: true, Dir: "./skills"},
 		Hooks:    HooksConfig{Enabled: true, Dir: "./hooks"},
@@ -294,6 +302,9 @@ func normalize(cfg *Config) {
 	}
 	if len(cfg.Security.APIKeys) == 0 {
 		cfg.Security.APIKeys = []string{"dev-key"}
+	}
+	if cfg.Security.MaxBodyBytes <= 0 {
+		cfg.Security.MaxBodyBytes = 2 << 20
 	}
 }
 

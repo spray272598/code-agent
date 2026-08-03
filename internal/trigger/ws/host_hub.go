@@ -18,20 +18,23 @@ var upgrader = websocket.Upgrader{
 // HostHub serves WebSocket connections from host-agents.
 type HostHub struct {
 	Bridge *host.Bridge
-	APIKey string
+	// Auth validates token without retaining plaintext keys (e.g. KeyStore.Valid).
+	// nil or always-true => open (dev only).
+	Auth func(token string) bool
 }
 
-func NewHostHub(bridge *host.Bridge, apiKey string) *HostHub {
-	return &HostHub{Bridge: bridge, APIKey: apiKey}
+// NewHostHub creates a hub. auth may be nil (reject all non-empty requirements use Auth).
+func NewHostHub(bridge *host.Bridge, auth func(token string) bool) *HostHub {
+	return &HostHub{Bridge: bridge, Auth: auth}
 }
 
 func (h *HostHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// auth: query token or header
+	// auth: query token or header — never log the token
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		token = r.Header.Get("X-API-Key")
 	}
-	if h.APIKey != "" && token != h.APIKey {
+	if h.Auth != nil && !h.Auth(token) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

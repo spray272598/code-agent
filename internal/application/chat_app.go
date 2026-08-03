@@ -271,7 +271,9 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, err
 	}
 	if a.redis != nil && a.redis.Enabled() {
-		_ = a.redis.Set(ctx, "sess:hot:"+session.ID, req.Message, 24*time.Hour)
+		if err := a.redis.Set(ctx, "sess:hot:"+session.ID, req.Message, 24*time.Hour); err != nil {
+			observability.Warnf("sess hot set: %v", err)
+		}
 	}
 	observability.Global.ChatTotal.Add(1)
 	res, err := a.loop.Run(ctx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
@@ -285,8 +287,12 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	}
 	if a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
 		day := time.Now().Format("20060102")
-		_, _ = a.redis.IncrBy(ctx, fmt.Sprintf("token:user:%s:%s", session.UserID, day), int64(res.TokenUsed), 48*time.Hour)
-		_, _ = a.redis.IncrBy(ctx, "token:sess:"+session.ID, int64(res.TokenUsed), 7*24*time.Hour)
+		if _, err := a.redis.IncrBy(ctx, fmt.Sprintf("token:user:%s:%s", session.UserID, day), int64(res.TokenUsed), 48*time.Hour); err != nil {
+			observability.Warnf("token user incr: %v", err)
+		}
+		if _, err := a.redis.IncrBy(ctx, "token:sess:"+session.ID, int64(res.TokenUsed), 7*24*time.Hour); err != nil {
+			observability.Warnf("token sess incr: %v", err)
+		}
 	}
 	return &ChatResponse{
 		SessionID: res.SessionID, Response: res.Response, Steps: res.Steps,
@@ -295,17 +301,31 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	}, nil
 }
 
-func (a *ChatApp) ChatStream(req ChatRequest) (<-chan *engine.Event, *sessmodel.Session, error) {
+// ChatStream runs the agent and streams events. parentCtx should be the HTTP request
+// context so client disconnect cancels the loop (no goroutine leak).
+func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan *engine.Event, *sessmodel.Session, error) {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	forceCompact := false
 	if resp, handled, fc := a.trySlash(&req); handled {
 		ch := make(chan *engine.Event, 4)
 		go func() {
 			defer close(ch)
-			sid := resp.SessionID
-			ch <- &engine.Event{Type: engine.EventSlash, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}
-			ch <- &engine.Event{Type: engine.EventAnswer, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}
-			ch <- &engine.Event{Type: engine.EventDone, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}
-			_ = sid
+			select {
+			case ch <- &engine.Event{Type: engine.EventSlash, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}:
+			case <-parentCtx.Done():
+				return
+			}
+			select {
+			case ch <- &engine.Event{Type: engine.EventAnswer, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}:
+			case <-parentCtx.Done():
+				return
+			}
+			select {
+			case ch <- &engine.Event{Type: engine.EventDone, Content: resp.Response, Completed: true, Timestamp: time.Now().UnixMilli()}:
+			case <-parentCtx.Done():
+			}
 		}()
 		s := &sessmodel.Session{ID: resp.SessionID}
 		return ch, s, nil
@@ -317,22 +337,28 @@ func (a *ChatApp) ChatStream(req ChatRequest) (<-chan *engine.Event, *sessmodel.
 	if err != nil {
 		return nil, nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.timeoutSec)*time.Second)
+	// nest timeout under request ctx — cancel on client disconnect OR timeout
+	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(a.timeoutSec)*time.Second)
 	if err := a.checkRate(ctx, req.UserID); err != nil {
 		cancel()
 		return nil, nil, err
 	}
-	ch := make(chan *engine.Event, 64)
+	ch := make(chan *engine.Event, 128)
 	go func() {
 		defer close(ch)
 		defer cancel()
 		res, err := a.loop.Run(ctx, session, req.Message, ch, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
 		if err != nil && res == nil {
-			ch <- &engine.Event{Type: engine.EventError, Content: err.Error(), Completed: true, Timestamp: time.Now().UnixMilli()}
+			select {
+			case ch <- &engine.Event{Type: engine.EventError, Content: err.Error(), Completed: true, Timestamp: time.Now().UnixMilli()}:
+			case <-ctx.Done():
+			}
 		}
 		if res != nil && a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
 			day := time.Now().Format("20060102")
-			_, _ = a.redis.IncrBy(ctx, fmt.Sprintf("token:user:%s:%s", session.UserID, day), int64(res.TokenUsed), 48*time.Hour)
+			if _, err := a.redis.IncrBy(ctx, fmt.Sprintf("token:user:%s:%s", session.UserID, day), int64(res.TokenUsed), 48*time.Hour); err != nil {
+				observability.Warnf("token incr: %v", err)
+			}
 		}
 	}()
 	return ch, session, nil

@@ -51,6 +51,9 @@ type Loop struct {
 	maxRounds    int
 	tokenBudget  int
 	systemPrompt string
+	// system prompt cache (tools + skill id)
+	sysCacheKey  string
+	sysCacheVal  string
 }
 
 func NewLoop(
@@ -152,23 +155,64 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	)
 	defer span.End()
 
+	var droppedEvents int
 	publish := func(ev *Event) {
 		if eventCh == nil || ev == nil {
 			return
 		}
+		// Prefer non-blocking; on full buffer, wait briefly then drop with metric
+		// (never silent-drop without counting). Critical events block longer.
+		critical := ev.Type == EventError || ev.Type == EventAnswer || ev.Type == EventDone ||
+			ev.Type == EventPermission || ev.Completed
+		timeout := 50 * time.Millisecond
+		if critical {
+			timeout = 2 * time.Second
+		}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
 		select {
 		case eventCh <- ev:
-		default:
+		case <-ctx.Done():
+			droppedEvents++
+		case <-timer.C:
+			droppedEvents++
+			observability.Global.ChatErrors.Add(1) // reuse counter; SSE drop signal
+			if critical {
+				// last-ditch: try once more without timeout using default case
+				select {
+				case eventCh <- ev:
+					droppedEvents--
+				default:
+					observability.Warnf("sse drop critical event type=%s session=%s", ev.Type, session.ID)
+				}
+			}
 		}
 	}
 	auditLog := func(action, toolName, detail, decision string, latencyMs int64) {
 		if l.audit == nil {
 			return
 		}
-		_ = l.audit.Append(ctx, audit.Entry{
+		if err := l.audit.Append(ctx, audit.Entry{
 			UserID: session.UserID, SessionID: session.ID,
 			Action: action, Tool: toolName, Detail: detail, Decision: decision, LatencyMs: latencyMs,
-		})
+		}); err != nil {
+			observability.Warnf("audit append: %v", err)
+		}
+	}
+	saveMsg := func(m *sessmodel.Message) {
+		if m == nil {
+			return
+		}
+		if err := l.messages.Save(ctx, m); err != nil {
+			observability.Warnf("message save session=%s role=%s: %v", session.ID, m.Role, err)
+		}
+	}
+	saveSess := func() error {
+		if err := l.sessions.Save(ctx, session); err != nil {
+			observability.Errorf("session save %s: %v", session.ID, err)
+			return err
+		}
+		return nil
 	}
 
 	userInput = strings.TrimSpace(userInput)
@@ -217,7 +261,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	um := sessmodel.NewMessage(id("msg"), session.ID, "user", userInput)
 	um.Priority = messagePriority("user", userInput)
 	um.TokenCount = common.EstimateTokens(userInput)
-	_ = l.messages.Save(ctx, um)
+	saveMsg(um)
 	session.AddTokens(um.TokenCount)
 
 	history, _ := l.messages.ListAsMaps(ctx, session.ID, 120)
@@ -234,7 +278,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		cr := l.compressor.CompressLevels(ctx, history, priorSummary, useSum)
 		history = cr.History
 		if cr.Summary != "" && l.summaries != nil {
-			_ = l.summaries.Save(ctx, session.ID, cr.Summary, common.EstimateTokens(cr.Summary))
+			if err := l.summaries.Save(ctx, session.ID, cr.Summary, common.EstimateTokens(cr.Summary)); err != nil {
+				observability.Warnf("summary save: %v", err)
+			}
 		}
 		observability.Global.CompressTotal.Add(1)
 		publish(&Event{Type: EventCompress, Content: fmt.Sprintf("compress %s saved~%d", cr.Level, cr.Saved), Data: map[string]any{"level": cr.Level, "summary": cr.Summary != ""}, Timestamp: now()})
@@ -254,13 +300,26 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			}
 		}
 	}
-	toolDesc := filterToolDescriptions(l.tools.Descriptions(), skillForTools)
-	sys := l.systemPrompt + "\n\n## Available tools\n" + formatTools(toolDesc)
-	if activeSkill != nil && l.skills != nil {
-		sys += "\n" + l.skills.PromptSection(activeSkill)
-		if skillForTools != nil && len(skillForTools.Tools) > 0 {
-			sys += "\nYou may ONLY use these tools while this skill is active: " + strings.Join(skillForTools.Tools, ", ") + "\n"
+	skillID := ""
+	if activeSkill != nil {
+		skillID = activeSkill.ID
+	}
+	toolsKey := toolsFingerprint(l.tools)
+	cacheKey := toolsKey + "|" + skillID
+	var sys string
+	if cacheKey == l.sysCacheKey && l.sysCacheVal != "" {
+		sys = l.sysCacheVal
+	} else {
+		toolDesc := filterToolDescriptions(l.tools.Descriptions(), skillForTools)
+		sys = l.systemPrompt + "\n\n## Available tools\n" + formatTools(toolDesc)
+		if activeSkill != nil && l.skills != nil {
+			sys += "\n" + l.skills.PromptSection(activeSkill)
+			if skillForTools != nil && len(skillForTools.Tools) > 0 {
+				sys += "\nYou may ONLY use these tools while this skill is active: " + strings.Join(skillForTools.Tools, ", ") + "\n"
+			}
 		}
+		l.sysCacheKey = cacheKey
+		l.sysCacheVal = sys
 	}
 	if l.memSvc != nil {
 		memBlock := l.memSvc.FormatForPrompt(ctx, session.UserID, session.ProjectID, userInput, 8)
@@ -303,9 +362,10 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			publish(&Event{Type: EventObservation, SubType: r.Tool, Content: truncate(resText, 800), Timestamp: now()})
 			publish(&Event{Type: EventToolResult, SubType: r.Tool, Content: truncate(resText, 800), Timestamp: now()})
 			auditLog("tool_call", r.Tool, truncate(resText, 200), "resume", time.Since(t0).Milliseconds())
-			_ = l.messages.Save(ctx, &sessmodel.Message{
+			saveMsg(&sessmodel.Message{
 				ID: id("msg"), SessionID: session.ID, Role: "tool", Content: resText,
 				ToolName: r.Tool, ToolCallID: "resume", CreatedAt: time.Now(),
+				Priority: messagePriority("tool", resText),
 			})
 			messages = append(messages,
 				port.ChatMessage{Role: "assistant", Content: "Thought: resume approved tool\nAction: " + fmt.Sprintf(`{"name":%q,"args":%s}`, r.Tool, mustJSON(r.Args))},
@@ -401,7 +461,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 					)
 					am := sessmodel.NewMessage(id("msg"), session.ID, "assistant", final)
 					am.Priority = messagePriority("assistant", final)
-					_ = l.messages.Save(ctx, am)
+					saveMsg(am)
 					continue
 				}
 				publish(&Event{Type: EventReview, Content: "plan review pass", Data: taskPlan, Timestamp: now()})
@@ -412,7 +472,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			am := sessmodel.NewMessage(id("msg"), session.ID, "assistant", final)
 			am.Priority = messagePriority("assistant", final)
 			am.TokenCount = common.EstimateTokens(final)
-			_ = l.messages.Save(ctx, am)
+			saveMsg(am)
 			session.AddTokens(am.TokenCount)
 			publish(&Event{Type: EventAnswer, Content: final, Completed: true, Timestamp: now()})
 			break
@@ -442,7 +502,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		am := sessmodel.NewMessage(id("msg"), session.ID, "assistant", asst)
 		am.Priority = messagePriority("assistant", asst)
 		am.TokenCount = common.EstimateTokens(asst)
-		_ = l.messages.Save(ctx, am)
+		saveMsg(am)
 
 		// Batch tools: parallel read-only, serial writes; validate + skill + hook abort + permission
 		outcomes, p, needBreak := l.runToolCalls(ctx, session, step, calls, skillForTools, opts.AutoApprove, publish, auditLog)
@@ -473,15 +533,21 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		final = "no final answer"
 	}
 	session.AddTokens(totalTokens)
-	_ = l.sessions.Save(ctx, session)
+	if err := saveSess(); err != nil {
+		// persistence failure is serious but still return response to client
+		publish(&Event{Type: EventError, SubType: "persist", Content: "session save failed: " + err.Error(), Timestamp: now()})
+	}
 	observability.Global.TokensTotal.Add(int64(totalTokens))
+	if droppedEvents > 0 {
+		observability.Warnf("session=%s sse dropped_events=%d", session.ID, droppedEvents)
+	}
 	observability.Trace.Event(map[string]any{
-		"event": "done", "session": session.ID, "tools": totalTools, "tokens": totalTokens,
+		"event": "done", "session": session.ID, "tools": totalTools, "tokens": totalTokens, "sseDropped": droppedEvents,
 	})
 	if l.hooks != nil {
 		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionEnd, SessionID: session.ID, Meta: map[string]any{"tokenUsed": totalTokens}})
 	}
-	publish(&Event{Type: EventDone, Content: final, Completed: true, Data: map[string]any{"tokenUsed": totalTokens, "toolCalls": totalTools}, Timestamp: now()})
+	publish(&Event{Type: EventDone, Content: final, Completed: true, Data: map[string]any{"tokenUsed": totalTokens, "toolCalls": totalTools, "sseDropped": droppedEvents}, Timestamp: now()})
 
 	res := &Result{
 		SessionID: session.ID, Response: final, Steps: totalTools + 1,
@@ -688,4 +754,18 @@ func estimateMaps(msgs []map[string]any) int {
 		}
 	}
 	return n
+}
+
+func toolsFingerprint(reg *tool.MapRegistry) string {
+	if reg == nil {
+		return ""
+	}
+	list := reg.Descriptions()
+	// stable enough for cache invalidation when tools change
+	var b strings.Builder
+	for _, t := range list {
+		b.WriteString(t["name"])
+		b.WriteByte(',')
+	}
+	return b.String()
 }
