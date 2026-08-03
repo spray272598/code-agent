@@ -17,8 +17,11 @@ import (
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	"github.com/spray272598/code-agent/internal/domain/skill"
+	"github.com/spray272598/code-agent/internal/domain/subagent"
+	"github.com/spray272598/code-agent/internal/domain/team"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
+	"github.com/spray272598/code-agent/internal/domain/worktree"
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
 	"github.com/spray272598/code-agent/internal/infrastructure/llm"
 	inframcp "github.com/spray272598/code-agent/internal/infrastructure/mcp"
@@ -97,6 +100,28 @@ func Build(cfg *config.Config) (*App, error) {
 	reg.Register(coding.NewMemorySave(memCtx))
 	reg.Register(coding.NewMemorySearch(memCtx))
 
+	// SubAgent + worktree + teams
+	var subRunner *subagent.Runner
+	if cfg.SubAgent.Enabled {
+		subRunner = subagent.NewRunner(llmPort, reg, cfg.Agent.WorkspaceRoot)
+		if cfg.SubAgent.MaxConcurrent > 0 {
+			subRunner.MaxConcurrent = cfg.SubAgent.MaxConcurrent
+		}
+		if cfg.SubAgent.DefaultSteps > 0 {
+			subRunner.DefaultSteps = cfg.SubAgent.DefaultSteps
+		}
+		subRunner.Worktrees = worktree.NewManager(cfg.Agent.WorkspaceRoot)
+		if cfg.Teams.Enabled && cfg.Teams.File != "" {
+			if tc, err := team.LoadYAML(cfg.Teams.File); err == nil {
+				team.ApplyToRunner(subRunner, tc)
+				log.Printf("[bootstrap] team roles from %s\n", cfg.Teams.File)
+			} else {
+				log.Printf("[bootstrap] team yaml: %v\n", err)
+			}
+		}
+		reg.Register(subagent.NewDelegateTool(subRunner))
+	}
+
 	// hooks
 	hooks := hook.NewBus()
 	if cfg.Hooks.Enabled {
@@ -141,6 +166,9 @@ func Build(cfg *config.Config) (*App, error) {
 	loop.SetMemory(memSvc, memCtx)
 	loop.SetAudit(auditRepo)
 	loop.SetSummaryRepo(summaryRepo)
+	if subRunner != nil {
+		loop.SetSubRunner(subRunner)
+	}
 
 	chat := application.NewChatApp(
 		loop, sessionRepo, messageRepo, reg, perm, rdb,
@@ -154,8 +182,8 @@ func Build(cfg *config.Config) (*App, error) {
 		chat.SetMCP(mcpMgr)
 	}
 
-	log.Printf("[bootstrap] db=%s tools=%d redis=%v mock_llm=%v workspace=%s mcp=%v\n",
-		cfg.Database.Type, len(reg.List()), rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, mcpMgr != nil)
+	log.Printf("[bootstrap] db=%s tools=%d redis=%v mock_llm=%v workspace=%s mcp=%v subagent=%v\n",
+		cfg.Database.Type, len(reg.List()), rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, mcpMgr != nil, subRunner != nil)
 
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,

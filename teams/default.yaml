@@ -1,0 +1,18 @@
+name: default-coding-team
+roles:
+  explore:
+    description: Read-only codebase exploration
+    tools: [read_file, glob, grep]
+    max_steps: 8
+  verify:
+    description: Run checks and inspect outputs
+    tools: [bash, read_file, grep, glob]
+    max_steps: 6
+  general:
+    description: Full coding loop in workspace
+    tools: [read_file, write_file, edit_file, bash, glob, grep]
+    max_steps: 10
+  docs:
+    description: Documentation focused
+    tools: [read_file, write_file, edit_file, glob, grep]
+    max_steps: 8

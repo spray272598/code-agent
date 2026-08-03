@@ -70,9 +70,25 @@ go run ./cmd/server -config configs/config.yaml
 - 审计 `GET /api/v1/audit?sessionId=`
 - metrics 含 `llm_latency_avg_ms` / `tool_latency_avg_ms`
 
+### Phase 4/5 — SubAgent / Worktree / Teams
+
+- 工具 `delegate`：并行子任务（`role=explore|verify|general`，`isolation=worktree`）
+- 配置：`teams/default.yaml`、`subagent.max_concurrent`
+- SSE 事件：`subagent`（start/tool/done）
+- 斜杠：`/teams`
+
+示例：
+
+```json
+{"name":"delegate","args":{"tasks":[
+  {"id":"e1","role":"explore","prompt":"glob **/*.go"},
+  {"id":"e2","role":"explore","prompt":"grep package main"}
+]}}
+```
+
 ### 待做
 
-对象存储落大结果、SubAgent、Worktree、OTLP
+对象存储落大结果、OTLP、Host Executor（本机侧车）
 
 ## 文档
 

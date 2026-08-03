@@ -21,6 +21,7 @@ const (
 	EventHook       EventType = "hook"
 	EventReflect    EventType = "reflect"
 	EventReview     EventType = "review"
+	EventSubAgent   EventType = "subagent"
 )
 
 type Event struct {

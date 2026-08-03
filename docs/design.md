@@ -541,15 +541,16 @@ code-agent/
 - [x] Reflect（工具失败/重复调用）+ Plan 规则拆解 + Reviewer 收尾
 - [ ] 独立 eval 脚本集（可后续补）
 
-### Phase 4 — SubAgent
+### Phase 4 — SubAgent ✅
 
-- delegate 并行、事件、结果汇聚
-- 可选 Redis 锁与并发上限
+- [x] `delegate` 工具：单任务 / `tasks[]` 并行（信号量并发上限）
+- [x] 子 Agent mini-loop（独立工具子集，禁止嵌套 delegate）
+- [x] SSE `subagent` 进度事件（start/tool/done/error）
 
-### Phase 5 — Worktree + Teams 薄实现
+### Phase 5 — Worktree + Teams 薄实现 ✅
 
-- git worktree 绑定
-- team YAML 角色委托
+- [x] `isolation=worktree` → git worktree 或目录降级（`.code-agent/worktrees/`）
+- [x] `teams/default.yaml` 角色 → 工具白名单 + max_steps
 
 ### Phase 6 — 抛光
 

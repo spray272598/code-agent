@@ -85,6 +85,9 @@ func NewRegistry() *Registry {
 	r.Register("memory", "Hint for memory tools / API", func(args string, ctx Context) Result {
 		return Result{Handled: true, Response: "Use tools memory_save / memory_search, or GET/POST /api/v1/memory. Scopes: user | project."}
 	})
+	r.Register("teams", "SubAgent roles / teams", func(args string, ctx Context) Result {
+		return Result{Handled: true, Response: "Roles: explore (read-only), verify (bash+read), general (full), docs. Tool: delegate with role/tasks/isolation=worktree. Config: teams/default.yaml"}
+	})
 	return r
 }
 

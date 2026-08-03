@@ -70,5 +70,14 @@ hooks:
 commands:
   dir: "./commands"
 
+teams:
+  enabled: true
+  file: "./teams/default.yaml"
+
+subagent:
+  enabled: true
+  max_concurrent: 3
+  default_steps: 8
+
 logging:
   level: "info"

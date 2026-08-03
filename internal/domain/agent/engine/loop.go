@@ -20,6 +20,7 @@ import (
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/skill"
+	"github.com/spray272598/code-agent/internal/domain/subagent"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
 	"github.com/spray272598/code-agent/internal/observability"
@@ -41,6 +42,7 @@ type Loop struct {
 	memSvc       *memory.Service
 	memCtx       *coding.MemoryContext
 	audit        audit.Repository
+	subRunner    *subagent.Runner
 	maxRounds    int
 	tokenBudget  int
 	systemPrompt string
@@ -76,14 +78,16 @@ func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
 	l.memSvc = svc
 	l.memCtx = mc
 }
-func (l *Loop) SetAudit(a audit.Repository)                    { l.audit = a }
-func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository)   { l.summaries = s }
+func (l *Loop) SetAudit(a audit.Repository)                  { l.audit = a }
+func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository) { l.summaries = s }
+func (l *Loop) SetSubRunner(r *subagent.Runner)              { l.subRunner = r }
 
 func defaultSystem() string {
 	return `You are Code-Agent, a coding agent like Claude Code.
 You work inside a sandboxed project workspace.
-Core tools: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_search.
+Core tools: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_search, delegate.
 Use memory_save for durable user/project facts; memory_search to recall them.
+Use delegate to run SubAgents in parallel for independent subtasks (roles: explore|verify|general).
 When you need a tool, reply with ONLY JSON:
 {"name":"tool_name","args":{...}}
 Or multiple: [{"name":"...","args":{...}}]
@@ -126,6 +130,16 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 
 	if l.hooks != nil {
 		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionStart, SessionID: session.ID})
+	}
+	// wire subagent progress → SSE
+	if l.subRunner != nil {
+		l.subRunner.OnProgress = func(p subagent.Progress) {
+			publish(&Event{
+				Type: EventSubAgent, SubType: p.Status, Content: p.Message,
+				Data: p, Timestamp: now(),
+			})
+		}
+		defer func() { l.subRunner.OnProgress = nil }()
 	}
 	if l.memCtx != nil {
 		l.memCtx.Bind(session.UserID, session.ProjectID)

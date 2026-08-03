@@ -25,6 +25,8 @@ type Config struct {
 	Hooks      HooksConfig      `yaml:"hooks"`
 	Commands   CommandsConfig   `yaml:"commands"`
 	Logging    LoggingConfig    `yaml:"logging"`
+	Teams      TeamsConfig      `yaml:"teams"`
+	SubAgent   SubAgentConfig   `yaml:"subagent"`
 }
 
 type ServerConfig struct {
@@ -128,6 +130,17 @@ type LoggingConfig struct {
 	File  string `yaml:"file"`
 }
 
+type TeamsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	File    string `yaml:"file"` // teams/default.yaml
+}
+
+type SubAgentConfig struct {
+	Enabled       bool `yaml:"enabled"`
+	MaxConcurrent int  `yaml:"max_concurrent"`
+	DefaultSteps  int  `yaml:"default_steps"`
+}
+
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{Host: "0.0.0.0", Port: 8080, Mode: "debug"},
@@ -154,6 +167,8 @@ func Default() *Config {
 		Hooks:    HooksConfig{Enabled: true, Dir: "./hooks"},
 		Commands: CommandsConfig{Dir: "./commands"},
 		Logging:  LoggingConfig{Level: "info"},
+		Teams:    TeamsConfig{Enabled: true, File: "./teams/default.yaml"},
+		SubAgent: SubAgentConfig{Enabled: true, MaxConcurrent: 3, DefaultSteps: 8},
 	}
 }
 

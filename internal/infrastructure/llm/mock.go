@@ -52,6 +52,8 @@ func (m *MockGateway) GenerateStream(ctx context.Context, req *port.ChatRequest,
 		content = `{"name":"memory_save","args":{"content":"user prefers concise answers","scope":"user","category":"pref","importance":80}}`
 	case strings.Contains(lower, "recall") || strings.Contains(last, "回忆") || strings.Contains(lower, "memory_search"):
 		content = `{"name":"memory_search","args":{"query":"prefer"}}`
+	case strings.Contains(lower, "delegate") || strings.Contains(last, "并行") || strings.Contains(last, "子代理") || strings.Contains(lower, "subagent"):
+		content = `{"name":"delegate","args":{"tasks":[{"prompt":"List top-level files with glob","role":"explore","id":"e1"},{"prompt":"Search for package main with grep","role":"explore","id":"e2"}]}}`
 	default:
 		content = "Code-Agent mock 模式就绪。可试：列出文件 / 读取 README / 写入 hello.txt / 执行 echo。"
 		if onDelta != nil {
