@@ -19,6 +19,8 @@ const (
 	EventSkill      EventType = "skill"
 	EventSlash      EventType = "slash"
 	EventHook       EventType = "hook"
+	EventReflect    EventType = "reflect"
+	EventReview     EventType = "review"
 )
 
 type Event struct {

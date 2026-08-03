@@ -10,6 +10,7 @@ import (
 
 	"github.com/spray272598/code-agent/internal/application"
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
+	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -49,6 +50,8 @@ func Build(cfg *config.Config) (*App, error) {
 	var sessionRepo sessrepo.ISessionRepository
 	var messageRepo sessrepo.IMessageRepository
 	var memRepo memport.IMemoryRepository
+	var auditRepo audit.Repository
+	var summaryRepo sessrepo.ISummaryRepository
 	var closer func()
 	if cfg.Database.Type == "mysql" {
 		db, err := mysql.Open(cfg.MySQLDSN(), cfg.Database.AutoMigrate, cfg.Database.SchemaPath)
@@ -57,18 +60,24 @@ func Build(cfg *config.Config) (*App, error) {
 			sessionRepo = repository.NewMemorySessionRepo()
 			messageRepo = repository.NewMemoryMessageRepo()
 			memRepo = repository.NewMemoryCoreRepo()
+			auditRepo = repository.NewMemoryAuditRepo()
+			summaryRepo = repository.NewMemorySummaryRepo()
 			closer = func() {}
 			cfg.Database.Type = "memory"
 		} else {
 			sessionRepo = repository.NewMySQLSessionRepo(db)
 			messageRepo = repository.NewMySQLMessageRepo(db)
 			memRepo = repository.NewMySQLMemoryRepo(db)
+			auditRepo = repository.NewMySQLAuditRepo(db)
+			summaryRepo = repository.NewMySQLSummaryRepo(db)
 			closer = func() { _ = db.Close() }
 		}
 	} else {
 		sessionRepo = repository.NewMemorySessionRepo()
 		messageRepo = repository.NewMemoryMessageRepo()
 		memRepo = repository.NewMemoryCoreRepo()
+		auditRepo = repository.NewMemoryAuditRepo()
+		summaryRepo = repository.NewMemorySummaryRepo()
 		closer = func() {}
 	}
 	memSvc := memory.NewService(memRepo)
@@ -130,6 +139,8 @@ func Build(cfg *config.Config) (*App, error) {
 	loop.SetSkills(skillSvc)
 	loop.SetHooks(hooks)
 	loop.SetMemory(memSvc, memCtx)
+	loop.SetAudit(auditRepo)
+	loop.SetSummaryRepo(summaryRepo)
 
 	chat := application.NewChatApp(
 		loop, sessionRepo, messageRepo, reg, perm, rdb,
@@ -138,6 +149,7 @@ func Build(cfg *config.Config) (*App, error) {
 	)
 	chat.SetSkills(skillSvc)
 	chat.SetMemory(memSvc)
+	chat.SetAudit(auditRepo)
 	if mcpMgr != nil {
 		chat.SetMCP(mcpMgr)
 	}

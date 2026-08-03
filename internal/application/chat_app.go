@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
+	"github.com/spray272598/code-agent/internal/domain/audit"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -34,6 +35,7 @@ type ChatApp struct {
 	slash       *slash.Registry
 	mcp         mcpport.IMCPManagerPort
 	memSvc      *memory.Service
+	auditRepo   audit.Repository
 	timeoutSec  int
 	workspace   string
 	rateEnabled bool
@@ -74,10 +76,19 @@ func NewChatApp(
 func (a *ChatApp) SetSkills(s *skill.Service)      { a.skills = s }
 func (a *ChatApp) SetMCP(m mcpport.IMCPManagerPort) { a.mcp = m }
 func (a *ChatApp) SetMemory(s *memory.Service)     { a.memSvc = s }
+func (a *ChatApp) SetAudit(r audit.Repository)     { a.auditRepo = r }
 func (a *ChatApp) Slash() *slash.Registry           { return a.slash }
 func (a *ChatApp) Skills() *skill.Service           { return a.skills }
 func (a *ChatApp) MCP() mcpport.IMCPManagerPort     { return a.mcp }
 func (a *ChatApp) Memory() *memory.Service          { return a.memSvc }
+func (a *ChatApp) Audit() audit.Repository          { return a.auditRepo }
+
+func (a *ChatApp) ListAudit(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+	if a.auditRepo == nil {
+		return nil, nil
+	}
+	return a.auditRepo.ListBySession(ctx, sessionID, limit)
+}
 
 // SaveMemory API/helper
 func (a *ChatApp) SaveMemory(ctx context.Context, item *memport.MemoryItem) error {

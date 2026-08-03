@@ -44,6 +44,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/skills/reload", s.handleSkillReload)
 	mux.HandleFunc("/api/v1/memory", s.handleMemory)
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
+	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 
 	handler := cors(auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux))))
 	s.srv = &http.Server{Addr: s.addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -506,6 +507,16 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": observability.Global.Snapshot()})
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	sid := r.URL.Query().Get("sessionId")
+	list, err := s.app.ListAudit(r.Context(), sid, 100)
+	if err != nil {
+		writeJSON(w, 500, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

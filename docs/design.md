@@ -531,12 +531,15 @@ code-agent/
 - [ ] 对象存储：大 tool 结果落盘（接口已预留）
 - [x] Token 日配额 Redis 计数（启用 redis 时）
 
-### Phase 3 — 记忆与压缩做深
+### Phase 3 — 记忆与压缩做深（部分完成）
 
-- 多级 ContextCompressor（含 LLM summary）
-- Memory user/project + 工具
-- Reflect + Plan Reviewer
-- 评测集：长对话 token、记忆命中
+- [x] Memory user/project：`memory_save` / `memory_search` + `GET/POST /api/v1/memory`
+- [x] 对话注入 FormatForPrompt；纠正/偏好话术自动提炼
+- [x] 轻量可观测：Request-Id、access log、`/api/v1/metrics`、trace 日志
+- [x] `internal/api/dto` 边缘契约层（非 domain）
+- [ ] ContextCompressor 的 LLM session summary
+- [ ] Reflect + Plan Reviewer
+- [ ] 完整评测集
 
 ### Phase 4 — SubAgent
 

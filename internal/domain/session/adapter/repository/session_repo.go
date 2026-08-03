@@ -17,3 +17,9 @@ type IMessageRepository interface {
 	ListBySession(ctx context.Context, sessionID string, limit int) ([]*model.Message, error)
 	ListAsMaps(ctx context.Context, sessionID string, limit int) ([]map[string]any, error)
 }
+
+// ISummaryRepository stores rolling session summaries from L3 compress.
+type ISummaryRepository interface {
+	Save(ctx context.Context, sessionID, summary string, tokenEst int) error
+	Get(ctx context.Context, sessionID string) (summary string, err error)
+}

@@ -63,9 +63,16 @@ go run ./cmd/server -config configs/config.yaml
 - API：`GET/POST /api/v1/memory`、`GET /api/v1/metrics`
 - 自动：用户纠正/偏好话术写入；每轮 prompt 注入相关记忆
 
+### Phase 3+（压缩 / 反思 / 审计）
+
+- L0–L3 上下文压缩（强制/自动；L3 LLM summary 写入 `session_summary`）
+- 工具失败 Reflect；多步 Plan + 结束前 Review
+- 审计 `GET /api/v1/audit?sessionId=`
+- metrics 含 `llm_latency_avg_ms` / `tool_latency_avg_ms`
+
 ### 待做
 
-对象存储落大结果、LLM 摘要压缩、SubAgent、Worktree、更强可观测（OTLP）
+对象存储落大结果、SubAgent、Worktree、OTLP
 
 ## 文档
 
