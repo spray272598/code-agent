@@ -46,36 +46,12 @@ type ChatApp struct {
 	keys        *auth.KeyStore
 }
 
-func NewChatApp(
-	loop *engine.Loop,
-	sessions sessrepo.ISessionRepository,
-	messages sessrepo.IMessageRepository,
-	tools *tool.MapRegistry,
-	perm *security.Guard,
-	redis *redisx.Client,
-	timeoutSec int,
-	workspace string,
-	rateEnabled bool,
-	ratePerMin int,
-	apiKeys []string,
-) *ChatApp {
-	if timeoutSec <= 0 {
-		timeoutSec = 180
-	}
-	return &ChatApp{
-		loop: loop, sessions: sessions, messages: messages, tools: tools, perm: perm,
-		redis: redis, timeoutSec: timeoutSec, workspace: workspace,
-		rateEnabled: rateEnabled, ratePerMin: ratePerMin,
-		keys:  auth.NewKeyStore(apiKeys),
-		slash: slash.NewRegistry(),
-	}
-}
-
+// Set* methods retained for gradual migration; prefer application.Option.
 func (a *ChatApp) SetSkills(s *skill.Service)      { a.skills = s }
 func (a *ChatApp) SetMCP(m mcpport.IMCPManagerPort) { a.mcp = m }
 func (a *ChatApp) SetMemory(s *memory.Service)     { a.memSvc = s }
-func (a *ChatApp) SetAudit(r audit.Repository) { a.auditRepo = r }
-func (a *ChatApp) SetBlobStore(s blob.Store)   { a.blobs = s }
+func (a *ChatApp) SetAudit(r audit.Repository)     { a.auditRepo = r }
+func (a *ChatApp) SetBlobStore(s blob.Store)       { a.blobs = s }
 func (a *ChatApp) Slash() *slash.Registry      { return a.slash }
 func (a *ChatApp) Skills() *skill.Service      { return a.skills }
 func (a *ChatApp) MCP() mcpport.IMCPManagerPort { return a.mcp }

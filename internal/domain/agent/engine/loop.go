@@ -48,12 +48,14 @@ type Loop struct {
 	blobs        blob.Store
 	blobThresh   int
 	toolCache    *tool.ResultCache
+	tokens       *TokenManager
+	histLoader   *HistoryLoader
 	maxRounds    int
 	tokenBudget  int
 	systemPrompt string
 	// system prompt cache (tools + skill id)
-	sysCacheKey  string
-	sysCacheVal  string
+	sysCacheKey string
+	sysCacheVal string
 }
 
 func NewLoop(
@@ -78,6 +80,8 @@ func NewLoop(
 		maxRounds: maxRounds, tokenBudget: tokenBudget,
 		systemPrompt: defaultSystem(),
 		toolCache:    tool.NewResultCache(30*time.Second, 128),
+		tokens:       NewTokenManager(tokenBudget),
+		histLoader:   NewHistoryLoader(messages, comp),
 	}
 }
 
@@ -264,16 +268,29 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	saveMsg(um)
 	session.AddTokens(um.TokenCount)
 
-	history, _ := l.messages.ListAsMaps(ctx, session.ID, 120)
+	// Lazy history: recent window first; full load only when compress pressure
+	history, fullLoad, histErr := l.histLoader.Load(ctx, session.ID, opts.ForceCompact, session.MessageCount)
+	if histErr != nil {
+		observability.Warnf("history load: %v", histErr)
+	}
 	priorSummary := ""
 	if l.summaries != nil {
-		priorSummary, _ = l.summaries.Get(ctx, session.ID)
+		var sumErr error
+		priorSummary, sumErr = l.summaries.Get(ctx, session.ID)
+		if sumErr != nil {
+			observability.Warnf("summary get: %v", sumErr)
+		}
 	}
 	if opts.ForceCompact || l.compressor.Needs(history) {
 		if l.hooks != nil {
 			l.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
 		}
-		// L3 summary when history is large or forced
+		// ensure full history when compressing
+		if !fullLoad {
+			if full, err := l.messages.ListAsMaps(ctx, session.ID, 120); err == nil && len(full) > len(history) {
+				history = full
+			}
+		}
 		useSum := opts.ForceCompact || len(history) > 16 || estimateMaps(history) > l.tokenBudget/3
 		cr := l.compressor.CompressLevels(ctx, history, priorSummary, useSum)
 		history = cr.History
@@ -283,7 +300,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			}
 		}
 		observability.Global.CompressTotal.Add(1)
-		publish(&Event{Type: EventCompress, Content: fmt.Sprintf("compress %s saved~%d", cr.Level, cr.Saved), Data: map[string]any{"level": cr.Level, "summary": cr.Summary != ""}, Timestamp: now()})
+		publish(&Event{Type: EventCompress, Content: fmt.Sprintf("compress %s saved~%d fullLoad=%v", cr.Level, cr.Saved, fullLoad), Data: map[string]any{"level": cr.Level, "summary": cr.Summary != "", "fullLoad": fullLoad}, Timestamp: now()})
 		auditLog("compress", "", cr.Level, "ok", 0)
 		observability.Trace.Event(map[string]any{"event": "compress", "session": session.ID, "level": cr.Level, "saved": cr.Saved})
 	}
@@ -385,25 +402,18 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		default:
 		}
 
-		// Active token budget check (proactive, not only pre-run compress)
-		ctxTokens := estimateMessageTokens(messages, sys)
-		if totalTokens+ctxTokens >= l.tokenBudget {
-			publish(&Event{Type: EventCompress, Content: fmt.Sprintf("token budget pressure used=%d ctx=%d budget=%d", totalTokens, ctxTokens, l.tokenBudget), Timestamp: now()})
+		// Active token budget via TokenManager
+		if l.tokens != nil && l.tokens.Pressure(totalTokens, messages, sys) {
+			publish(&Event{Type: EventCompress, Content: fmt.Sprintf("token budget pressure used=%d budget=%d", totalTokens, l.tokenBudget), Timestamp: now()})
 			if l.hooks != nil {
 				l.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
 			}
-			// emergency: drop middle tool observations, keep last 6 turns
 			if len(messages) > 10 {
-				head := messages[:2]
-				tail := messages[len(messages)-6:]
-				messages = append(append([]port.ChatMessage{}, head...), tail...)
-				messages = append([]port.ChatMessage{{
-					Role: "user", Content: "[TOKEN_BUDGET] Context trimmed mid-loop. Continue with remaining budget; prefer Final Answer if possible.",
-				}}, messages...)
+				messages = l.tokens.TrimMessages(messages, 6)
 				observability.Global.CompressTotal.Add(1)
 				auditLog("compress", "", "mid_loop_budget", "ok", 0)
 			}
-			if totalTokens >= l.tokenBudget {
+			if l.tokens.Exhausted(totalTokens) {
 				final = fmt.Sprintf("stopped: token budget exhausted (used=%d budget=%d)", totalTokens, l.tokenBudget)
 				publish(&Event{Type: EventError, SubType: "budget", Content: final, Completed: true, Timestamp: now()})
 				break

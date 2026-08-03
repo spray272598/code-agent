@@ -56,10 +56,12 @@ type LLMConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type        string      `yaml:"type"`
+	Type        string      `yaml:"type"` // mysql | sqlite | memory
 	AutoMigrate bool        `yaml:"auto_migrate"`
 	SchemaPath  string      `yaml:"schema_path"`
 	MySQL       MySQLConfig `yaml:"mysql"`
+	// SQLitePath file path when type=sqlite (default ./data/code-agent.db)
+	SQLitePath string `yaml:"sqlite_path"`
 }
 
 type MySQLConfig struct {

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spray272598/code-agent/internal/application"
@@ -31,6 +32,7 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/mysql"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
+	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
 	"github.com/spray272598/code-agent/internal/trigger/ws"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
@@ -65,7 +67,8 @@ func Build(cfg *config.Config) (*App, error) {
 	var auditRepo audit.Repository
 	var summaryRepo sessrepo.ISummaryRepository
 	var closer func()
-	if cfg.Database.Type == "mysql" {
+	switch strings.ToLower(cfg.Database.Type) {
+	case "mysql":
 		db, err := mysql.Open(cfg.MySQLDSN(), cfg.Database.AutoMigrate, cfg.Database.SchemaPath)
 		if err != nil {
 			log.Printf("[bootstrap] mysql unavailable (%v), use memory\n", err)
@@ -84,13 +87,38 @@ func Build(cfg *config.Config) (*App, error) {
 			summaryRepo = repository.NewMySQLSummaryRepo(db)
 			closer = func() { _ = db.Close() }
 		}
-	} else {
+	case "sqlite", "sqlite3":
+		path := cfg.Database.SQLitePath
+		if path == "" {
+			path = "./data/code-agent.db"
+		}
+		db, err := sqlite.Open(path, true) // always migrate lightweight schema
+		if err != nil {
+			log.Printf("[bootstrap] sqlite unavailable (%v), use memory\n", err)
+			sessionRepo = repository.NewMemorySessionRepo()
+			messageRepo = repository.NewMemoryMessageRepo()
+			memRepo = repository.NewMemoryCoreRepo()
+			auditRepo = repository.NewMemoryAuditRepo()
+			summaryRepo = repository.NewMemorySummaryRepo()
+			closer = func() {}
+			cfg.Database.Type = "memory"
+		} else {
+			sessionRepo = repository.NewSQLiteSessionRepo(db)
+			messageRepo = repository.NewSQLiteMessageRepo(db)
+			memRepo = repository.NewSQLiteMemoryRepo(db)
+			auditRepo = repository.NewSQLiteAuditRepo(db)
+			summaryRepo = repository.NewSQLiteSummaryRepo(db)
+			closer = func() { _ = db.Close() }
+			log.Printf("[bootstrap] sqlite path=%s\n", path)
+		}
+	default:
 		sessionRepo = repository.NewMemorySessionRepo()
 		messageRepo = repository.NewMemoryMessageRepo()
 		memRepo = repository.NewMemoryCoreRepo()
 		auditRepo = repository.NewMemoryAuditRepo()
 		summaryRepo = repository.NewMemorySummaryRepo()
 		closer = func() {}
+		cfg.Database.Type = "memory"
 	}
 	memSvc := memory.NewService(memRepo)
 	memCtx := &coding.MemoryContext{Svc: memSvc}
@@ -230,20 +258,25 @@ func Build(cfg *config.Config) (*App, error) {
 		loop.SetSubRunner(subRunner)
 	}
 
-	chat := application.NewChatApp(
-		loop, sessionRepo, messageRepo, reg, perm, rdb,
-		cfg.Agent.TimeoutSec, workspaceRoot,
-		cfg.RateLimit.Enabled, cfg.RateLimit.PerMinute, cfg.Security.APIKeys,
+	var chatOpts []application.Option
+	chatOpts = append(chatOpts,
+		application.WithSkills(skillSvc),
+		application.WithMemory(memSvc),
+		application.WithAudit(auditRepo),
+		application.WithKeyStore(keyStore),
 	)
-	chat.SetSkills(skillSvc)
-	chat.SetMemory(memSvc)
-	chat.SetAudit(auditRepo)
 	if blobStore != nil {
-		chat.SetBlobStore(blobStore)
+		chatOpts = append(chatOpts, application.WithBlobStore(blobStore))
 	}
 	if mcpMgr != nil {
-		chat.SetMCP(mcpMgr)
+		chatOpts = append(chatOpts, application.WithMCP(mcpMgr))
 	}
+	chat := application.New(application.CoreDeps{
+		Loop: loop, Sessions: sessionRepo, Messages: messageRepo, Tools: reg, Perm: perm,
+		Redis: rdb, TimeoutSec: cfg.Agent.TimeoutSec, Workspace: workspaceRoot,
+		RateEnabled: cfg.RateLimit.Enabled, RatePerMin: cfg.RateLimit.PerMinute,
+		// APIKeys empty when KeyStore injected via option
+	}, chatOpts...)
 
 	log.Printf("[bootstrap] db=%s tools=%d redis=%v mock_llm=%v workspace=%s mcp=%v subagent=%v\n",
 		cfg.Database.Type, len(reg.List()), rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, mcpMgr != nil, subRunner != nil)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spray272598/code-agent/internal/api/dto"
 	"github.com/spray272598/code-agent/internal/application"
 	"github.com/spray272598/code-agent/internal/domain/host"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
@@ -158,7 +159,7 @@ func auth(app *application.ChatApp, next http.Handler) http.Handler {
 			}
 		}
 		if !app.Auth(key) {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "invalid api key"})
+			writeErr(w, http.StatusUnauthorized, "401", "invalid api key")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -210,14 +211,14 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := dec.Decode(dst); err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "http: request body too large") || strings.Contains(msg, "request body too large") {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"code": "413", "message": "request body too large"})
+			writeErr(w, http.StatusRequestEntityTooLarge, "413", "request body too large")
 			return false
 		}
 		if err == io.EOF {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "400", "message": "empty body"})
+			writeErr(w, http.StatusBadRequest, "400", "empty body")
 			return false
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "400", "message": "invalid json: " + msg})
+		writeErr(w, http.StatusBadRequest, "400", "invalid json: "+msg)
 		return false
 	}
 	return true
@@ -275,34 +276,34 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]any{"code": "405", "message": "method not allowed"})
+		writeErr(w, 405, "405", "method not allowed")
 		return
 	}
-	var req application.ChatRequest
-	if !decodeJSON(w, r, &req) {
+	var edge dto.ChatRequest
+	if !decodeJSON(w, r, &edge) {
 		return
 	}
-	res, err := s.app.Chat(req)
+	res, err := s.app.Chat(dto.ToAppChat(edge))
 	if err != nil {
-		writeJSON(w, 400, errMap(err))
+		writeErr(w, 400, "400", err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"code": "0000", "data": res})
+	writeOK(w, dto.FromAppChat(res))
 }
 
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]any{"code": "405", "message": "method not allowed"})
+		writeErr(w, 405, "405", "method not allowed")
 		return
 	}
-	var req application.ChatRequest
-	if !decodeJSON(w, r, &req) {
+	var edge dto.ChatRequest
+	if !decodeJSON(w, r, &edge) {
 		return
 	}
 	// bind to request context → client disconnect cancels agent loop
-	ch, sess, err := s.app.ChatStream(r.Context(), req)
+	ch, sess, err := s.app.ChatStream(r.Context(), dto.ToAppChat(edge))
 	if err != nil {
-		writeJSON(w, 400, errMap(err))
+		writeErr(w, 400, "400", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -356,18 +357,12 @@ func (s *Server) handlePermPending(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePermApprove(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ID        string `json:"id"`
-		Scope     string `json:"scope"`
-		Continue  bool   `json:"continue"`
-		SessionID string `json:"sessionId"`
-		UserID    string `json:"userId"`
-	}
+	var body dto.PermissionApproveRequest
 	if !decodeJSON(w, r, &body) {
 		return
 	}
 	if body.ID == "" {
-		writeJSON(w, 400, map[string]any{"code": "400", "message": "id required"})
+		writeErr(w, 400, "400", "id required")
 		return
 	}
 	if body.Scope == "" {
@@ -375,23 +370,28 @@ func (s *Server) handlePermApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.app.Permission().Approve(body.ID, body.Scope)
 	if err != nil {
-		writeJSON(w, 400, errMap(err))
+		writeErr(w, 400, "400", err.Error())
 		return
 	}
-	out := map[string]any{"approved": true, "pending": p}
+	out := map[string]any{"approved": true, "pending": p, "inline": body.Continue}
+	// Inline continue: approve + resume agent in one round-trip (Claude Code-like UX)
 	if body.Continue {
 		sid := body.SessionID
 		if sid == "" && p != nil {
 			sid = p.SessionID
 		}
-		res, err := s.app.Chat(application.ChatRequest{SessionID: sid, UserID: body.UserID, Message: "继续"})
+		msg := body.InlineMessage
+		if msg == "" {
+			msg = "继续"
+		}
+		res, err := s.app.Chat(application.ChatRequest{SessionID: sid, UserID: body.UserID, Message: msg})
 		if err != nil {
 			out["continueError"] = err.Error()
 		} else {
-			out["chat"] = res
+			out["chat"] = dto.FromAppChat(res)
 		}
 	}
-	writeJSON(w, 200, map[string]any{"code": "0000", "data": out})
+	writeOK(w, out)
 }
 
 func (s *Server) handlePermReject(w http.ResponseWriter, r *http.Request) {
@@ -727,6 +727,19 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeOK unified success envelope.
+func writeOK(w http.ResponseWriter, data any) {
+	writeJSON(w, 200, dto.OK(data))
+}
+
+// writeErr unified error envelope.
+func writeErr(w http.ResponseWriter, httpStatus int, code, message string) {
+	if httpStatus <= 0 {
+		httpStatus = 400
+	}
+	writeJSON(w, httpStatus, dto.Fail(code, message))
+}
+
 func errMap(err error) map[string]any {
 	return map[string]any{"code": "400", "message": err.Error()}
 }
@@ -769,48 +782,62 @@ SwaggerUIBundle({url:'/api/v1/openapi.json', dom_id:'#swagger-ui'});
 </body></html>`))
 }
 
-// Minimal OpenAPI 3.0 for interview / client generation.
+// OpenAPI 3.0 aligned with handlers + dto package (envelope code/message/data).
 const openAPISpec = `{
   "openapi": "3.0.3",
-  "info": {"title": "Code-Agent API", "version": "1.0.0",
-    "description": "Claude Code-like coding agent: chat, tools, MCP, skills, memory, permissions."},
+  "info": {"title": "Code-Agent API", "version": "1.1.0",
+    "description": "Coding agent API. Success: {code:0000,data}. Error: {code,message}. Auth: X-API-Key or Bearer."},
   "servers": [{"url": "/"}],
   "components": {
     "securitySchemes": {
       "ApiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
       "BearerAuth": {"type": "http", "scheme": "bearer"}
+    },
+    "schemas": {
+      "Envelope": {"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"data":{}}},
+      "ChatRequest": {"type":"object","required":["message"],"properties":{
+        "sessionId":{"type":"string"},"userId":{"type":"string"},"projectId":{"type":"string"},
+        "message":{"type":"string"},"autoApprove":{"type":"boolean"}}},
+      "PermissionApprove": {"type":"object","required":["id"],"properties":{
+        "id":{"type":"string"},"scope":{"type":"string","enum":["once","session","always"]},
+        "continue":{"type":"boolean","description":"inline resume agent after approve"},
+        "sessionId":{"type":"string"},"userId":{"type":"string"},"inlineMessage":{"type":"string"}}}
     }
   },
   "security": [{"ApiKeyAuth": []}, {"BearerAuth": []}],
   "paths": {
     "/health": {"get": {"summary": "Health", "security": [], "responses": {"200": {"description": "ok"}}}},
     "/api/v1/session": {
-      "post": {"summary": "Create session", "responses": {"200": {"description": "session"}}},
-      "get": {"summary": "Get session by id query", "parameters": [{"name":"id","in":"query","schema":{"type":"string"}}], "responses": {"200": {"description": "ok"}}}
+      "post": {"summary": "Create session", "responses": {"200": {"description": "envelope+sessionId"}}},
+      "get": {"summary": "Get session", "parameters": [{"name":"sessionId","in":"query","schema":{"type":"string"}}], "responses": {"200": {"description": "ok"}}}
     },
     "/api/v1/session/list": {"get": {"summary": "List sessions", "parameters": [{"name":"userId","in":"query","schema":{"type":"string"}}], "responses": {"200": {"description": "ok"}}}},
-    "/api/v1/chat": {"post": {"summary": "Chat (sync)", "requestBody": {"content": {"application/json": {"schema": {"type":"object","properties": {
-      "sessionId":{"type":"string"},"userId":{"type":"string"},"message":{"type":"string"},"autoApprove":{"type":"boolean"}
-    }}}}}, "responses": {"200": {"description": "chat result"}}}},
-    "/api/v1/chat/stream": {"post": {"summary": "Chat SSE stream", "responses": {"200": {"description": "text/event-stream"}}}},
-    "/api/v1/tools": {"get": {"summary": "List tools", "responses": {"200": {"description": "ok"}}}},
-    "/api/v1/permission/pending": {"get": {"summary": "Pending permissions", "responses": {"200": {"description": "ok"}}}},
-    "/api/v1/permission/approve": {"post": {"summary": "Approve permission", "responses": {"200": {"description": "ok"}}}},
-    "/api/v1/permission/reject": {"post": {"summary": "Reject permission", "responses": {"200": {"description": "ok"}}}},
-    "/api/v1/mcp/servers": {"get": {"summary": "MCP servers"}, "post": {"summary": "Install/update MCP"}},
+    "/api/v1/chat": {"post": {"summary": "Chat sync", "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ChatRequest"}}}},
+      "responses": {"200": {"description": "ChatResponse in data"}, "400": {"description": "error envelope"}}}},
+    "/api/v1/chat/stream": {"post": {"summary": "Chat SSE (heartbeat : ping)", "requestBody": {"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ChatRequest"}}}},
+      "responses": {"200": {"description": "text/event-stream"}}}},
+    "/api/v1/tools": {"get": {"summary": "List tools"}},
+    "/api/v1/permission/pending": {"get": {"summary": "Pending permissions", "parameters":[{"name":"sessionId","in":"query","schema":{"type":"string"}}]}},
+    "/api/v1/permission/approve": {"post": {"summary": "Approve (+ optional inline continue)", "requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PermissionApprove"}}}}}},
+    "/api/v1/permission/reject": {"post": {"summary": "Reject permission"}},
+    "/api/v1/mcp/servers": {"get": {"summary": "MCP health list"}, "post": {"summary": "Install/update MCP"}, "delete": {"summary": "Remove MCP"}},
     "/api/v1/mcp/health": {"get": {"summary": "MCP health"}},
     "/api/v1/mcp/tools": {"get": {"summary": "MCP tools"}},
     "/api/v1/skills": {"get": {"summary": "List skills"}},
-    "/api/v1/skills/install": {"post": {"summary": "Install skill"}},
+    "/api/v1/skills/install": {"post": {"summary": "Install skill from path"}},
     "/api/v1/skills/uninstall": {"post": {"summary": "Uninstall skill"}},
     "/api/v1/skills/reload": {"post": {"summary": "Reload skills"}},
     "/api/v1/memory": {"get": {"summary": "List/search memory"}, "post": {"summary": "Save memory"}},
     "/api/v1/metrics": {"get": {"summary": "JSON metrics"}},
-    "/api/v1/audit": {"get": {"summary": "Audit log"}},
-    "/api/v1/blobs": {"get": {"summary": "Get blob by key"}},
-    "/api/v1/host/devices": {"get": {"summary": "Host agents"}},
+    "/api/v1/audit": {"get": {"summary": "Audit log", "parameters":[{"name":"sessionId","in":"query","schema":{"type":"string"}}]}},
+    "/api/v1/blobs": {"get": {"summary": "Get blob", "parameters":[{"name":"key","in":"query","required":true,"schema":{"type":"string"}}]}},
+    "/api/v1/host/devices": {"get": {"summary": "Host agents online"}},
     "/api/v1/admin/log-level": {"get": {"summary": "Get log level"}, "post": {"summary": "Set log level"}},
+    "/api/v1/openapi.json": {"get": {"summary": "This document", "security": []}},
     "/metrics": {"get": {"summary": "Prometheus text", "security": []}},
-    "/docs": {"get": {"summary": "Swagger UI", "security": []}}
+    "/docs": {"get": {"summary": "Swagger UI", "security": []}},
+    "/ws/host": {"get": {"summary": "Host-agent WebSocket", "parameters":[
+      {"name":"token","in":"query","schema":{"type":"string"}},
+      {"name":"deviceId","in":"query","schema":{"type":"string"}}]}}
   }
 }`
