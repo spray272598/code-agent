@@ -41,6 +41,7 @@ type Loop struct {
 	compressor   *contextx.Compressor
 	skills       *skill.Service
 	hooks        *hook.Bus
+	specSvc      SpecService
 	memSvc       *memory.Service
 	memCtx       *coding.MemoryContext
 	audit        audit.Repository
@@ -85,8 +86,9 @@ func NewLoop(
 	}
 }
 
-func (l *Loop) SetSkills(s *skill.Service) { l.skills = s }
-func (l *Loop) SetHooks(h *hook.Bus)       { l.hooks = h }
+func (l *Loop) SetSkills(s *skill.Service)   { l.skills = s }
+func (l *Loop) SetHooks(h *hook.Bus)         { l.hooks = h }
+func (l *Loop) SetSpecService(s SpecService) { l.specSvc = s }
 func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
 	l.memSvc = svc
 	l.memCtx = mc
@@ -145,6 +147,25 @@ Core: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_se
 Prefer edit_file over full write for existing files. Be concise.
 Dangerous operations require user confirmation. All tools (including MCP server__tool) go through permission checks.
 If a tool fails: Thought should diagnose root cause and pick a different path/tool.`
+}
+
+// SpecService is the minimal spec service interface used by the engine.
+// Implemented by spec.Service in domain/spec.
+type SpecService interface {
+	PromptSection() string
+	HasSpec() bool
+	HasCLAUDE() bool
+	Reload() error
+	Progress() float64
+	Summary() string
+	// plan.SpecData compatibility
+	HasContent() bool
+	GetTitle() string
+	GetGoal() string
+	GetTasks() []plan.TaskData
+	GetChecklist() []plan.ChecklistData
+	GetConstraints() []string
+	GetAcceptance() []string
 }
 
 type RunOptions struct {
@@ -253,10 +274,17 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		}
 	}
 
-	// plan
+	// plan: spec-driven (if available) or rule-driven
 	var taskPlan *plan.Plan
 	if !continuing {
-		taskPlan = plan.BuildRulePlan(userInput)
+		if l.specSvc != nil && l.specSvc.HasSpec() {
+			taskPlan = plan.BuildFromSpec(l.specSvc)
+			if taskPlan == nil {
+				taskPlan = plan.BuildRulePlan(userInput)
+			}
+		} else {
+			taskPlan = plan.BuildRulePlan(userInput)
+		}
 		if taskPlan != nil {
 			publish(&Event{Type: EventPlan, Content: taskPlan.Goal, Data: taskPlan, Timestamp: now()})
 		}
@@ -348,6 +376,16 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	}
 	if taskPlan != nil {
 		sys += "\n" + taskPlan.StringForPrompt()
+	}
+
+	// Inject spec content (spec.md + tasks.md + checklist.md + CLAUDE.md)
+	if l.specSvc != nil {
+		specSec := l.specSvc.PromptSection()
+		if specSec != "" {
+			sys += "\n" + specSec
+			publish(&Event{Type: EventThought, Content: "spec injected", Timestamp: now()})
+			telemetry.TraceEvent(map[string]any{"event": "spec_injected", "session": session.ID, "has_spec": l.specSvc.HasSpec(), "has_claude": l.specSvc.HasCLAUDE()})
+		}
 	}
 
 	messages := mapsToChat(history)

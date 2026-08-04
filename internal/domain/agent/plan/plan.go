@@ -5,11 +5,12 @@ import (
 	"strings"
 )
 
-// Plan simple multi-step plan for coding tasks.
+// Plan multi-step plan for coding tasks.
 type Plan struct {
 	Goal     string    `json:"goal"`
 	Steps    []Step    `json:"steps"`
-	Source   string    `json:"source"`
+	Source   string    `json:"source"` // rule|spec|llm
+	SpecRef  string    `json:"spec_ref,omitempty"`
 }
 
 type Step struct {
@@ -19,13 +20,34 @@ type Step struct {
 	Note   string `json:"note,omitempty"`
 }
 
-// BuildRulePlan heuristic breakdown for multi-step signals.
+// SpecData is the minimal spec interface the plan system needs (avoids import cycle).
+type SpecData interface {
+	GetTitle() string
+	GetGoal() string
+	GetTasks() []TaskData
+	GetChecklist() []ChecklistData
+	GetConstraints() []string
+	GetAcceptance() []string
+	HasContent() bool
+}
+
+type TaskData struct {
+	ID     string
+	Title  string
+	Status string // pending|done|in_progress|blocked
+}
+
+type ChecklistData struct {
+	Text   string
+	Status string // pending|done|failed
+}
+
+// BuildRulePlan heuristic breakdown for multi-step signals (fallback when no spec).
 func BuildRulePlan(goal string) *Plan {
 	goal = strings.TrimSpace(goal)
 	if goal == "" {
 		return nil
 	}
-	// only for multi-step-ish requests
 	signals := []string{"然后", "接着", "并且", "and then", "after", "先", "再", "完整", "step"}
 	hit := len([]rune(goal)) > 60
 	lower := strings.ToLower(goal)
@@ -50,6 +72,69 @@ func BuildRulePlan(goal string) *Plan {
 	}
 }
 
+// BuildFromSpec creates a plan from SpecData (spec-driven development).
+func BuildFromSpec(sd SpecData) *Plan {
+	if sd == nil || !sd.HasContent() {
+		return nil
+	}
+	goal := sd.GetGoal()
+	if goal == "" {
+		goal = sd.GetTitle()
+	}
+	plan := &Plan{
+		Goal:    goal,
+		Source:  "spec",
+		SpecRef: sd.GetTitle(),
+	}
+
+	// Build steps from spec tasks
+	for i, t := range sd.GetTasks() {
+		status := "pending"
+		switch t.Status {
+		case "done":
+			status = "done"
+		case "in_progress":
+			status = "in_progress"
+		case "blocked":
+			status = "blocked"
+		}
+		plan.Steps = append(plan.Steps, Step{
+			Index:  i + 1,
+			Title:  fmt.Sprintf("[%s] %s", t.ID, t.Title),
+			Status: status,
+		})
+	}
+
+	// Add acceptance steps from checklist
+	for _, c := range sd.GetChecklist() {
+		status := "pending"
+		if c.Status == "done" {
+			status = "done"
+		}
+		plan.Steps = append(plan.Steps, Step{
+			Index:  len(plan.Steps) + 1,
+			Title:  fmt.Sprintf("[check] %s", c.Text),
+			Status: status,
+		})
+	}
+
+	return plan
+}
+
+// BuildPlan picks spec-driven or rule-driven based on available data.
+func BuildPlan(userInput string, sd SpecData) *Plan {
+	if sd != nil && sd.HasContent() {
+		if p := BuildFromSpec(sd); p != nil {
+			if userInput == "" {
+				return p
+			}
+			// merge: spec plan + user goal
+			return p
+		}
+	}
+	return BuildRulePlan(userInput)
+}
+
 func (p *Plan) StringForPrompt() string {
 	if p == nil || len(p.Steps) == 0 {
 		return ""
@@ -57,9 +142,23 @@ func (p *Plan) StringForPrompt() string {
 	var b strings.Builder
 	b.WriteString("## Execution plan\nGoal: ")
 	b.WriteString(p.Goal)
+	if p.SpecRef != "" {
+		b.WriteString(fmt.Sprintf(" (from spec: %s)", p.SpecRef))
+	}
 	b.WriteString("\n")
 	for _, s := range p.Steps {
-		b.WriteString(fmt.Sprintf("- [%s] %d. %s\n", s.Status, s.Index, s.Title))
+		marker := "[ ]"
+		switch s.Status {
+		case "done":
+			marker = "[x]"
+		case "in_progress":
+			marker = "[→]"
+		case "blocked":
+			marker = "[!]"
+		case "failed":
+			marker = "[✗]"
+		}
+		b.WriteString(fmt.Sprintf("%s %d. %s\n", marker, s.Index, s.Title))
 		if s.Note != "" {
 			b.WriteString("  note: " + s.Note + "\n")
 		}
@@ -73,7 +172,7 @@ func (p *Plan) Advance(ok bool, note string) {
 		return
 	}
 	for i := range p.Steps {
-		if p.Steps[i].Status == "pending" || p.Steps[i].Status == "" {
+		if p.Steps[i].Status == "pending" || p.Steps[i].Status == "" || p.Steps[i].Status == "in_progress" {
 			if ok {
 				p.Steps[i].Status = "done"
 			} else {
@@ -85,15 +184,47 @@ func (p *Plan) Advance(ok bool, note string) {
 	}
 }
 
-// Review checks remaining pending steps.
+// AdvanceByIndex marks a specific step by index as done.
+func (p *Plan) AdvanceByIndex(index int, ok bool, note string) {
+	if p == nil {
+		return
+	}
+	for i := range p.Steps {
+		if p.Steps[i].Index == index {
+			if ok {
+				p.Steps[i].Status = "done"
+			} else {
+				p.Steps[i].Status = "failed"
+			}
+			p.Steps[i].Note = note
+			return
+		}
+	}
+}
+
+// Review checks remaining pending/in_progress steps.
 func (p *Plan) Review() (pass bool, gaps []string) {
 	if p == nil || len(p.Steps) == 0 {
 		return true, nil
 	}
 	for _, s := range p.Steps {
-		if s.Status == "pending" || s.Status == "" || s.Status == "failed" {
+		if s.Status == "pending" || s.Status == "" || s.Status == "failed" || s.Status == "in_progress" {
 			gaps = append(gaps, fmt.Sprintf("%d:%s(%s)", s.Index, s.Title, s.Status))
 		}
 	}
 	return len(gaps) == 0, gaps
+}
+
+// Progress returns completion percentage.
+func (p *Plan) Progress() float64 {
+	if p == nil || len(p.Steps) == 0 {
+		return 0
+	}
+	done := 0
+	for _, s := range p.Steps {
+		if s.Status == "done" {
+			done++
+		}
+	}
+	return float64(done) / float64(len(p.Steps)) * 100
 }
