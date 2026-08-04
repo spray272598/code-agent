@@ -91,7 +91,7 @@ func (t *GuardedTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 		}
 	}
 	if err := domtool.ValidateArgs(t.Inner.InputSchema(), args); err != nil {
-		observability.Global.ToolCalls.Add(1)
+		observability.Current().AddToolCalls(1)
 		t.audit(ctx, cross, userID, sessionID, name, err.Error(), "validation", 0)
 		return "validation error: " + err.Error(), nil
 	}
@@ -106,7 +106,7 @@ func (t *GuardedTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 		}
 		switch dec.Action {
 		case security.ActionDeny:
-			observability.Global.PermissionDeny.Add(1)
+			observability.Current().AddPermissionDeny(1)
 			t.audit(ctx, cross, userID, sessionID, name, dec.Reason, "deny", 0)
 			return fmt.Sprintf("DENIED [%s]: %s", dec.Layer, dec.Reason), nil
 		case security.ActionConfirm:
@@ -140,7 +140,7 @@ func (t *GuardedTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 	// --- Cache (read-only) ---
 	if cross != nil && cross.Cache != nil {
 		if hit, ok := cross.Cache.Get(name, args); ok {
-			observability.Global.ToolCalls.Add(1)
+			observability.Current().AddToolCalls(1)
 			t.audit(ctx, cross, userID, sessionID, name, truncate(hit, 120), "cache", 0)
 			return hit, nil
 		}
@@ -151,11 +151,11 @@ func (t *GuardedTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 
 func (t *GuardedTool) execCross(ctx context.Context, name string, args map[string]any, sessionID, userID string, cross *CrossCut) (string, error) {
 	t0 := time.Now()
-	observability.Global.ToolCalls.Add(1)
+	observability.Current().AddToolCalls(1)
 
 	res, err := t.Inner.Execute(ctx, args)
 	lat := time.Since(t0)
-	observability.Global.ObserveTool(lat)
+	observability.Current().ObserveTool(lat)
 
 	text := ""
 	decision := "ok"
@@ -207,10 +207,12 @@ func (t *GuardedTool) audit(ctx context.Context, cross *CrossCut, userID, sessio
 	if cross == nil || cross.Audit == nil {
 		return
 	}
-	_ = cross.Audit.Append(ctx, audit.Entry{
+	if err := cross.Audit.Append(ctx, audit.Entry{
 		UserID: userID, SessionID: sessionID, Action: "tool_call",
 		Tool: toolName, Detail: detail, Decision: decision, LatencyMs: latencyMs,
-	})
+	}); err != nil {
+		observability.LogError("audit append tool_call", err)
+	}
 }
 
 // WrapRegistry converts domain tools with shared Guard + CrossCut.

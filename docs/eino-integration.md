@@ -93,20 +93,84 @@ llm:
 | `callbacks.go` | Eino → SSE |
 | `multiagent.go` | /team 并行子代理 |
 
+## HITL Resume（双路径）
+
+### A. 图内 resume（默认开启 `eino_graph_resume`）
+
+```
+CONFIRM → GuardedTool.StatefulInterrupt(ConfirmInfo)
+  → CheckPointStore 持久化图状态（./data/eino-checkpoints）
+  → 记录 interrupt id（进程内 map）
+  → approve → 「继续」
+  → compose.ResumeWithData + WithCheckPointID
+  → 工具节点 GetInterruptState → Guard(sessionAllow) → execCross
+  → 图继续跑完
+失败则 fallback → B
+```
+
+### B. 应用层 resume（始终可用 / fallback）
+
+```
+TakeReadyResume → GuardedTool(UseInterrupt=false, AutoApprove)
+  → hooks / audit / metrics
+  → 落库 Action + Observation → 新一轮 ReAct
+```
+
+配置：
+
+```yaml
+agent:
+  eino_graph_resume: true
+  eino_checkpoint_dir: "./data/eino-checkpoints"
+```
+
+## Stream / Interrupt 检测
+
+| 点 | 行为 |
+|----|------|
+| `runStream` | 累积 text_delta + tool_call name/args 分片；`io.EOF` 正常结束，**其它错误（含 interrupt）向上返回** |
+| `isInterruptErr` | 见下表（公开 API 优先） |
+| callbacks | model OnEnd / stream 回调写入 `TokenUsage` → `runStats` |
+| MultiAgent | 汇总各子代理 toolCalls + measured/estimated tokens |
+
+### Interrupt detection（Eino v0.9.x 限制）
+
+Eino **未导出**统一的 `isInterruptError` / `Interrupted` 接口；图内 `interruptError` 类型为 unexported。
+
+公开可用：
+
+| API | 覆盖 |
+|-----|------|
+| `compose.ExtractInterruptInfo(err)` | 图级 interrupt / subGraph interrupt |
+| `compose.IsInterruptRerunError(err)` | `InterruptSignal`、legacy interrupt-and-rerun |
+
+本仓库 `isInterruptErr` 顺序：
+
+1. `ExtractInterruptInfo`  
+2. `IsInterruptRerunError`  
+3. `errors.As` → `GetInterruptContexts() []*compose.InterruptCtx`  
+4. **仅**前缀 `interrupt happened` / 子串 `interrupt and rerun`（compose `Error()` 文案）  
+
+**禁止**宽泛 `strings.Contains(..., "interrupt")`，避免 `connection interrupted` 误判。  
+若 Eino 未来导出官方 `IsInterruptError`，应优先替换本地实现。
+
 ## 测试
 
 ```bash
 go test ./internal/infrastructure/einoorch/ -count=1 -v
 ```
 
-覆盖：权限 deny/confirm、validation、hook abort、cache+audit、mapsToSchema 工具保留、trim、PromptBuilder。
+覆盖：权限 deny/confirm、validation、hook abort、cache+audit、mapsToSchema 工具保留、trim、PromptBuilder、
+`isInterruptErr` 误判防护、`runStats` TokenUsage、HITL resume 执行、tool_call delta 累积、filter tools。
 
 ## 秋招话术
 
-> 编排可插拔：native 自研 Loop 与 Eino ReAct 共用 domain 工具。Eino 只负责图与 tool-calling；**安全与业务执行**集中在 GuardedTool 横切与压缩/预算链，框架无法绕过权限与审计。
+> 编排可插拔：native 自研 Loop 与 Eino ReAct 共用 domain 工具。Eino 只负责图与 tool-calling；**安全与业务执行**集中在 GuardedTool 横切与压缩/预算链，框架无法绕过权限与审计。HITL 是应用层 awaiting + checkpoint，不是裸框架 resume。
 
 ## 后续
 
 1. ~~跨进程 Checkpoint 持久化 Interrupt~~ → `docs/checkpoint-index.md`  
 2. ~~DeepAgent vs Teams~~ → `/deep` + `docs/deepagent-vs-teams.md`  
-3. CallbackOutput.TokenUsage 进 Prometheus  
+3. ~~CallbackOutput.TokenUsage 进 runStats / MultiAgent 汇总~~  
+4. 可选：Eino CheckPointStore + graph ResumeWithData 精确图内恢复  
+

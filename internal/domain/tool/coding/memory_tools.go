@@ -10,7 +10,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/tool"
-	"github.com/spray272598/code-agent/internal/observability"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 )
 
 // MemoryContext is process-wide service + per-request identity (set before each agent run).
@@ -94,7 +94,7 @@ func (t *MemorySaveTool) Execute(ctx context.Context, args map[string]any) (tool
 	if err := t.Ctx.Svc.Save(ctx, item); err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
-	observability.Global.MemoryWrites.Add(1)
+	telemetry.IncMemoryWrite()
 	return tool.Result{Text: fmt.Sprintf("saved memory scope=%s category=%s: %s", scope, item.Category, truncate(content, 120))}, nil
 }
 
@@ -131,7 +131,7 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]any) (to
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
-	observability.Global.MemoryReads.Add(1)
+	telemetry.IncMemoryRead()
 	if len(items) == 0 {
 		return tool.Result{Text: "(no memories matched)"}, nil
 	}
@@ -147,5 +147,5 @@ func truncate(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "…"
+	return string(r[:n]) + "..."
 }

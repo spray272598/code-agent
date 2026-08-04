@@ -12,6 +12,9 @@ agent:
   # Primary orchestrator: CloudWeGo Eino. Falls back to native-offline when use_mock/no key.
   orchestrator: "eino"
   eino_stream: false
+  # In-graph HITL: CheckPointStore + ResumeWithData (falls back to app-level resume)
+  eino_graph_resume: true
+  eino_checkpoint_dir: "./data/eino-checkpoints"
 
 llm:
   provider: "openai_compatible"

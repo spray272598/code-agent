@@ -14,7 +14,7 @@ type TokenManager struct {
 
 func NewTokenManager(budget int) *TokenManager {
 	if budget <= 0 {
-		budget = 32000
+		budget = DefaultTokenBudget
 	}
 	return &TokenManager{Budget: budget}
 }
@@ -32,7 +32,7 @@ func (t *TokenManager) Exhausted(usedTokens int) bool {
 // TrimMessages drops middle turns, keeps head + last n (emergency compress).
 func (t *TokenManager) TrimMessages(messages []port.ChatMessage, keepTail int) []port.ChatMessage {
 	if keepTail <= 0 {
-		keepTail = 6
+		keepTail = DefaultKeepTailMessages
 	}
 	if len(messages) <= keepTail+2 {
 		return messages

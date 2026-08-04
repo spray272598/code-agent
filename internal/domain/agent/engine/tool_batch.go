@@ -12,8 +12,8 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	"github.com/spray272598/code-agent/internal/domain/skill"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
-	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
@@ -52,7 +52,7 @@ func messagePriority(role, content string) int {
 		return 6
 	}
 	if role == "assistant" && len([]rune(content)) > 5000 {
-		return 2 // low — compressible
+		return 2 // low �?compressible
 	}
 	if role == "tool" {
 		return 4
@@ -117,7 +117,7 @@ func (l *Loop) runToolCalls(
 			switch dec.Action {
 			case security.ActionDeny:
 				msg := fmt.Sprintf("DENIED [%s]: %s", dec.Layer, dec.Reason)
-				observability.Global.PermissionDeny.Add(1)
+				telemetry.IncPermissionDeny()
 				publish(&Event{Type: EventPermission, SubType: "deny", Content: msg, Data: dec, Timestamp: now()})
 				auditLog("permission", tc.Name, dec.Reason, "deny", 0)
 				queue = append(queue, ready{tc: tc, block: msg})
@@ -176,7 +176,7 @@ func (l *Loop) runToolCalls(
 	runOne := func(tc port.ToolCall) toolOutcome {
 		out := toolOutcome{tc: tc}
 		publish(&Event{Type: EventToolCall, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
-		observability.Global.ToolCalls.Add(1)
+		telemetry.IncToolCall()
 
 		// cache hit
 		if l.toolCache != nil {
@@ -184,19 +184,20 @@ func (l *Loop) runToolCalls(
 				out.text = hit
 				out.cached = true
 				out.latency = 0
-				publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(hit, 800) + " [cache]", Timestamp: now()})
+				publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(hit, EventResultMaxChars) + " [cache]", Timestamp: now()})
 				return out
 			}
 		}
 
 		t0 := time.Now()
 		var resText string
-		_ = observability.SpanTool(ctx, tc.Name, func(tctx context.Context) error {
-			resText, _ = l.execTool(tctx, tc.Name, tc.Args)
+		_ = telemetry.SpanTool(ctx, tc.Name, func(tctx context.Context) error {
+			text, _ := l.execTool(tctx, tc.Name, tc.Args)
+			resText = text
 			return nil
 		})
 		out.latency = time.Since(t0)
-		observability.Global.ObserveTool(out.latency)
+		telemetry.ObserveTool(out.latency)
 		resText = l.maybeOffload(ctx, session.ID, tc.Name, resText)
 		out.text = resText
 		out.failed = isToolFail(resText)
@@ -206,8 +207,8 @@ func (l *Loop) runToolCalls(
 		if l.hooks != nil {
 			l.hooks.Emit(ctx, hook.Event{Point: hook.PostToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args, Result: resText})
 		}
-		publish(&Event{Type: EventObservation, SubType: tc.Name, Step: step, Content: truncate(resText, 800), Timestamp: now()})
-		publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(resText, 800), Timestamp: now()})
+		publish(&Event{Type: EventObservation, SubType: tc.Name, Step: step, Content: truncate(resText, EventObservationMaxChars), Timestamp: now()})
+		publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(resText, EventResultMaxChars), Timestamp: now()})
 		return out
 	}
 
@@ -215,7 +216,7 @@ func (l *Loop) runToolCalls(
 		// parallel read-only batch (preserve order of outcomes)
 		results := make([]toolOutcome, len(toRun))
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5) // max 5 concurrent like walicode
+		sem := make(chan struct{}, MaxParallelToolCalls)
 		for i, q := range toRun {
 			wg.Add(1)
 			go func(i int, tc port.ToolCall) {
@@ -255,7 +256,7 @@ func (l *Loop) applyOutcomes(
 			ToolName: o.tc.Name, ToolCallID: callID, Step: step, Priority: pri, CreatedAt: time.Now(),
 			TokenCount: common.EstimateTokens(o.text),
 		}); err != nil {
-			observability.Warnf("tool message save: %v", err)
+			telemetry.Warnf("tool message save: %v", err)
 		}
 		*messages = append(*messages, port.ChatMessage{Role: "tool", Content: obs, Name: o.tc.Name, ToolCallID: callID})
 		decision := "ok"
@@ -264,7 +265,7 @@ func (l *Loop) applyOutcomes(
 			anyFail = true
 			toolFailStreak++
 			if taskAdvance != nil {
-				taskAdvance(false, truncate(o.text, 80))
+				taskAdvance(false, truncate(o.text, EventAdvanceMaxChars))
 			}
 		} else {
 			toolFailStreak = 0
@@ -275,16 +276,15 @@ func (l *Loop) applyOutcomes(
 		if o.cached {
 			decision = "cache"
 		}
-		auditLog("tool_call", o.tc.Name, truncate(o.text, 300), decision, o.latency.Milliseconds())
+		auditLog("tool_call", o.tc.Name, truncate(o.text, AuditDetailMaxChars), decision, o.latency.Milliseconds())
 
 		if o.failed {
-			ref := l.reflect(ctx, fmt.Sprintf("tool %s failed: %s", o.tc.Name, truncate(o.text, 200)), mustJSON(o.tc.Args))
+			ref := l.reflect(ctx, fmt.Sprintf("tool %s failed: %s", o.tc.Name, truncate(o.text, ReflectDetailMaxChars)), mustJSON(o.tc.Args))
 			publish(&Event{Type: EventReflect, Content: ref, Step: step, Timestamp: now()})
-			observability.Global.ReflectTotal.Add(1)
+			telemetry.IncReflect()
 			auditLog("reflect", o.tc.Name, ref, "ok", 0)
-			*messages = append(*messages, port.ChatMessage{Role: "user", Content:
-				"Observation indicated failure. Next turn MUST start with Thought diagnosing the failure, then Action or Final Answer.\n" +
-					"Failure analysis:\n" + ref})
+			*messages = append(*messages, port.ChatMessage{Role: "user", Content: "Observation indicated failure. Next turn MUST start with Thought diagnosing the failure, then Action or Final Answer.\n" +
+				"Failure analysis:\n" + ref})
 		}
 	}
 	return toolFailStreak, anyFail

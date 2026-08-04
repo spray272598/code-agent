@@ -1,0 +1,94 @@
+# Docker Compose profile: server talks to sibling services by hostname.
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "release"
+
+agent:
+  name: "Code-Agent"
+  max_steps: 20
+  timeout_sec: 180
+  token_budget: 32000
+  workspace_root: "/data/workspace"
+  orchestrator: "eino"
+  eino_stream: false
+  eino_graph_resume: true
+  eino_checkpoint_dir: "/data/eino-checkpoints"
+
+llm:
+  provider: "openai_compatible"
+  model: "deepseek-ai/DeepSeek-V3"
+  api_key: ""              # inject LLM_API_KEY
+  api_base: "https://api.siliconflow.cn/v1"
+  use_mock: true           # set LLM_USE_MOCK=false for real model
+
+database:
+  type: "mysql"
+  auto_migrate: true
+  schema_path: "/app/scripts/sql/01_schema.sql"
+  mysql:
+    host: "mysql"
+    port: 3306
+    database: "code_agent"
+    username: "root"
+    password: "123456"
+
+redis:
+  enabled: true
+  host: "redis"
+  port: 6379
+
+rate_limit:
+  enabled: true
+  per_minute: 60
+
+token_quota:
+  enabled: true
+  per_user_per_day: 2000000
+
+storage:
+  enabled: true
+  endpoint: "http://minio:9000"
+  bucket: "code-agent"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  use_path_style: true
+  local_fallback_dir: "/data/objects"
+
+host:
+  mode: "server"
+  prefer_host: false
+  endpoint: "ws://server:8080/ws/host"
+
+otlp:
+  enabled: true
+  endpoint: "jaeger:4318"
+  insecure: true
+  service: "code-agent"
+
+security:
+  api_keys:
+    - "dev-key"
+  path_sandbox: true
+  default_confirm_write: true
+
+mcp:
+  enabled: true
+
+skills:
+  enabled: true
+  dir: "/app/skills"
+
+hooks:
+  enabled: true
+  dir: "/app/hooks"
+
+teams:
+  enabled: true
+  file: "/app/teams/default.yaml"
+
+subagent:
+  enabled: true
+
+logging:
+  level: "info"

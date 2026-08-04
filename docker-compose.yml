@@ -1,74 +1,247 @@
-# 本地依赖：MySQL + Redis + MinIO
+# =============================================================================
+# Code-Agent Docker Compose
+# =============================================================================
+#
+# Profiles:
+#   (none)           : middleware only (mysql, redis, minio, jaeger)
+#   --profile app    : middleware + code-agent server (distroless, production)
+#   --profile dev    : middleware + code-agent server (debian-slim, debug)
+#
+# Usage:
+#   cp .env.example .env        # configure environment variables
+#   docker compose up -d         # start middleware only
+#   docker compose --profile app up -d --build   # full production stack
+#   docker compose --profile dev up -d --build    # full debug stack
+#
+# Services:
+#   MySQL       : localhost:3306     root/<MYSQL_ROOT_PASSWORD>/code_agent
+#   Redis       : localhost:6379
+#   MinIO API   : http://localhost:9000
+#   MinIO UI    : http://localhost:9001
+#   Jaeger UI   : http://localhost:16686
+#   Server      : http://localhost:8080
+# =============================================================================
+
+name: code-agent
+
 services:
+  # =========================================================================
+  # Infrastructure
+  # =========================================================================
+
   mysql:
     image: mysql:8.0
     container_name: code-agent-mysql
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "123456"
-      MYSQL_DATABASE: code_agent
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-code_agent}
     ports:
       - "3306:3306"
     volumes:
+      - mysql_data:/var/lib/mysql
       - ./scripts/sql/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-      - code_agent_mysql:/var/lib/mysql
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --max-connections=500
+      --innodb-buffer-pool-size=256M
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-123456}"]
       interval: 5s
       timeout: 5s
       retries: 20
+      start_period: 10s
+    networks: [code-agent-net]
 
   redis:
     image: redis:7-alpine
     container_name: code-agent-redis
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     ports:
       - "6379:6379"
     volumes:
-      - code_agent_redis:/data
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
+      start_period: 5s
+    networks: [code-agent-net]
 
   minio:
     image: minio/minio:latest
     container_name: code-agent-minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - code_agent_minio:/data
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [code-agent-net]
 
-  # 可选：自动建 bucket（首次 up 后执行一次即可）
+  # MinIO bucket init (runs once and exits)
   minio-init:
     image: minio/mc:latest
+    container_name: code-agent-minio-init
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      sleep 3;
-      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
       mc mb -p local/code-agent || true;
+      mc anonymous set download local/code-agent || true;
       exit 0;
       "
+    restart: "no"
+    networks: [code-agent-net]
 
-  # Jaeger all-in-one: OTLP HTTP 4318, UI http://localhost:16686
+  # Jaeger (OTLP tracing + UI)
   jaeger:
     image: jaegertracing/all-in-one:1.57
     container_name: code-agent-jaeger
+    restart: unless-stopped
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      MEMORY_MAX_TRACES: "50000"
     ports:
-      - "16686:16686"   # UI
+      - "16686:16686"   # Jaeger UI
       - "4317:4317"     # OTLP gRPC
       - "4318:4318"     # OTLP HTTP
+    volumes:
+      - jaeger_data:/go/bin/all-in-one-data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [code-agent-net]
 
+  # =========================================================================
+  # Application Profiles
+  # =========================================================================
+
+  # Production server (distroless, minimal attack surface)
+  server:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: server
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    image: code-agent:local
+    container_name: code-agent-server
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      LLM_USE_MOCK: "${LLM_USE_MOCK:-true}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_API_BASE: "${LLM_API_BASE:-https://api.siliconflow.cn/v1}"
+      LLM_MODEL: "${LLM_MODEL:-deepseek-ai/DeepSeek-V3}"
+      DB_TYPE: mysql
+      REDIS_ENABLED: "${REDIS_ENABLED:-true}"
+      OTLP_ENABLED: "${OTLP_ENABLED:-true}"
+      OTLP_ENDPOINT: "jaeger:4318"
+      CODE_AGENT_API_KEY: "${CODE_AGENT_API_KEY:-dev-key}"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ${PWD}/configs/config.docker.yaml:/app/configs/config.yaml:ro
+      - app_data:/data
+      - ${PWD}/workspace:/data/workspace
+    # distroless has no shell for healthchecks: probe from host
+    # curl -H "X-API-Key: dev-key" http://localhost:8080/health
+    restart: unless-stopped
+    networks: [code-agent-net]
+
+  # Development server (debian-slim with shell for debugging)
+  server-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: server-dev
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    image: code-agent:dev
+    container_name: code-agent-server-dev
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      LLM_USE_MOCK: "${LLM_USE_MOCK:-true}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_API_BASE: "${LLM_API_BASE:-https://api.siliconflow.cn/v1}"
+      LLM_MODEL: "${LLM_MODEL:-deepseek-ai/DeepSeek-V3}"
+      DB_TYPE: mysql
+      REDIS_ENABLED: "${REDIS_ENABLED:-true}"
+      OTLP_ENABLED: "${OTLP_ENABLED:-true}"
+      OTLP_ENDPOINT: "jaeger:4318"
+      CODE_AGENT_API_KEY: "${CODE_AGENT_API_KEY:-dev-key}"
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+    volumes:
+      - ${PWD}/configs/config.docker.yaml:/app/configs/config.yaml:ro
+      - app_data:/data
+      - ${PWD}/workspace:/data/workspace
+      - ${PWD}/logs:/app/logs
+    restart: unless-stopped
+    networks: [code-agent-net]
+
+# =============================================================================
+# Volumes
+# =============================================================================
 volumes:
-  code_agent_mysql:
-  code_agent_redis:
-  code_agent_minio:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  jaeger_data:
+    driver: local
+  app_data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  code-agent-net:
+    driver: bridge

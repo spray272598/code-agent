@@ -49,6 +49,11 @@ type AgentConfig struct {
 	Orchestrator string `yaml:"orchestrator"`
 	// EinoStream enables streaming text_delta from Eino (orchestrator=eino only)
 	EinoStream bool `yaml:"eino_stream"`
+	// EinoGraphResume enables CheckPointStore + ResumeWithData for in-graph HITL (eino only).
+	// Default true when orchestrator=eino.
+	EinoGraphResume *bool `yaml:"eino_graph_resume"`
+	// EinoCheckPointDir durable graph checkpoint dir (default ./data/eino-checkpoints)
+	EinoCheckPointDir string `yaml:"eino_checkpoint_dir"`
 }
 
 type LLMConfig struct {
@@ -323,6 +328,9 @@ func normalize(cfg *Config) {
 	if strings.TrimSpace(cfg.Agent.Orchestrator) == "" {
 		cfg.Agent.Orchestrator = "eino"
 	}
+	if cfg.Agent.EinoCheckPointDir == "" {
+		cfg.Agent.EinoCheckPointDir = "./data/eino-checkpoints"
+	}
 	if cfg.RateLimit.PerMinute <= 0 {
 		cfg.RateLimit.PerMinute = 60
 	}
@@ -338,6 +346,17 @@ func normalize(cfg *Config) {
 	if cfg.Security.MaxBodyBytes <= 0 {
 		cfg.Security.MaxBodyBytes = 2 << 20
 	}
+}
+
+// EinoGraphResumeEnabled returns whether graph-level interrupt resume is on (default true).
+func (c *Config) EinoGraphResumeEnabled() bool {
+	if c == nil {
+		return true
+	}
+	if c.Agent.EinoGraphResume == nil {
+		return true
+	}
+	return *c.Agent.EinoGraphResume
 }
 
 func (c *Config) Addr() string {

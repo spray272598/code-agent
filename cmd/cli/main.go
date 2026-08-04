@@ -16,15 +16,25 @@ import (
 var slashCmds = []string{
 	"/help", "/quit", "/exit", "/continue", "/tools", "/skills", "/mcp",
 	"/clear", "/compact", "/pending", "/approve", "/reject", "/memory", "/metrics",
+	"/status", "/team", "/deep", "/cost",
 }
 
 func main() {
-	base := flag.String("base", "http://127.0.0.1:8080", "server base URL")
+	base := flag.String("base", envOr("CODE_AGENT_BASE", "http://127.0.0.1:8080"), "server base URL")
 	apiKey := flag.String("key", envOr("CODE_AGENT_API_KEY", "dev-key"), "API key")
-	user := flag.String("user", "cli-user", "user id")
+	user := flag.String("user", envOr("CODE_AGENT_USER", "cli-user"), "user id")
 	stream := flag.Bool("stream", true, "use SSE stream")
 	autoApprove := flag.Bool("auto-approve", false, "auto approve write/bash")
+	quiet := flag.Bool("quiet", false, "less chrome on startup")
 	flag.Parse()
+
+	// Health probe with friendly error (ease of use)
+	if err := waitHealth(*base, *apiKey, 3); err != nil {
+		fmt.Fprintf(os.Stderr, "cannot reach server %s: %v\n", *base, err)
+		fmt.Fprintf(os.Stderr, "start:  go run ./cmd/server -config configs/config.yaml\n")
+		fmt.Fprintf(os.Stderr, "or:     powershell -File scripts/try_cli.ps1\n")
+		os.Exit(1)
+	}
 
 	sessionID := ""
 	sess, err := postJSON(*base+"/api/v1/session", *apiKey, map[string]any{
@@ -35,13 +45,21 @@ func main() {
 			sessionID, _ = d["sessionId"].(string)
 		}
 	}
-	fmt.Printf("code-agent CLI  base=%s  session=%s\n", *base, sessionID)
-	fmt.Println("hybrid: Eino orchestration (server) + GuardedTool security | /pending /approve /continue")
-	fmt.Println("type /help ; /prefix? for complete")
-	fmt.Println("---")
+	if !*quiet {
+		fmt.Println("┌─ code-agent CLI ─────────────────────────────────")
+		fmt.Printf("│ base=%s\n", *base)
+		fmt.Printf("│ session=%s  user=%s  stream=%v  autoApprove=%v\n", sessionID, *user, *stream, *autoApprove)
+		fmt.Println("│ Eino ReAct + GuardedTool  |  HITL: /pending → y  |  /help")
+		fmt.Println("│ tips: /team <goal>  ·  /deep <goal>  ·  /status  ·  /prefix?")
+		fmt.Println("└──────────────────────────────────────────────────")
+	} else {
+		fmt.Printf("cli session=%s\n", sessionID)
+	}
 
 	lastPermID := ""
 	in := bufio.NewScanner(os.Stdin)
+	// larger line buffer for pasting patches
+	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for {
 		fmt.Print("> ")
 		if !in.Scan() {
@@ -143,14 +161,42 @@ func main() {
 			continue
 		}
 		if line == "/help" {
-			fmt.Println("Slash:")
-			for _, c := range slashCmds {
-				fmt.Println(" ", c)
-			}
-			fmt.Println("  /approve [id] [once|session]  — HITL approve + inline continue")
-			fmt.Println("  /pending                      — list confirmations")
-			fmt.Println("  y / yes                       — same as /continue after confirm")
+			fmt.Println(`Slash commands:
+  /help                         this text
+  /status                       session + health + metrics snapshot
+  /pending                      list HITL confirmations
+  /approve [id] [once|session]  approve + inline continue
+  /reject [id]                  reject pending
+  y / yes / /continue           resume after approve
+  /tools /skills /mcp           inventory
+  /memory /metrics /cost        memory & usage
+  /compact /clear               context
+  /team <goal>                  multi-agent explore+verify (eino)
+  /deep <goal>                  sequential Plan→Act→Reflect
+  /quit                         exit
+Tips: paste multi-line carefully; after CONFIRM type y
+Complete: type /pre?  e.g. /ap? → /approve`)
 			continue
+		}
+		if line == "/status" {
+			printStatus(*base, *apiKey, sessionID)
+			continue
+		}
+		if strings.HasPrefix(line, "/team ") || line == "/team" {
+			goal := strings.TrimSpace(strings.TrimPrefix(line, "/team"))
+			if goal == "" {
+				fmt.Println("usage: /team <goal>   e.g. /team review auth middleware")
+				continue
+			}
+			line = "/team " + goal
+		}
+		if strings.HasPrefix(line, "/deep ") || line == "/deep" {
+			goal := strings.TrimSpace(strings.TrimPrefix(line, "/deep"))
+			if goal == "" {
+				fmt.Println("usage: /deep <goal>")
+				continue
+			}
+			line = "/deep " + goal
 		}
 
 		// interactive short confirm
@@ -299,7 +345,62 @@ func handleEvent(event, data string, sessionID, lastPerm *string) {
 	case "error":
 		fmt.Printf("\n✖ %v\n", m["content"])
 	case "done":
-		fmt.Println()
+		if d, ok := m["data"].(map[string]any); ok {
+			if tc, ok := d["toolCalls"]; ok {
+				fmt.Printf("\n✓ done  tools=%v  tokens~%v  orch=%v\n", tc, d["tokenEst"], d["orchestrator"])
+			} else {
+				fmt.Println()
+			}
+		} else {
+			fmt.Println()
+		}
+	case "resume":
+		fmt.Printf("\n↻ resume %v %v\n", m["subType"], trim(fmt.Sprint(m["content"]), 80))
+	case "checkpoint":
+		fmt.Printf("\n💾 checkpoint %v\n", m["subType"])
+	}
+}
+
+func waitHealth(base, key string, attempts int) error {
+	var last error
+	for i := 0; i < attempts; i++ {
+		req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(base, "/")+"/health", nil)
+		if key != "" {
+			req.Header.Set("X-API-Key", key)
+		}
+		client := &http.Client{Timeout: 2 * time.Second}
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return nil
+			}
+			last = fmt.Errorf("http %d", resp.StatusCode)
+		} else {
+			last = err
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	return last
+}
+
+func printStatus(base, key, sessionID string) {
+	fmt.Printf("session=%s\n", sessionID)
+	if body, err := getJSON(base+"/health", key); err == nil {
+		pretty, _ := json.MarshalIndent(body, "", "  ")
+		fmt.Println("health:", string(pretty))
+	} else {
+		fmt.Println("health err:", err)
+	}
+	if body, err := getJSON(base+"/api/v1/metrics", key); err == nil {
+		pretty, _ := json.MarshalIndent(body["data"], "", "  ")
+		fmt.Println("metrics:", string(pretty))
+	}
+	if sessionID != "" {
+		if body, err := getJSON(base+"/api/v1/permission/pending?sessionId="+sessionID, key); err == nil {
+			pretty, _ := json.MarshalIndent(body["data"], "", "  ")
+			fmt.Println("pending:", string(pretty))
+		}
 	}
 }
 

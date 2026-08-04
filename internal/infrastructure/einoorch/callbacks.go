@@ -3,6 +3,7 @@ package einoorch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -22,10 +23,42 @@ import (
 // EventSink publishes engine events (SSE).
 type EventSink func(*engine.Event)
 
-// runStats accumulates tool metrics during one Eino run.
+// runStats accumulates tool + token metrics during one Eino run.
 type runStats struct {
-	toolCalls atomic.Int32
-	toolErrs  atomic.Int32
+	toolCalls        atomic.Int32
+	toolErrs         atomic.Int32
+	promptTokens     atomic.Int64
+	completionTokens atomic.Int64
+	totalTokens      atomic.Int64
+}
+
+// TokenUsed returns measured total tokens when available, else prompt+completion.
+func (s *runStats) TokenUsed() int {
+	if s == nil {
+		return 0
+	}
+	if t := s.totalTokens.Load(); t > 0 {
+		return int(t)
+	}
+	return int(s.promptTokens.Load() + s.completionTokens.Load())
+}
+
+// addUsage records model TokenUsage from callbacks (best-effort, thread-safe).
+func (s *runStats) addUsage(u *model.TokenUsage) {
+	if s == nil || u == nil {
+		return
+	}
+	if u.PromptTokens > 0 {
+		s.promptTokens.Add(int64(u.PromptTokens))
+	}
+	if u.CompletionTokens > 0 {
+		s.completionTokens.Add(int64(u.CompletionTokens))
+	}
+	if u.TotalTokens > 0 {
+		s.totalTokens.Add(int64(u.TotalTokens))
+	} else if u.PromptTokens > 0 || u.CompletionTokens > 0 {
+		s.totalTokens.Add(int64(u.PromptTokens + u.CompletionTokens))
+	}
 }
 
 // agentOptions builds compose callbacks that map Eino model/tool lifecycle → SSE events.
@@ -51,7 +84,11 @@ func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
 			return ctx
 		},
 		OnEnd: func(ctx context.Context, info *callbacks.RunInfo, output *model.CallbackOutput) context.Context {
-			if output == nil || output.Message == nil {
+			if output == nil {
+				return ctx
+			}
+			stats.addUsage(output.TokenUsage)
+			if output.Message == nil {
 				return ctx
 			}
 			msg := output.Message
@@ -68,7 +105,7 @@ func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
 						Content: tc.Function.Name, Data: args, Timestamp: now(),
 					})
 				}
-			} else if c := truncate(msg.Content, 200); c != "" {
+			} else if c := truncate(msg.Content, StreamContentMaxChars); c != "" {
 				publish(&engine.Event{
 					Type: engine.EventThought, Content: "model: " + c, Timestamp: now(),
 				})
@@ -76,27 +113,68 @@ func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
 			return ctx
 		},
 		OnEndWithStreamOutput: func(ctx context.Context, info *callbacks.RunInfo, output *schema.StreamReader[*model.CallbackOutput]) context.Context {
-			// consume stream async for text deltas (best-effort)
+			// consume stream async: text deltas + tool_call name fragments + token usage
 			go func() {
 				defer output.Close()
+				// dedupe partial tool-call name events per stream
+				seenTC := map[string]bool{}
 				for {
 					chunk, err := output.Recv()
 					if err != nil {
 						return
 					}
-					if chunk == nil || chunk.Message == nil {
+					if chunk == nil {
+						continue
+					}
+					stats.addUsage(chunk.TokenUsage)
+					if chunk.Message == nil {
 						continue
 					}
 					if t := chunk.Message.Content; t != "" {
 						publish(&engine.Event{Type: engine.EventTextDelta, Content: t, Timestamp: now()})
 					}
 					for _, tc := range chunk.Message.ToolCalls {
-						if tc.Function.Name != "" {
-							publish(&engine.Event{
-								Type: engine.EventToolCall, SubType: tc.Function.Name,
-								Content: tc.Function.Name, Timestamp: now(),
-							})
+						name := tc.Function.Name
+						if name == "" {
+							// partial arg-only delta: still surface as tool_call when index known
+							if tc.Index != nil {
+								key := fmt.Sprintf("idx:%d", *tc.Index)
+								if !seenTC[key] {
+									seenTC[key] = true
+									publish(&engine.Event{
+										Type: engine.EventToolCall, SubType: "partial",
+										Content: "tool_call_delta",
+										Data: map[string]any{
+											"index":      *tc.Index,
+											"args_delta": tc.Function.Arguments,
+										},
+										Timestamp: now(),
+									})
+								}
+							}
+							continue
 						}
+						if seenTC[name] {
+							// append arg fragment only when meaningful
+							if tc.Function.Arguments != "" {
+								publish(&engine.Event{
+									Type: engine.EventToolCall, SubType: name,
+									Content:   "args_delta",
+									Data:      map[string]any{"args_delta": tc.Function.Arguments},
+									Timestamp: now(),
+								})
+							}
+							continue
+						}
+						seenTC[name] = true
+						args := map[string]any{}
+						if tc.Function.Arguments != "" {
+							_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+						}
+						publish(&engine.Event{
+							Type: engine.EventToolCall, SubType: name,
+							Content: name, Data: args, Timestamp: now(),
+						})
 					}
 				}
 			}()
@@ -109,7 +187,7 @@ func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
 			name := nameOf(info)
 			argsPreview := ""
 			if input != nil {
-				argsPreview = truncate(input.ArgumentsInJSON, 300)
+				argsPreview = truncate(input.ArgumentsInJSON, ArgsPreviewMaxChars)
 			}
 			publish(&engine.Event{
 				Type: engine.EventToolCall, SubType: name, Content: "exec " + name,
@@ -130,20 +208,20 @@ func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
 			// permission events
 			if stringsHasPrefix(resp, "CONFIRM") {
 				publish(&engine.Event{
-					Type: engine.EventPermission, SubType: "confirm", Content: truncate(resp, 500),
+					Type: engine.EventPermission, SubType: "confirm", Content: truncate(resp, ConfirmRespMaxChars),
 					Timestamp: now(), Completed: true,
 				})
 			} else if stringsHasPrefix(resp, "DENIED") {
 				publish(&engine.Event{
-					Type: engine.EventPermission, SubType: "deny", Content: truncate(resp, 400),
+					Type: engine.EventPermission, SubType: "deny", Content: truncate(resp, DenyRespMaxChars),
 					Timestamp: now(),
 				})
 			}
 			publish(&engine.Event{
-				Type: engine.EventObservation, SubType: name, Content: truncate(resp, 800), Timestamp: now(),
+				Type: engine.EventObservation, SubType: name, Content: truncate(resp, EventObservationMaxChars), Timestamp: now(),
 			})
 			publish(&engine.Event{
-				Type: engine.EventToolResult, SubType: name, Content: truncate(resp, 800), Timestamp: now(),
+				Type: engine.EventToolResult, SubType: name, Content: truncate(resp, EventResultMaxChars), Timestamp: now(),
 			})
 			return ctx
 		},

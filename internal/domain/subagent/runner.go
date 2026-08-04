@@ -11,7 +11,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
-	"github.com/spray272598/code-agent/internal/observability"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
@@ -265,7 +265,7 @@ Do not invent tools. Stay concise.`, spec.Role)
 		resp, err := r.LLM.Generate(ctx, &port.ChatRequest{
 			SystemPrompt: sys, Messages: messages, Temperature: 0.2,
 		})
-		observability.Global.ObserveLLM(time.Since(t0))
+		telemetry.ObserveLLM(time.Since(t0))
 		if err != nil {
 			return "", steps, tokens, err
 		}
@@ -285,7 +285,7 @@ Do not invent tools. Stay concise.`, spec.Role)
 		messages = append(messages, port.ChatMessage{Role: "assistant", Content: resp.Content})
 		for _, tc := range calls {
 			steps++
-			observability.Global.ToolCalls.Add(1)
+			telemetry.IncToolCall()
 			r.emit(Progress{ID: spec.ID, Role: spec.Role, Status: "tool", Message: tc.Name, Data: tc.Args})
 			t := reg.Get(tc.Name)
 			var text string
@@ -294,7 +294,7 @@ Do not invent tools. Stay concise.`, spec.Role)
 			} else {
 				tt := time.Now()
 				res, err := t.Execute(ctx, tc.Args)
-				observability.Global.ObserveTool(time.Since(tt))
+				telemetry.ObserveTool(time.Since(tt))
 				if err != nil {
 					text = err.Error()
 				} else {

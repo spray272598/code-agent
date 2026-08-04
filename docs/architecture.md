@@ -13,9 +13,11 @@ internal/api/dto         edge contracts only (not imported by domain)
 
 ## Dependency rule
 
-- **Domain never imports infrastructure or trigger.**
+- **Domain never imports infrastructure, trigger, or `go.opentelemetry.io/*`.**
 - Domain defines ports (`adapter/port` interfaces); infrastructure implements them.
 - Application orchestrates domain services; Trigger maps DTO ↔ application.
+- **Observability**: domain only uses `domain/telemetry` (port + Nop). Bootstrap wires  
+  `telemetry.Set(observability.DomainBridge{})` so metrics/OTLP stay outside domain.
 
 ## Ports (examples)
 
@@ -26,6 +28,7 @@ internal/api/dto         edge contracts only (not imported by domain)
 | `IMemoryRepository` | `domain/memory/adapter/port` | memory / MySQL / SQLite |
 | `IMCPManagerPort` | `domain/mcp/adapter/port` | `infrastructure/mcp.Manager` |
 | `blob.Store` | `domain/blob` | MinIO / local FS |
+| `telemetry.Sink` | `domain/telemetry` | `observability.DomainBridge` (bootstrap) |
 
 ## Agent Loop decomposition
 
@@ -36,7 +39,8 @@ internal/api/dto         edge contracts only (not imported by domain)
 | **ToolExecutor** | `engine/tool_batch.go` | Validate, permission, hook abort, parallel read tools |
 | **TokenManager** | `engine/token_manager.go` | Budget pressure + mid-loop trim |
 | **HistoryLoader** | `engine/history.go` | Lazy history load (recent first, full on compress) |
-| **Eino Runner** | `infrastructure/einoorch/` | Optional ReAct graph; **GuardedTool** owns security cross-cuts |
+| **Eino Runner** | `infrastructure/einoorch/` | Primary ReAct graph; **GuardedTool** owns security cross-cuts |
+| **Graph resume** | `einoorch/checkpoint_store.go` + `agent_build.go` | CheckPointStore + ResumeWithData；失败回退 app-level HITL |
 | **mapsToSchema** | `einoorch/messages.go` | History → Eino msgs **including tool rows** |
 | **PromptBuilder** | `einoorch/prompt.go` | Dynamic system: tools + skill + memory + budget |
 

@@ -30,6 +30,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/team"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/worktree"
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
 	"github.com/spray272598/code-agent/internal/infrastructure/einoorch"
@@ -40,6 +41,7 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
+	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/trigger/ws"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
@@ -69,6 +71,9 @@ func Build(cfg *config.Config) (*App, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+
+	// Domain must not import infrastructure/observability — wire the port here.
+	telemetry.Set(observability.DomainBridge{})
 
 	var sessionRepo sessrepo.ISessionRepository
 	var messageRepo sessrepo.IMessageRepository
@@ -291,7 +296,9 @@ func Build(cfg *config.Config) (*App, error) {
 		er := einoorch.NewRunner(einoorch.Config{
 			APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
 			MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
-			TokenBudget: cfg.Agent.TokenBudget,
+			TokenBudget:      cfg.Agent.TokenBudget,
+			GraphResume:     cfg.EinoGraphResumeEnabled(),
+			GraphCheckPointDir: cfg.Agent.EinoCheckPointDir,
 		}, reg, perm, sessionRepo, messageRepo)
 		er.SetHooks(hooks)
 		er.SetAudit(auditRepo)
@@ -301,7 +308,8 @@ func Build(cfg *config.Config) (*App, error) {
 		er.SetCompressorLLM(contextx.NewSummarizer(llmPort))
 		runner = er
 		orch = "eino"
-		log.Printf("[bootstrap] orchestrator=eino (primary) | GuardedTool cross-cuts on ALL tools incl. MCP\n")
+		log.Printf("[bootstrap] orchestrator=eino graph_resume=%v checkpoint_dir=%s | GuardedTool on ALL tools\n",
+			cfg.EinoGraphResumeEnabled(), cfg.Agent.EinoCheckPointDir)
 	} else {
 		loop := engine.NewLoop(llmPort, reg, sessionRepo, messageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
 		loop.SetSkills(skillSvc)

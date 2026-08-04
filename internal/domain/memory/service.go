@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
@@ -119,11 +120,13 @@ func (s *Service) MaybeExtractFromUserCorrection(ctx context.Context, userID, pr
 	if !hit {
 		return
 	}
-	_ = s.Save(ctx, &memport.MemoryItem{
+	if err := s.Save(ctx, &memport.MemoryItem{
 		UserID: userID, ProjectID: projectID, Scope: memport.ScopeUser,
 		Category: "correction", Content: truncateRunes(text, 300),
 		Importance: 70, Source: "auto:" + sessionID,
-	})
+	}); err != nil {
+		log.Printf("[error] memory auto-save correction: %v", err)
+	}
 }
 
 func mergeUnique(base, a, b []memport.MemoryItem, limit int) []memport.MemoryItem {
@@ -155,5 +158,3 @@ func truncateRunes(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
-
-

@@ -18,18 +18,18 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	"github.com/spray272598/code-agent/internal/domain/security"
-	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
+	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/subagent"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
-	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/types/common"
-	"go.opentelemetry.io/otel/attribute"
 )
 
-const maxToolResultChars = 4000
+// maxToolResultChars aliases the package constant for local call sites.
+const maxToolResultChars = MaxToolResultChars
 
 type Loop struct {
 	llm          port.ILLMPort
@@ -67,10 +67,10 @@ func NewLoop(
 	maxRounds, tokenBudget int,
 ) *Loop {
 	if maxRounds <= 0 {
-		maxRounds = 20
+		maxRounds = DefaultMaxRounds
 	}
 	if tokenBudget <= 0 {
-		tokenBudget = 32000
+		tokenBudget = DefaultTokenBudget
 	}
 	comp := contextx.NewCompressor(tokenBudget / 2)
 	comp.SetSummarizer(contextx.NewSummarizer(llm))
@@ -93,7 +93,7 @@ func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
 }
 func (l *Loop) SetAudit(a audit.Repository)                  { l.audit = a }
 func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository) { l.summaries = s }
-func (l *Loop) SetSubRunner(r *subagent.Runner) { l.subRunner = r }
+func (l *Loop) SetSubRunner(r *subagent.Runner)              { l.subRunner = r }
 func (l *Loop) SetBlobStore(s blob.Store, threshold int) {
 	l.blobs = s
 	if threshold <= 0 {
@@ -108,8 +108,8 @@ func (l *Loop) maybeOffload(ctx context.Context, sessionID, toolName, resText st
 	}
 	or := blob.OffloadIfLarge(ctx, l.blobs, sessionID, toolName, resText, l.blobThresh)
 	if or.Offloaded {
-		observability.Global.BlobOffload.Add(1)
-		observability.Trace.Event(map[string]any{
+		telemetry.IncBlobOffload()
+		telemetry.TraceEvent(map[string]any{
 			"event": "blob_offload", "session": sessionID, "tool": toolName, "bytes": or.Bytes, "key": or.ObjectKey,
 		})
 		return or.Preview
@@ -126,9 +126,9 @@ You MUST reason actively before acting. Each assistant turn uses this format:
 
 Thought: <your analysis of the goal, what you know, what to do next>
 Action: {"name":"tool_name","args":{...}}
-  — or multiple tools: Action: [{"name":"...","args":{...}}, ...]
+  �?or multiple tools: Action: [{"name":"...","args":{...}}, ...]
     (read-only tools execute in parallel; write/bash serially)
-  — pure JSON tool call(s) without the Action: label is also accepted
+  �?pure JSON tool call(s) without the Action: label is also accepted
 Final Answer: <user-facing answer when no more tools are needed>
 
 After tools run, you will receive Observation(...): results. Then emit a new Thought and either another Action or Final Answer.
@@ -153,10 +153,10 @@ type RunOptions struct {
 }
 
 func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput string, eventCh chan<- *Event, opts RunOptions) (*Result, error) {
-	ctx, span := observability.StartSpan(ctx, "agent.run",
-		attribute.String("session.id", session.ID),
-		attribute.String("user.id", session.UserID),
-	)
+	ctx, span := telemetry.StartSpan(ctx, "agent.run", map[string]string{
+		"session.id": session.ID,
+		"user.id":    session.UserID,
+	})
 	defer span.End()
 
 	var droppedEvents int
@@ -180,14 +180,14 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			droppedEvents++
 		case <-timer.C:
 			droppedEvents++
-			observability.Global.ChatErrors.Add(1) // reuse counter; SSE drop signal
+			telemetry.IncChatError() // reuse counter; SSE drop signal
 			if critical {
 				// last-ditch: try once more without timeout using default case
 				select {
 				case eventCh <- ev:
 					droppedEvents--
 				default:
-					observability.Warnf("sse drop critical event type=%s session=%s", ev.Type, session.ID)
+					telemetry.Warnf("sse drop critical event type=%s session=%s", ev.Type, session.ID)
 				}
 			}
 		}
@@ -200,7 +200,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			UserID: session.UserID, SessionID: session.ID,
 			Action: action, Tool: toolName, Detail: detail, Decision: decision, LatencyMs: latencyMs,
 		}); err != nil {
-			observability.Warnf("audit append: %v", err)
+			telemetry.Warnf("audit append: %v", err)
 		}
 	}
 	saveMsg := func(m *sessmodel.Message) {
@@ -208,12 +208,12 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			return
 		}
 		if err := l.messages.Save(ctx, m); err != nil {
-			observability.Warnf("message save session=%s role=%s: %v", session.ID, m.Role, err)
+			telemetry.Warnf("message save session=%s role=%s: %v", session.ID, m.Role, err)
 		}
 	}
 	saveSess := func() error {
 		if err := l.sessions.Save(ctx, session); err != nil {
-			observability.Errorf("session save %s: %v", session.ID, err)
+			telemetry.Errorf("session save %s: %v", session.ID, err)
 			return err
 		}
 		return nil
@@ -228,7 +228,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	if l.hooks != nil {
 		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionStart, SessionID: session.ID})
 	}
-	// wire subagent progress → SSE
+	// wire subagent progress �?SSE
 	if l.subRunner != nil {
 		l.subRunner.OnProgress = func(p subagent.Progress) {
 			publish(&Event{
@@ -271,14 +271,14 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	// Lazy history: recent window first; full load only when compress pressure
 	history, fullLoad, histErr := l.histLoader.Load(ctx, session.ID, opts.ForceCompact, session.MessageCount)
 	if histErr != nil {
-		observability.Warnf("history load: %v", histErr)
+		telemetry.Warnf("history load: %v", histErr)
 	}
 	priorSummary := ""
 	if l.summaries != nil {
 		var sumErr error
 		priorSummary, sumErr = l.summaries.Get(ctx, session.ID)
 		if sumErr != nil {
-			observability.Warnf("summary get: %v", sumErr)
+			telemetry.Warnf("summary get: %v", sumErr)
 		}
 	}
 	if opts.ForceCompact || l.compressor.Needs(history) {
@@ -287,22 +287,22 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		}
 		// ensure full history when compressing
 		if !fullLoad {
-			if full, err := l.messages.ListAsMaps(ctx, session.ID, 120); err == nil && len(full) > len(history) {
+			if full, err := l.messages.ListAsMaps(ctx, session.ID, DefaultHistoryLimit); err == nil && len(full) > len(history) {
 				history = full
 			}
 		}
-		useSum := opts.ForceCompact || len(history) > 16 || estimateMaps(history) > l.tokenBudget/3
+		useSum := opts.ForceCompact || len(history) > DefaultCompactThreshold || estimateMaps(history)*BudgetPressureRatio > l.tokenBudget
 		cr := l.compressor.CompressLevels(ctx, history, priorSummary, useSum)
 		history = cr.History
 		if cr.Summary != "" && l.summaries != nil {
 			if err := l.summaries.Save(ctx, session.ID, cr.Summary, common.EstimateTokens(cr.Summary)); err != nil {
-				observability.Warnf("summary save: %v", err)
+				telemetry.Warnf("summary save: %v", err)
 			}
 		}
-		observability.Global.CompressTotal.Add(1)
+		telemetry.IncCompress()
 		publish(&Event{Type: EventCompress, Content: fmt.Sprintf("compress %s saved~%d fullLoad=%v", cr.Level, cr.Saved, fullLoad), Data: map[string]any{"level": cr.Level, "summary": cr.Summary != "", "fullLoad": fullLoad}, Timestamp: now()})
 		auditLog("compress", "", cr.Level, "ok", 0)
-		observability.Trace.Event(map[string]any{"event": "compress", "session": session.ID, "level": cr.Level, "saved": cr.Saved})
+		telemetry.TraceEvent(map[string]any{"event": "compress", "session": session.ID, "level": cr.Level, "saved": cr.Saved})
 	}
 
 	// skill tools: merge depends allowlists
@@ -343,7 +343,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		if memBlock != "" {
 			sys += "\n" + memBlock
 			publish(&Event{Type: EventThought, Content: "memory injected", Timestamp: now()})
-			observability.Global.MemoryReads.Add(1)
+			telemetry.IncMemoryRead()
 		}
 	}
 	if taskPlan != nil {
@@ -365,13 +365,13 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	lastSig, same := "", 0
 	toolFailStreak := 0
 
-	// resume approved tool → Observation, then continue ReAct
+	// resume approved tool �?Observation, then continue ReAct
 	if l.perm != nil && continuing {
 		if r := l.perm.TakeReadyResume(session.ID); r != nil {
 			publish(&Event{Type: EventResume, SubType: r.Tool, Content: "resume " + r.Tool, Timestamp: now()})
 			t0 := time.Now()
 			resText, _ := l.execTool(ctx, r.Tool, r.Args)
-			observability.Global.ObserveTool(time.Since(t0))
+			telemetry.ObserveTool(time.Since(t0))
 			resText = l.maybeOffload(ctx, session.ID, r.Tool, resText)
 			totalTools++
 			obs := FormatObservation(r.Tool, resText)
@@ -410,7 +410,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			}
 			if len(messages) > 10 {
 				messages = l.tokens.TrimMessages(messages, 6)
-				observability.Global.CompressTotal.Add(1)
+				telemetry.IncCompress()
 				auditLog("compress", "", "mid_loop_budget", "ok", 0)
 			}
 			if l.tokens.Exhausted(totalTokens) {
@@ -421,14 +421,16 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		}
 
 		tLLM := time.Now()
-		llmCtx, llmSpan := observability.StartSpan(ctx, "llm.generate", attribute.Int("step", step))
-		resp, err := l.llm.Generate(llmCtx, &port.ChatRequest{
+		_, llmSpan := telemetry.StartSpan(ctx, "llm.generate", map[string]string{
+			"step": fmt.Sprintf("%d", step),
+		})
+		resp, err := l.llm.Generate(ctx, &port.ChatRequest{
 			SystemPrompt: sys,
 			Messages:     messages,
-			Temperature:  0.2,
+			Temperature:  DefaultTemperature,
 		})
 		llmSpan.End()
-		observability.Global.ObserveLLM(time.Since(tLLM))
+		telemetry.ObserveLLM(time.Since(tLLM))
 		if err != nil {
 			publish(&Event{Type: EventError, SubType: "llm", Content: err.Error(), Completed: true, Timestamp: now()})
 			auditLog("error", "llm", err.Error(), "fail", time.Since(tLLM).Milliseconds())
@@ -461,7 +463,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			if taskPlan != nil {
 				pass, gaps := taskPlan.Review()
 				if !pass && step < l.maxRounds {
-					msg := "Plan review: incomplete steps — " + strings.Join(gaps, "; ") +
+					msg := "Plan review: incomplete steps �?" + strings.Join(gaps, "; ") +
 						". Emit Thought then Action for remaining work, or Final Answer explaining why skipped."
 					publish(&Event{Type: EventReview, Content: msg, Data: taskPlan, Timestamp: now()})
 					auditLog("review", "", msg, "retry", 0)
@@ -494,7 +496,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			if same >= 2 {
 				ref := l.reflect(ctx, "repeated identical tool calls", lastSig)
 				publish(&Event{Type: EventReflect, Content: ref, Timestamp: now()})
-				observability.Global.ReflectTotal.Add(1)
+				telemetry.IncReflect()
 				final = "stopped: repeated tool calls\n" + ref
 				publish(&Event{Type: EventError, SubType: "loop", Content: final, Completed: true, Timestamp: now()})
 				break
@@ -547,11 +549,11 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		// persistence failure is serious but still return response to client
 		publish(&Event{Type: EventError, SubType: "persist", Content: "session save failed: " + err.Error(), Timestamp: now()})
 	}
-	observability.Global.TokensTotal.Add(int64(totalTokens))
+	telemetry.AddTokens(int64(totalTokens))
 	if droppedEvents > 0 {
-		observability.Warnf("session=%s sse dropped_events=%d", session.ID, droppedEvents)
+		telemetry.Warnf("session=%s sse dropped_events=%d", session.ID, droppedEvents)
 	}
-	observability.Trace.Event(map[string]any{
+	telemetry.TraceEvent(map[string]any{
 		"event": "done", "session": session.ID, "tools": totalTools, "tokens": totalTokens, "sseDropped": droppedEvents,
 	})
 	if l.hooks != nil {
@@ -580,8 +582,8 @@ func (l *Loop) reflect(ctx context.Context, problem, detail string) string {
 		Messages: []port.ChatMessage{{
 			Role: "user", Content: "Problem: " + problem + "\nDetail: " + detail,
 		}},
-		Temperature: 0.2,
-		MaxTokens:   200,
+		Temperature: DefaultTemperature,
+		MaxTokens:   ReflectMaxTokens,
 	})
 	if err != nil || resp == nil || strings.TrimSpace(resp.Content) == "" {
 		return "Failure analysis: check path/args; try glob/grep to locate targets; avoid repeating the same call."

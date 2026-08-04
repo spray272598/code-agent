@@ -672,7 +672,7 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, errMap(err))
 			return
 		}
-		observability.Global.MemoryWrites.Add(1)
+		observability.Current().AddMemoryWrites(1)
 		writeJSON(w, 200, map[string]any{"code": "0000", "data": item})
 	default:
 		writeJSON(w, 405, map[string]any{"code": "405"})
@@ -680,7 +680,7 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"code": "0000", "data": observability.Global.Snapshot()})
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": observability.Current().Snapshot()})
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {

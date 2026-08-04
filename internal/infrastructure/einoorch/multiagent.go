@@ -30,9 +30,11 @@ func NewMultiAgent(parent *Runner) *MultiAgent {
 }
 
 type multiResult struct {
-	Role   string
-	Output string
-	Err    string
+	Role      string
+	Output    string
+	Err       string
+	ToolCalls int
+	TokenUsed int
 }
 
 // RunParallel launches explore + verify (or general) Eino agents concurrently.
@@ -62,9 +64,9 @@ func (m *MultiAgent) RunParallel(
 	})
 
 	roles := []struct {
-		role    string
-		prompt  string
-		tools   []string // empty = all
+		role   string
+		prompt string
+		tools  []string // empty = all
 	}{
 		{"explore", "Investigate and gather facts (read-only preferred):\n" + goal, []string{"read_file", "glob", "grep", "memory_search"}},
 		{"verify", "Verify findings, list risks and checks:\n" + goal, []string{"read_file", "grep", "glob", "bash"}},
@@ -75,6 +77,7 @@ func (m *MultiAgent) RunParallel(
 		mu   sync.Mutex
 		outs []multiResult
 	)
+	totalTools, totalTokens := 0, 0
 	for _, r := range roles {
 		wg.Add(1)
 		go func(role, prompt string, allow []string) {
@@ -83,8 +86,8 @@ func (m *MultiAgent) RunParallel(
 				Type: engine.EventSubAgent, SubType: role,
 				Content: "start " + role, Timestamp: nowMs(),
 			})
-			text, err := m.runOne(ctx, session.ID, prompt, allow, opts.AutoApprove, publish)
-			mr := multiResult{Role: role, Output: text}
+			text, tools, tokens, err := m.runOne(ctx, session.ID, prompt, allow, opts.AutoApprove, publish)
+			mr := multiResult{Role: role, Output: text, ToolCalls: tools, TokenUsed: tokens}
 			if err != nil {
 				mr.Err = err.Error()
 				if mr.Output == "" {
@@ -93,10 +96,12 @@ func (m *MultiAgent) RunParallel(
 			}
 			mu.Lock()
 			outs = append(outs, mr)
+			totalTools += tools
+			totalTokens += tokens
 			mu.Unlock()
 			publish(&engine.Event{
 				Type: engine.EventSubAgent, SubType: role,
-				Content: "done " + role + ": " + truncate(text, 120), Timestamp: nowMs(),
+				Content: "done " + role + ": " + truncate(text, SubAgentDoneMaxChars), Timestamp: nowMs(),
 			})
 		}(r.role, r.prompt, r.tools)
 	}
@@ -108,7 +113,7 @@ func (m *MultiAgent) RunParallel(
 	for _, o := range outs {
 		mergeIn.WriteString("### " + o.Role + "\n" + o.Output + "\n\n")
 	}
-	final, err := m.runOne(ctx, session.ID, mergeIn.String(), nil, opts.AutoApprove, publish)
+	final, mergeTools, mergeTokens, err := m.runOne(ctx, session.ID, mergeIn.String(), nil, opts.AutoApprove, publish)
 	if err != nil && final == "" {
 		final = "merge error: " + err.Error()
 	}
@@ -120,16 +125,26 @@ func (m *MultiAgent) RunParallel(
 		}
 		final = b.String()
 	}
+	totalTools += mergeTools
+	totalTokens += mergeTokens
+	if totalTokens <= 0 {
+		// heuristic fallback: all role outputs + merge prompt/answer
+		for _, o := range outs {
+			totalTokens += common.EstimateTokens(o.Output)
+		}
+		totalTokens += common.EstimateTokens(final) + common.EstimateTokens(goal)
+	}
 
 	m.parent.persistAssistant(ctx, session, final)
 	publish(&engine.Event{Type: engine.EventAnswer, Content: final, Completed: true, Timestamp: nowMs()})
 	publish(&engine.Event{Type: engine.EventDone, Content: final, Completed: true, Data: map[string]any{
 		"orchestrator": "eino-multi", "agents": len(outs),
+		"toolCalls": totalTools, "tokenEst": totalTokens,
 	}, Timestamp: nowMs()})
 
 	return &engine.Result{
 		SessionID: session.ID, Response: final, Steps: len(outs) + 1,
-		ToolCalls: len(outs), TokenUsed: common.EstimateTokens(final),
+		ToolCalls: totalTools, TokenUsed: totalTokens,
 	}, nil
 }
 
@@ -151,7 +166,7 @@ func (m *MultiAgent) RunDeep(
 	phases := deepagent.Expand(goal)
 	publish(&engine.Event{
 		Type: engine.EventSubAgent, SubType: "deep-start",
-		Content: fmt.Sprintf("DeepAgent phases=%d goal=%s", len(phases), truncate(goal, 80)),
+		Content:   fmt.Sprintf("DeepAgent phases=%d goal=%s", len(phases), truncate(goal, DeepGoalMaxChars)),
 		Timestamp: nowMs(),
 	})
 
@@ -160,6 +175,7 @@ func (m *MultiAgent) RunDeep(
 	type part struct{ ID, Name, Output string }
 	var parts []part
 	steps := 0
+	totalTools, totalTokens := 0, 0
 	for _, ph := range phases {
 		if err := ctx.Err(); err != nil {
 			return &engine.Result{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}, err
@@ -170,16 +186,18 @@ func (m *MultiAgent) RunDeep(
 		})
 		prompt := ph.Prompt + "\n\n## Prior phase notes\n" + chain.String()
 		max := ph.MaxSteps
-		text, err := m.runOneMax(ctx, session.ID, prompt, ph.Tools, opts.AutoApprove, publish, max)
+		text, tools, tokens, err := m.runOneMax(ctx, session.ID, prompt, ph.Tools, opts.AutoApprove, publish, max)
 		if err != nil && text == "" {
 			text = "phase error: " + err.Error()
 		}
 		parts = append(parts, part{ID: ph.ID, Name: ph.Name, Output: text})
-		chain.WriteString(fmt.Sprintf("\n### %s\n%s\n", ph.Name, truncate(text, 2000)))
+		chain.WriteString(fmt.Sprintf("\n### %s\n%s\n", ph.Name, truncate(text, DeepPhaseSummaryMaxChars)))
 		steps++
+		totalTools += tools
+		totalTokens += tokens
 		publish(&engine.Event{
 			Type: engine.EventSubAgent, SubType: ph.ID,
-			Content: "done " + ph.Name + ": " + truncate(text, 100), Timestamp: nowMs(),
+			Content: "done " + ph.Name + ": " + truncate(text, DeepPhaseDoneMaxChars), Timestamp: nowMs(),
 		})
 	}
 	// final answer = reflect phase if present, else concat
@@ -197,25 +215,34 @@ func (m *MultiAgent) RunDeep(
 	if final == "" {
 		final = "DeepAgent finished with empty phases."
 	}
+	if totalTokens <= 0 {
+		totalTokens = common.EstimateTokens(goal) + common.EstimateTokens(final)
+		for _, p := range parts {
+			totalTokens += common.EstimateTokens(p.Output)
+		}
+	}
 	m.parent.persistAssistant(ctx, session, final)
 	publish(&engine.Event{Type: engine.EventAnswer, Content: final, Completed: true, Timestamp: nowMs()})
 	publish(&engine.Event{Type: engine.EventDone, Content: final, Completed: true, Data: map[string]any{
 		"orchestrator": "eino-deep", "phases": len(parts), "mode": deepagent.ModeDeep,
+		"toolCalls": totalTools, "tokenEst": totalTokens,
 	}, Timestamp: nowMs()})
 	return &engine.Result{
 		SessionID: session.ID, Response: final, Steps: steps,
-		ToolCalls: steps, TokenUsed: common.EstimateTokens(final),
+		ToolCalls: totalTools, TokenUsed: totalTokens,
 	}, nil
 }
 
-func (m *MultiAgent) runOne(ctx context.Context, sessionID, prompt string, allow []string, auto bool, publish EventSink) (string, error) {
-	return m.runOneMax(ctx, sessionID, prompt, allow, auto, publish, 6)
+// runOne returns (text, toolCalls, tokenUsed, err).
+func (m *MultiAgent) runOne(ctx context.Context, sessionID, prompt string, allow []string, auto bool, publish EventSink) (string, int, int, error) {
+	return m.runOneMax(ctx, sessionID, prompt, allow, auto, publish, DefaultSubAgentMaxStep)
 }
 
-func (m *MultiAgent) runOneMax(ctx context.Context, sessionID, prompt string, allow []string, auto bool, publish EventSink, maxStep int) (string, error) {
+// runOneMax runs a focused ReAct sub-agent and returns measured tool/token stats.
+func (m *MultiAgent) runOneMax(ctx context.Context, sessionID, prompt string, allow []string, auto bool, publish EventSink, maxStep int) (string, int, int, error) {
 	cm, err := m.parent.newChatModel(ctx)
 	if err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
 	cross := m.parent.crossCut("")
 	var tools []einotool.BaseTool
@@ -231,7 +258,7 @@ func (m *MultiAgent) runOneMax(ctx context.Context, sessionID, prompt string, al
 		tools = WrapRegistryCross(reg, m.parent.perm, cross)
 	}
 	if maxStep <= 0 {
-		maxStep = 6
+		maxStep = DefaultSubAgentMaxStep
 	}
 	if m.parent.cfg.MaxSteps > 0 && m.parent.cfg.MaxSteps < maxStep {
 		maxStep = m.parent.cfg.MaxSteps
@@ -244,24 +271,32 @@ func (m *MultiAgent) runOneMax(ctx context.Context, sessionID, prompt string, al
 			"You are a focused sub-agent. Use only necessary tools. Be concise. Goal-oriented."),
 	})
 	if err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
 	tctx := WithSession(ctx, sessionID, auto)
 	stats := &runStats{}
 	opt := agentOptions(publish, stats)
 	// timeout scales with max steps
-	to := time.Duration(30+maxStep*15) * time.Second
-	if to > 180*time.Second {
-		to = 180 * time.Second
+	to := SubAgentTimeoutBase + time.Duration(maxStep)*SubAgentTimeoutPerStep
+	if to > SubAgentTimeoutMax {
+		to = SubAgentTimeoutMax
 	}
 	cctx, cancel := context.WithTimeout(tctx, to)
 	defer cancel()
 	out, err := ag.Generate(cctx, []*schema.Message{schema.UserMessage(prompt)}, opt)
+	toolN := int(stats.toolCalls.Load())
+	tokN := stats.TokenUsed()
+	if tokN <= 0 {
+		tokN = common.EstimateTokens(prompt)
+		if out != nil {
+			tokN += common.EstimateTokens(out.Content)
+		}
+	}
 	if err != nil {
-		return "", err
+		return "", toolN, tokN, err
 	}
 	if out == nil {
-		return "", nil
+		return "", toolN, tokN, nil
 	}
-	return strings.TrimSpace(out.Content), nil
+	return strings.TrimSpace(out.Content), toolN, tokN, nil
 }

@@ -1,0 +1,73 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+*.out
+coverage.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.vs/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Docs (not needed in image)
+docs/
+*.md
+!skills/*/SKILL.md
+
+# Scripts (not needed in image)
+scripts/
+*.ps1
+*.sh
+
+# Data directories (mounted at runtime)
+data/
+workspace/
+logs/
+reports/
+
+# Test artifacts
+testdata/
+*_test.go
+
+# Environment (should be passed at runtime, not baked in)
+.env
+.env.local
+.env.*
+!.env.example
+
+# Local config overrides
+configs/config.yaml
+configs/config.host.yaml
+configs/config.example.yaml
+!configs/config.docker.yaml
+
+# Grafana
+deploy/
+
+# Editor backups
+*.bak
+*.old
+*.tmp

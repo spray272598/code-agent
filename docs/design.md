@@ -171,6 +171,17 @@ ISummarizerPort  // 可委托 LLM
 | infrastructure | 契约测（可选 testcontainers） |
 | e2e | scripts + Mock LLM |
 
+### 3.6 可观测性依赖规则（强制）
+
+```
+domain → domain/telemetry (port + Nop)
+bootstrap → observability.DomainBridge → telemetry.Set(...)
+禁止：domain import infrastructure/observability
+禁止：domain import go.opentelemetry.io/*
+```
+
+横切 metrics/trace/log 只能通过 `telemetry.Sink` 注入；单测默认 Nop，无需装配。
+
 ---
 
 ## 4. 功能架构
@@ -520,7 +531,8 @@ code-agent/
 - [x] 5 层权限（L1–L5 骨架）+ 确认恢复
 - [x] MySQL 或 memory 仓储；Redis 限流/token（可选）
 - [x] CLI REPL 渲染 SSE 事件
-- [ ] 真模型端到端长任务压测（需 `LLM_API_KEY`）
+- [x] Mock 压测证据：`scripts/mock_stress.ps1` → `reports/mock-stress-latest.{json,md}`
+- [x] 真模型压测脚本：`scripts/llm_stress.ps1`（需 `LLM_API_KEY` 实跑产出报告）
 
 **验收**：在配置的 workspace 内「搜索 → 读 → 改 → bash 测试」全程流式可见。
 
@@ -629,3 +641,4 @@ code-agent/
 | 日期 | 变更 |
 |------|------|
 | 2026-08-03 | 初稿：立项、DDD、中间件、分阶段、迁移清单 |
+| 2026-08-04 | domain/telemetry 端口；Eino 图内 resume；mock 压测证据；CLI 易用性 |

@@ -25,10 +25,15 @@ CLI ──SSE──► Server(trigger)
 
 ## 快速开始
 
-```bash
-# 零依赖：memory DB + mock LLM → 自动 native-offline
-go run ./cmd/server -config configs/config.yaml
+```powershell
+# 一键试用（mock，自动起 server + CLI）
+powershell -File scripts/try_cli.ps1
 
+# 仅冒烟（非交互）
+powershell -File scripts/try_cli.ps1 -SmokeOnly
+
+# 零依赖手动：
+go run ./cmd/server -config configs/config.yaml
 # 另一终端
 go run ./cmd/cli --base http://127.0.0.1:8080 --key dev-key
 ```
@@ -114,6 +119,10 @@ powershell -File scripts/eval_smoke.ps1
 # 数字报告（pass_rate / 每 case 延迟）
 powershell -File scripts/eval_report.ps1
 
+# Mock 压测证据（无 API Key，产出 design 验收基线）
+powershell -File scripts/mock_stress.ps1
+# → reports/mock-stress-latest.json + .md
+
 # 真模型长任务压测（Key 只走环境变量，勿写入仓库）
 $env:LLM_API_KEY="sk-..."
 $env:LLM_BASE_URL="https://api.siliconflow.cn/v1"
@@ -123,10 +132,14 @@ powershell -File scripts/llm_stress.ps1
 # → reports/llm-stress-latest.json + .md
 ```
 
-文档：[checkpoint-index.md](docs/checkpoint-index.md) · [deepagent-vs-teams.md](docs/deepagent-vs-teams.md)
+文档：[checkpoint-index.md](docs/checkpoint-index.md) · [deepagent-vs-teams.md](docs/deepagent-vs-teams.md) · [eino-integration.md](docs/eino-integration.md)
 
 ```powershell
-# Docker: scripts/docker-up.md
+# Docker 中间件
+docker compose up -d
+# Docker 全栈（含 server 镜像）
+docker compose --profile app up -d --build
+# 详见 scripts/docker-up.md · Dockerfile
 ```
 
 ## License

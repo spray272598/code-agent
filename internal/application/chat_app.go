@@ -254,7 +254,7 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 			observability.Warnf("sess hot set: %v", err)
 		}
 	}
-	observability.Global.ChatTotal.Add(1)
+	observability.Current().AddChatTotal(1)
 	runCtx, runCancel := context.WithCancel(ctx)
 	if a.runs != nil {
 		a.runs.Register(session.ID, runCancel)
@@ -263,7 +263,7 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	a.markRun(session, req, checkpoint.StatusRunning, nil, "")
 	res, err := a.loop.Run(runCtx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
 	if err != nil && res == nil {
-		observability.Global.ChatErrors.Add(1)
+		observability.Current().AddChatErrors(1)
 		if runCtx.Err() != nil {
 			a.markRun(session, req, checkpoint.StatusCancelled, nil, "cancel")
 			return &ChatResponse{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}, nil
@@ -272,7 +272,7 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, err
 	}
 	if res == nil {
-		observability.Global.ChatErrors.Add(1)
+		observability.Current().AddChatErrors(1)
 		return nil, fmt.Errorf("empty result")
 	}
 	a.persistResultCheckpoint(session, req, res, runCtx.Err())
@@ -401,7 +401,9 @@ func (a *ChatApp) CancelSession(sessionID, reason string) (bool, error) {
 			snap.UserID = prev.UserID
 			snap.CreatedAt = prev.CreatedAt
 		}
-		_ = a.ckStore.Save(context.Background(), snap)
+		if err := a.ckStore.Save(context.Background(), snap); err != nil {
+			observability.LogError("checkpoint save cancel", err)
+		}
 	}
 	return ok, nil
 }
@@ -478,10 +480,14 @@ func (a *ChatApp) markRun(session *sessmodel.Session, req ChatRequest, status st
 			Reason: pending.Reason, RuleID: pending.RuleID, Layer: pending.Layer, CreatedAt: pending.CreatedAt,
 		}
 	}
-	if prev, _ := a.ckStore.Get(context.Background(), session.ID); prev != nil && !prev.CreatedAt.IsZero() {
+	if prev, err := a.ckStore.Get(context.Background(), session.ID); err != nil {
+		observability.LogError("checkpoint get for markRun", err)
+	} else if prev != nil && !prev.CreatedAt.IsZero() {
 		snap.CreatedAt = prev.CreatedAt
 	}
-	_ = a.ckStore.Save(context.Background(), snap)
+	if err := a.ckStore.Save(context.Background(), snap); err != nil {
+		observability.LogError("checkpoint save markRun", err)
+	}
 }
 
 func (a *ChatApp) persistResultCheckpoint(session *sessmodel.Session, req ChatRequest, res *engine.Result, ctxErr error) {
