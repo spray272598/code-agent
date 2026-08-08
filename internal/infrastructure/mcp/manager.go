@@ -39,6 +39,11 @@ func NewManager() *Manager {
 }
 
 // startWatchdog periodically restarts offline enabled servers.
+// Each tick first runs a heartbeat (MCP ping) against online clients: any
+// client that fails to answer is closed and marked offline, then handed off
+// to reconnectOffline for restart. This is genuine keep-alive — a stalled or
+// crashed peer is detected within one tick instead of waiting for a CallTool
+// failure on the next user request.
 func (m *Manager) startWatchdog() {
 	m.watchOnce.Do(func() {
 		go func() {
@@ -49,11 +54,45 @@ func (m *Manager) startWatchdog() {
 				case <-m.stopWatch:
 					return
 				case <-t.C:
+					m.healthCheck()
 					m.reconnectOffline()
 				}
 			}
 		}()
 	})
+}
+
+// healthCheck sends an MCP ping to every online client. On failure the client
+// is closed and removed from the clients map so reconnectOffline can pick it
+// up. The ping deadline is short (5s) so one stalled server cannot stall the
+// whole watchdog tick.
+func (m *Manager) healthCheck() {
+	m.mu.RLock()
+	snapshot := make([]mcpport.IMCPClient, 0, len(m.clients))
+	for _, c := range m.clients {
+		snapshot = append(snapshot, c)
+	}
+	m.mu.RUnlock()
+
+	for _, c := range snapshot {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.Ping(ctx)
+		cancel()
+		if err == nil {
+			continue
+		}
+		name := c.Name()
+		log.Printf("[mcp] heartbeat %s failed: %v → mark offline\n", name, err)
+		m.mu.Lock()
+		// Guard against replacing a freshly-reconnected client: only drop the
+		// exact instance we pinged.
+		if cur, ok := m.clients[name]; ok && cur == c {
+			_ = c.Close()
+			delete(m.clients, name)
+			m.lastErr[name] = "heartbeat failed: " + err.Error()
+		}
+		m.mu.Unlock()
+	}
 }
 
 func (m *Manager) reconnectOffline() {

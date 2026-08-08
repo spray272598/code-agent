@@ -103,6 +103,14 @@ func (c *StdioClient) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// Ping sends an MCP "ping" request and returns nil only if the server answered.
+// Used by the manager's watchdog as a real heartbeat: a dead process or a
+// stalled peer will either error out (broken pipe / EOF) or hit the deadline.
+func (c *StdioClient) Ping(ctx context.Context) error {
+	var result json.RawMessage
+	return c.call(ctx, "ping", map[string]any{}, &result)
+}
+
 func (c *StdioClient) ListTools(ctx context.Context) ([]model.ToolDef, error) {
 	var res toolsListResult
 	if err := c.call(ctx, "tools/list", map[string]any{}, &res); err != nil {
