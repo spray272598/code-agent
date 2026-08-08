@@ -70,7 +70,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) (tool.Resul
 	if stderr.Len() > 0 {
 		out += "\n[stderr]\n" + stderr.String()
 	}
-	out = common.TruncateRunes(out, 6000)
+	out = common.TruncateRunes(out, common.BashOutputMaxRunes)
 	if err != nil {
 		return tool.Result{Text: fmt.Sprintf("exit error: %v\n%s", err, out), IsError: true}, nil
 	}

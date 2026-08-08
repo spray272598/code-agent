@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
-	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
@@ -28,11 +28,11 @@ type Progress struct {
 
 // Spec one subagent task.
 type Spec struct {
-	ID        string   `json:"id"`
-	Prompt    string   `json:"prompt"`
-	Role      string   `json:"role"` // explore|verify|general|custom
-	Tools     []string `json:"tools,omitempty"`
-	MaxSteps  int      `json:"maxSteps,omitempty"`
+	ID       string   `json:"id"`
+	Prompt   string   `json:"prompt"`
+	Role     string   `json:"role"` // explore|verify|general|custom
+	Tools    []string `json:"tools,omitempty"`
+	MaxSteps int      `json:"maxSteps,omitempty"`
 	// Isolation: "" | "worktree" | "process"
 	// worktree = git worktree filesystem isolation
 	// process  = run bash via separate OS process group (crash isolation)
@@ -80,7 +80,7 @@ func NewRunner(llm port.ILLMPort, tools *tool.MapRegistry, workspace string) *Ru
 	return &Runner{
 		LLM: llm, ParentTools: tools, BaseWorkspace: workspace,
 		MaxConcurrent: 3, DefaultSteps: 8,
-		Roles: DefaultRoles(),
+		Roles:     DefaultRoles(),
 		DenyTools: map[string]bool{"delegate": true},
 	}
 }
@@ -304,7 +304,7 @@ Do not invent tools. Stay concise.`, spec.Role)
 					}
 				}
 			}
-			text = common.TruncateRunes(text, 3000)
+			text = common.TruncateRunes(text, common.SubAgentToolResultMaxRunes)
 			messages = append(messages, port.ChatMessage{
 				Role: "tool", Content: text, Name: tc.Name, ToolCallID: "sa-" + tc.Name,
 			})

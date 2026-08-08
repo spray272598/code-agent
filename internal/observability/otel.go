@@ -26,6 +26,13 @@ type OTLPConfig struct {
 	Service  string
 }
 
+// Fallback defaults when OTLPConfig fields are empty. Keep in sync with
+// config.Default().OTLP.
+const (
+	defaultOTLPEndpoint = "localhost:4318"
+	defaultServiceName  = "code-agent"
+)
+
 // SetupTracer configures global TracerProvider. Returns shutdown func.
 func SetupTracer(ctx context.Context, cfg OTLPConfig) (func(context.Context) error, error) {
 	if !cfg.Enabled {
@@ -33,11 +40,11 @@ func SetupTracer(ctx context.Context, cfg OTLPConfig) (func(context.Context) err
 	}
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		endpoint = "localhost:4318"
+		endpoint = defaultOTLPEndpoint
 	}
 	service := cfg.Service
 	if service == "" {
-		service = "code-agent"
+		service = defaultServiceName
 	}
 
 	opts := []otlptracehttp.Option{

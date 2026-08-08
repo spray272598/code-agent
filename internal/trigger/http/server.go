@@ -32,12 +32,24 @@ type Server struct {
 	maxBody     int64
 }
 
+// defaultCORSOrigins is the safe localhost-only fallback used when WithSecurity
+// is not called or config supplies no origins. Keep in sync with
+// config.Default().Security.CORSOrigins.
+var defaultCORSOrigins = []string{
+	"http://localhost:3000", "http://127.0.0.1:3000",
+	"http://localhost:8080", "http://127.0.0.1:8080",
+}
+
+// defaultMaxBodyBytes is the fallback request body limit (2 MiB).
+// Keep in sync with config.Default().Security.MaxBodyBytes.
+const defaultMaxBodyBytes int64 = 2 << 20
+
 func New(app *application.ChatApp, addr string) *Server {
 	return &Server{
-		app: app, addr: addr,
-		// safe default: localhost only (never bare * with credentials)
-		corsOrigins: []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8080", "http://127.0.0.1:8080"},
-		maxBody:     2 << 20,
+		app:         app,
+		addr:        addr,
+		corsOrigins: defaultCORSOrigins,
+		maxBody:     defaultMaxBodyBytes,
 	}
 }
 

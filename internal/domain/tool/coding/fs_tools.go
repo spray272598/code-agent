@@ -83,8 +83,8 @@ func (t *ReadFileTool) Execute(_ context.Context, args map[string]any) (tool.Res
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
 	text := string(b)
-	if len([]rune(text)) > 8000 {
-		text = common.TruncateRunes(text, 8000)
+	if len([]rune(text)) > common.ReadFileMaxRunes {
+		text = common.TruncateRunes(text, common.ReadFileMaxRunes)
 	}
 	return tool.Result{Text: text}, nil
 }
@@ -130,12 +130,12 @@ func (t *EditFileTool) Description() string {
 }
 func (t *EditFileTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"path":         map[string]any{"type": "string"},
-		"old_string":   map[string]any{"type": "string", "description": "exact text or regex pattern (multi-line ok)"},
-		"new_string":   map[string]any{"type": "string"},
-		"regex":        map[string]any{"type": "boolean", "description": "treat old_string as Go regexp"},
-		"replace_all":  map[string]any{"type": "boolean", "description": "replace every match (default false for exact, true for regex if count unset)"},
-		"count":        map[string]any{"type": "integer", "description": "max replacements; 0 or omit = 1 for exact unless replace_all"},
+		"path":        map[string]any{"type": "string"},
+		"old_string":  map[string]any{"type": "string", "description": "exact text or regex pattern (multi-line ok)"},
+		"new_string":  map[string]any{"type": "string"},
+		"regex":       map[string]any{"type": "boolean", "description": "treat old_string as Go regexp"},
+		"replace_all": map[string]any{"type": "boolean", "description": "replace every match (default false for exact, true for regex if count unset)"},
+		"count":       map[string]any{"type": "integer", "description": "max replacements; 0 or omit = 1 for exact unless replace_all"},
 	}, "required": []string{"path", "old_string", "new_string"}}
 }
 func (t *EditFileTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
@@ -324,7 +324,7 @@ func (t *GlobTool) Execute(_ context.Context, args map[string]any) (tool.Result,
 			if ok {
 				matches = append(matches, rel)
 			}
-			if len(matches) >= 200 {
+			if len(matches) >= common.GlobMaxMatches {
 				return fs.SkipAll
 			}
 			return nil
@@ -338,7 +338,7 @@ func (t *GlobTool) Execute(_ context.Context, args map[string]any) (tool.Result,
 				continue
 			}
 			matches = append(matches, filepath.ToSlash(m))
-			if len(matches) >= 200 {
+			if len(matches) >= common.GlobMaxMatches {
 				break
 			}
 		}
@@ -360,12 +360,12 @@ func (t *GrepTool) Description() string {
 }
 func (t *GrepTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"pattern":         map[string]any{"type": "string"},
-		"path":            map[string]any{"type": "string"},
-		"glob":            map[string]any{"type": "string"},
-		"context":         map[string]any{"type": "integer", "description": "lines of context before and after (-C)"},
-		"context_before":  map[string]any{"type": "integer"},
-		"context_after":   map[string]any{"type": "integer"},
+		"pattern":        map[string]any{"type": "string"},
+		"path":           map[string]any{"type": "string"},
+		"glob":           map[string]any{"type": "string"},
+		"context":        map[string]any{"type": "integer", "description": "lines of context before and after (-C)"},
+		"context_before": map[string]any{"type": "integer"},
+		"context_after":  map[string]any{"type": "integer"},
 	}, "required": []string{"pattern"}}
 }
 func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
@@ -460,10 +460,10 @@ func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result,
 				if !isHit && (before > 0 || after > 0) {
 					sep = "-"
 				}
-				lines = append(lines, fmt.Sprintf("%s%s%d%s%s", rel, sep, i+1, sep, common.TruncateRunes(fileLines[i], 200)))
+				lines = append(lines, fmt.Sprintf("%s%s%d%s%s", rel, sep, i+1, sep, common.TruncateRunes(fileLines[i], common.GrepLineMaxRunes)))
 			}
 			matchCount += 1
-			if matchCount >= 100 || len(lines) >= 400 {
+			if matchCount >= common.GrepMaxMatches || len(lines) >= common.GrepMaxLines {
 				return fs.SkipAll
 			}
 		}

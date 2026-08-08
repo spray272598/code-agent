@@ -38,7 +38,7 @@ func (s *Summarizer) Summarize(ctx context.Context, priorSummary string, middle 
 		}
 		b.WriteString(role)
 		b.WriteString(": ")
-		b.WriteString(common.TruncateRunes(content, 400))
+		b.WriteString(common.TruncateRunes(content, common.SummarizeInputMaxRunes))
 		b.WriteString("\n")
 	}
 	resp, err := s.LLM.Generate(ctx, &port.ChatRequest{
@@ -69,11 +69,11 @@ func ruleSummary(prior string, middle []map[string]any) string {
 		role, _ := m["role"].(string)
 		content, _ := m["content"].(string)
 		if role == "user" && content != "" {
-			parts = append(parts, "User: "+common.TruncateRunes(content, 120))
+			parts = append(parts, "User: "+common.TruncateRunes(content, common.SummarizeUserMaxRunes))
 		}
 		if role == "tool" {
 			name, _ := m["toolName"].(string)
-			parts = append(parts, fmt.Sprintf("Tool %s: %s", name, common.TruncateRunes(content, 80)))
+			parts = append(parts, fmt.Sprintf("Tool %s: %s", name, common.TruncateRunes(content, common.SummarizeToolMaxRunes)))
 		}
 	}
 	if len(parts) > 12 {

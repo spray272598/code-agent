@@ -56,8 +56,8 @@ func (c *Compressor) CompressLevels(ctx context.Context, history []map[string]an
 	trimmed := make([]map[string]any, len(history))
 	for i, m := range history {
 		cp := copyMap(m)
-		if content, ok := cp["content"].(string); ok && len([]rune(content)) > 2000 {
-			cp["content"] = common.TruncateRunes(content, 2000)
+		if content, ok := cp["content"].(string); ok && len([]rune(content)) > common.CompressLongContentMaxRunes {
+			cp["content"] = common.TruncateRunes(content, common.CompressLongContentMaxRunes)
 		}
 		trimmed[i] = cp
 	}
