@@ -12,8 +12,10 @@ import (
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/slash"
+	sshport "github.com/spray272598/code-agent/internal/domain/ssh/port"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
+	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 )
 
 // Option configures optional ChatApp dependencies (functional options).
@@ -70,6 +72,14 @@ func WithCheckpoint(store checkpoint.Store, runs *checkpoint.RunRegistry) Option
 		if a.runs == nil {
 			a.runs = checkpoint.NewRunRegistry()
 		}
+	}
+}
+
+// WithSSH injects SSH pool and connection repository.
+func WithSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository) Option {
+	return func(a *ChatApp) {
+		a.sshPool = pool
+		a.sshRepo = repo
 	}
 }
 

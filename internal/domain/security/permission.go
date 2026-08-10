@@ -227,6 +227,14 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "bash", Reason: "shell requires confirm", Tool: tool, Summary: summary}
 	}
+	// SSH tools — always require confirm (remote operations)
+	if strings.HasPrefix(tool, "ssh_") || strings.HasPrefix(base, "ssh_") {
+		if r := matchAny(g.denyRules, variants); r != nil {
+			g.incDeny(sessionID)
+			return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
+		}
+		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "ssh", Reason: "SSH remote operation requires confirm", Tool: tool, Summary: summary}
+	}
 	if tool == "delegate" {
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "delegate", Reason: "subagent delegation requires confirm", Tool: tool, Summary: summary}
 	}

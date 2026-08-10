@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -20,17 +21,21 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/host"
+	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/security"
+	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/slash"
+	sshport "github.com/spray272598/code-agent/internal/domain/ssh/port"
+	"github.com/spray272598/code-agent/internal/domain/sshtool"
 	"github.com/spray272598/code-agent/internal/domain/subagent"
 	"github.com/spray272598/code-agent/internal/domain/team"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
-	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/worktree"
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
 	"github.com/spray272598/code-agent/internal/infrastructure/einoorch"
@@ -40,11 +45,10 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
+	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
 	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/trigger/ws"
-	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
-	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 )
 
 type App struct {
@@ -64,6 +68,7 @@ type App struct {
 	Host    host.Executor
 	Bridge  *host.Bridge
 	HostHub *ws.HostHub
+	SSHPool *sshinfra.Pool
 	Closer  func()
 }
 
@@ -81,9 +86,10 @@ func Build(cfg *config.Config) (*App, error) {
 	var auditRepo audit.Repository
 	var summaryRepo sessrepo.ISummaryRepository
 	var closer func()
+	var db *sql.DB
 	switch strings.ToLower(cfg.Database.Type) {
 	case "mysql":
-		db, err := mysql.Open(cfg.MySQLDSN(), cfg.Database.AutoMigrate, cfg.Database.SchemaPath)
+		opened, err := mysql.Open(cfg.MySQLDSN(), cfg.Database.AutoMigrate, cfg.Database.SchemaPath)
 		if err != nil {
 			log.Printf("[bootstrap] mysql unavailable (%v), use memory\n", err)
 			sessionRepo = repository.NewMemorySessionRepo()
@@ -94,6 +100,7 @@ func Build(cfg *config.Config) (*App, error) {
 			closer = func() {}
 			cfg.Database.Type = "memory"
 		} else {
+			db = opened
 			sessionRepo = repository.NewMySQLSessionRepo(db)
 			messageRepo = repository.NewMySQLMessageRepo(db)
 			memRepo = repository.NewMySQLMemoryRepo(db)
@@ -106,7 +113,7 @@ func Build(cfg *config.Config) (*App, error) {
 		if path == "" {
 			path = "./data/code-agent.db"
 		}
-		db, err := sqlite.Open(path, true) // always migrate lightweight schema
+		opened, err := sqlite.Open(path, true) // always migrate lightweight schema
 		if err != nil {
 			log.Printf("[bootstrap] sqlite unavailable (%v), use memory\n", err)
 			sessionRepo = repository.NewMemorySessionRepo()
@@ -117,6 +124,7 @@ func Build(cfg *config.Config) (*App, error) {
 			closer = func() {}
 			cfg.Database.Type = "memory"
 		} else {
+			db = opened
 			sessionRepo = repository.NewSQLiteSessionRepo(db)
 			messageRepo = repository.NewSQLiteMessageRepo(db)
 			memRepo = repository.NewSQLiteMemoryRepo(db)
@@ -198,6 +206,38 @@ func Build(cfg *config.Config) (*App, error) {
 	}
 	reg.Register(coding.NewMemorySave(memCtx))
 	reg.Register(coding.NewMemorySearch(memCtx))
+
+	// SSH remote operations
+	var sshPool *sshinfra.Pool
+	var sshRepo sshport.IConnectionRepository
+	if cfg.SSH.Enabled {
+		sshPool = sshinfra.NewPool()
+		if db != nil {
+			switch strings.ToLower(cfg.Database.Type) {
+			case "mysql":
+				sshRepo = sshinfra.NewMySQLConnRepo(db)
+			default:
+				sshRepo = sshinfra.NewSQLiteConnRepo(db)
+			}
+		}
+		if sshRepo != nil {
+			// auto-load saved connections
+			conns, _ := sshRepo.List(context.Background())
+			for _, c := range conns {
+				if c.Enabled {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					if err := sshPool.Connect(ctx, *c); err != nil {
+						log.Printf("[bootstrap] ssh connect %s: %v\n", c.Name, err)
+					}
+					cancel()
+				}
+			}
+		}
+		sshExec := sshinfra.NewExecutor(sshPool)
+		sshFT := sshinfra.NewFileTransfer(sshPool)
+		sshtool.RegisterAll(reg, sshExec, sshFT)
+		log.Printf("[bootstrap] ssh enabled, tools registered\n")
+	}
 
 	// Code index / retriever tools
 	codeIdx := codeindex.New(workspaceRoot)
@@ -296,8 +336,8 @@ func Build(cfg *config.Config) (*App, error) {
 		er := einoorch.NewRunner(einoorch.Config{
 			APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
 			MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
-			TokenBudget:      cfg.Agent.TokenBudget,
-			GraphResume:     cfg.EinoGraphResumeEnabled(),
+			TokenBudget:        cfg.Agent.TokenBudget,
+			GraphResume:        cfg.EinoGraphResumeEnabled(),
 			GraphCheckPointDir: cfg.Agent.EinoCheckPointDir,
 		}, reg, perm, sessionRepo, messageRepo)
 		er.SetHooks(hooks)
@@ -342,6 +382,9 @@ func Build(cfg *config.Config) (*App, error) {
 	if mcpMgr != nil {
 		chatOpts = append(chatOpts, application.WithMCP(mcpMgr))
 	}
+	if sshPool != nil {
+		chatOpts = append(chatOpts, application.WithSSH(sshPool, sshRepo))
+	}
 	chat := application.New(application.CoreDeps{
 		Loop: runner, Sessions: sessionRepo, Messages: messageRepo, Tools: reg, Perm: perm,
 		Redis: rdb, TimeoutSec: cfg.Agent.TimeoutSec, Workspace: workspaceRoot,
@@ -384,9 +427,13 @@ func Build(cfg *config.Config) (*App, error) {
 		MCP: mcpMgr, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
 		Blobs: blobStore, Index: codeIdx, CKStore: ckStore, Runs: runReg,
 		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
+		SSHPool: sshPool,
 		Closer: func() {
 			if mcpMgr != nil {
 				_ = mcpMgr.Close()
+			}
+			if sshPool != nil {
+				sshPool.CloseAll()
 			}
 			_ = rdb.Close()
 			if closer != nil {

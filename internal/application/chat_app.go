@@ -18,13 +18,16 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/security"
-	"github.com/spray272598/code-agent/internal/observability"
-	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
+	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/slash"
+	sshmodel "github.com/spray272598/code-agent/internal/domain/ssh/model"
+	sshport "github.com/spray272598/code-agent/internal/domain/ssh/port"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
+	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
+	"github.com/spray272598/code-agent/internal/observability"
 )
 
 type ChatApp struct {
@@ -47,20 +50,31 @@ type ChatApp struct {
 	rateEnabled bool
 	ratePerMin  int
 	keys        *auth.KeyStore
+	sshPool     *sshinfra.Pool
+	sshRepo     sshport.IConnectionRepository
 }
 
 // Set* methods retained for gradual migration; prefer application.Option.
-func (a *ChatApp) SetSkills(s *skill.Service)      { a.skills = s }
+func (a *ChatApp) SetSkills(s *skill.Service)       { a.skills = s }
 func (a *ChatApp) SetMCP(m mcpport.IMCPManagerPort) { a.mcp = m }
-func (a *ChatApp) SetMemory(s *memory.Service)     { a.memSvc = s }
-func (a *ChatApp) SetAudit(r audit.Repository)     { a.auditRepo = r }
-func (a *ChatApp) SetBlobStore(s blob.Store)       { a.blobs = s }
-func (a *ChatApp) Slash() *slash.Registry      { return a.slash }
-func (a *ChatApp) Skills() *skill.Service      { return a.skills }
+func (a *ChatApp) SetMemory(s *memory.Service)      { a.memSvc = s }
+func (a *ChatApp) SetAudit(r audit.Repository)      { a.auditRepo = r }
+func (a *ChatApp) SetBlobStore(s blob.Store)        { a.blobs = s }
+
+// SetSSH injects SSH pool and repository.
+func (a *ChatApp) SetSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository) {
+	a.sshPool = pool
+	a.sshRepo = repo
+}
+
+// SSHPool returns the SSH connection pool.
+func (a *ChatApp) SSHPool() *sshinfra.Pool      { return a.sshPool }
+func (a *ChatApp) Slash() *slash.Registry       { return a.slash }
+func (a *ChatApp) Skills() *skill.Service       { return a.skills }
 func (a *ChatApp) MCP() mcpport.IMCPManagerPort { return a.mcp }
-func (a *ChatApp) Memory() *memory.Service     { return a.memSvc }
-func (a *ChatApp) Audit() audit.Repository     { return a.auditRepo }
-func (a *ChatApp) Blobs() blob.Store           { return a.blobs }
+func (a *ChatApp) Memory() *memory.Service      { return a.memSvc }
+func (a *ChatApp) Audit() audit.Repository      { return a.auditRepo }
+func (a *ChatApp) Blobs() blob.Store            { return a.blobs }
 
 func (a *ChatApp) GetBlob(ctx context.Context, key string) ([]byte, error) {
 	if a.blobs == nil {
@@ -113,6 +127,60 @@ func (a *ChatApp) InstallMCP(ctx context.Context, name, transport, command strin
 		Name: name, Transport: transport, Command: command, Args: args,
 		Env: env, URL: url, Enabled: enabled, TimeoutSec: timeout,
 	})
+}
+
+// InstallSSH saves SSH connection config and connects.
+func (a *ChatApp) InstallSSH(ctx context.Context, cfg sshmodel.ConnectionConfig) error {
+	if a.sshPool == nil || a.sshRepo == nil {
+		return fmt.Errorf("ssh disabled")
+	}
+	if cfg.ID == "" {
+		cfg.ID = newID("ssh")
+	}
+	if cfg.Port == 0 {
+		cfg.Port = 22
+	}
+	if cfg.AuthType == "" {
+		cfg.AuthType = "password"
+	}
+	if err := a.sshRepo.Save(ctx, &cfg); err != nil {
+		return err
+	}
+	if cfg.Enabled {
+		return a.sshPool.Connect(ctx, cfg)
+	}
+	return nil
+}
+
+// ListSSHConnections lists all saved SSH connections.
+func (a *ChatApp) ListSSHConnections(ctx context.Context) ([]*sshmodel.ConnectionConfig, error) {
+	if a.sshRepo == nil {
+		return nil, fmt.Errorf("ssh disabled")
+	}
+	return a.sshRepo.List(ctx)
+}
+
+// DeleteSSHConnection removes an SSH connection.
+func (a *ChatApp) DeleteSSHConnection(ctx context.Context, id string) error {
+	if a.sshPool == nil || a.sshRepo == nil {
+		return fmt.Errorf("ssh disabled")
+	}
+	cfg, err := a.sshRepo.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if cfg != nil {
+		_ = a.sshPool.Disconnect(cfg.Name)
+	}
+	return a.sshRepo.Delete(ctx, id)
+}
+
+// SSHHealth returns health status of all SSH connections.
+func (a *ChatApp) SSHHealth() []sshmodel.HealthStatus {
+	if a.sshPool == nil {
+		return nil
+	}
+	return a.sshPool.Health()
 }
 
 // Auth verifies API key via SHA-256 hash + constant-time compare (never stores plaintext after boot).

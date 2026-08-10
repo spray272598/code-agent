@@ -111,6 +111,8 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/index/search", s.handleIndexSearch)
 	mux.HandleFunc("/api/v1/index/rebuild", s.handleIndexRebuild)
 	mux.HandleFunc("/api/v1/index/stats", s.handleIndexStats)
+	mux.HandleFunc("/api/v1/ssh/connections", s.handleSSHConnections)
+	mux.HandleFunc("/api/v1/ssh/health", s.handleSSHHealth)
 	mux.HandleFunc("/api/v1/admin/log-level", s.handleLogLevel)
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/docs", s.handleSwaggerUI)

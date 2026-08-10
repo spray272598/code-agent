@@ -131,3 +131,20 @@ CREATE TABLE IF NOT EXISTS `object_meta` (
   UNIQUE KEY `uk_object_key` (`object_key`),
   KEY `idx_session` (`session_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对象存储元数据';
+
+CREATE TABLE IF NOT EXISTS `ssh_connection` (
+  `id`               VARCHAR(64)  NOT NULL,
+  `name`             VARCHAR(128) NOT NULL,
+  `host`             VARCHAR(256) NOT NULL,
+  `port`             INT          NOT NULL DEFAULT 22,
+  `username`         VARCHAR(128) NOT NULL,
+  `auth_type`        VARCHAR(32)  NOT NULL DEFAULT 'password' COMMENT 'password|private_key',
+  `password`         VARCHAR(512) NOT NULL DEFAULT '',
+  `private_key`      TEXT         NULL,
+  `enabled`          TINYINT(1)   NOT NULL DEFAULT 1,
+  `last_connected_at` DATETIME(3) NULL,
+  `created_at`       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='SSH远程连接配置';

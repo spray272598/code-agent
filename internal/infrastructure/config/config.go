@@ -29,6 +29,12 @@ type Config struct {
 	SubAgent   SubAgentConfig   `yaml:"subagent"`
 	Host       HostConfig       `yaml:"host"`
 	OTLP       OTLPConfig       `yaml:"otlp"`
+	SSH        SSHConfig        `yaml:"ssh"`
+}
+
+// SSHConfig SSH remote operations toggle.
+type SSHConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type ServerConfig struct {
