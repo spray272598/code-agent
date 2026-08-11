@@ -21,6 +21,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/host"
+	"github.com/spray272598/code-agent/internal/domain/intent"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -345,6 +346,7 @@ func Build(cfg *config.Config) (*App, error) {
 		er.SetSummaryRepo(summaryRepo)
 		er.SetSkills(skillSvc)
 		er.SetMemory(memSvc)
+		er.SetIntentRouter(intent.NewClassifier(nil))
 		er.SetCompressorLLM(contextx.NewSummarizer(llmPort))
 		runner = er
 		orch = "eino"

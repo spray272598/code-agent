@@ -22,6 +22,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/contextx"
 	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	"github.com/spray272598/code-agent/internal/domain/hook"
+	"github.com/spray272598/code-agent/internal/domain/intent"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
@@ -51,22 +52,23 @@ type Config struct {
 
 // Runner uses CloudWeGo Eino ReAct; security/business cross-cuts stay in domain tools.
 type Runner struct {
-	cfg        Config
-	tools      *tool.MapRegistry
-	perm       *security.Guard
-	sessions   sessrepo.ISessionRepository
-	messages   sessrepo.IMessageRepository
-	summaries  sessrepo.ISummaryRepository
-	hooks      *hook.Bus
-	audit      audit.Repository
-	cache      *tool.ResultCache
-	compressor *contextx.Compressor
-	prompt     *PromptBuilder
-	skills     *skill.Service
-	mem        *memory.Service
-	persona    string
-	Multi      *MultiAgent
-	tokens     *engine.TokenManager
+	cfg          Config
+	tools        *tool.MapRegistry
+	perm         *security.Guard
+	sessions     sessrepo.ISessionRepository
+	messages     sessrepo.IMessageRepository
+	summaries    sessrepo.ISummaryRepository
+	hooks        *hook.Bus
+	audit        audit.Repository
+	cache        *tool.ResultCache
+	compressor   *contextx.Compressor
+	prompt       *PromptBuilder
+	skills       *skill.Service
+	mem          *memory.Service
+	persona      string
+	Multi        *MultiAgent
+	tokens       *engine.TokenManager
+	intentRouter intent.Router
 
 	// optional in-graph interrupt resume
 	graphStore compose.CheckPointStore
@@ -136,6 +138,11 @@ func (r *Runner) SetCompressorLLM(summarizer *contextx.Summarizer) {
 	if r.compressor != nil && summarizer != nil {
 		r.compressor.SetSummarizer(summarizer)
 	}
+}
+
+// SetIntentRouter 注入意图路由器
+func (r *Runner) SetIntentRouter(router intent.Router) {
+	r.intentRouter = router
 }
 
 // SetGraphStore overrides the Eino graph checkpoint store (optional).
@@ -287,11 +294,20 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		}
 	}
 
-	if r.Multi != nil && looksDeep(userInput) {
-		return r.Multi.RunDeep(ctx, session, userInput, publish, opts)
+	// 意图路由
+	var ir intent.Result
+	if r.intentRouter != nil {
+		ir = r.intentRouter.Classify(userInput)
+	} else {
+		ir = intent.Result{Intent: intent.IntentNormal, CleanInput: userInput}
 	}
-	if r.Multi != nil && looksMulti(userInput) {
-		return r.Multi.RunParallel(ctx, session, userInput, publish, opts)
+	publish(&engine.Event{Type: engine.EventThought, SubType: "intent", Content: "intent: " + ir.Intent.String() + " (source: " + ir.Source + ")", Timestamp: nowMs()})
+
+	if r.Multi != nil && ir.Intent == intent.IntentDeep {
+		return r.Multi.RunDeep(ctx, session, ir.CleanInput, publish, opts)
+	}
+	if r.Multi != nil && ir.Intent == intent.IntentTeam {
+		return r.Multi.RunParallel(ctx, session, ir.CleanInput, publish, opts)
 	}
 
 	// --- history load + compress chain ---

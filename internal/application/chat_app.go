@@ -324,6 +324,7 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	}
 	observability.Current().AddChatTotal(1)
 	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
 	if a.runs != nil {
 		a.runs.Register(session.ID, runCancel)
 		defer a.runs.Unregister(session.ID, runCancel)
