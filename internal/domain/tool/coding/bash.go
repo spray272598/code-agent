@@ -58,7 +58,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) (tool.Resul
 	} else {
 		cmd = exec.CommandContext(cctx, "bash", "-lc", cmdStr)
 	}
-	cmd.Dir = t.ws.Root
+	cmd.Dir = t.ws.EffectiveRoot(tool.SessionIDFrom(ctx))
 	if t.ProcessIsolate {
 		setProcessIsolate(cmd)
 	}

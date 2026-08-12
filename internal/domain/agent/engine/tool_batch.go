@@ -192,6 +192,7 @@ func (l *Loop) runToolCalls(
 		t0 := time.Now()
 		var resText string
 		_ = telemetry.SpanTool(ctx, tc.Name, func(tctx context.Context) error {
+			tctx = tool.WithSessionID(tctx, session.ID)
 			text, _ := l.execTool(tctx, tc.Name, tc.Args)
 			resText = text
 			return nil

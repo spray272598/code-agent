@@ -11,7 +11,7 @@ agent:
   workspace_root: "./workspace"
   # Primary orchestrator: CloudWeGo Eino. Falls back to native-offline when use_mock/no key.
   orchestrator: "eino"
-  eino_stream: false
+  eino_stream: true
   # In-graph HITL: CheckPointStore + ResumeWithData (falls back to app-level resume)
   eino_graph_resume: true
   eino_checkpoint_dir: "./data/eino-checkpoints"
@@ -19,9 +19,9 @@ agent:
 llm:
   provider: "openai_compatible"
   model: "deepseek-ai/DeepSeek-V3"
-  api_key: ""              # set LLM_API_KEY + LLM_USE_MOCK=false for Eino primary path
+  api_key: "sk-wkmtytmwekwihpxccpkqlekddtpfksrveehxbhjlxwqsxkzi"              # set LLM_API_KEY + LLM_USE_MOCK=false for Eino primary path
   api_base: "https://api.siliconflow.cn/v1"
-  use_mock: true           # true → native-offline for local/CI
+  use_mock: false           # true → native-offline for local/CI
 
 database:
   type: "memory"   # mysql | memory — set mysql when docker compose up

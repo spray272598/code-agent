@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/spray272598/code-agent/internal/domain/tool"
@@ -17,7 +18,9 @@ import (
 
 // Workspace resolves paths under root with sandbox.
 type Workspace struct {
-	Root string
+	Root      string
+	mu        sync.RWMutex
+	sessionRT map[string]string // sessionID → override root
 }
 
 func NewWorkspace(root string) *Workspace {
@@ -29,29 +32,68 @@ func NewWorkspace(root string) *Workspace {
 		root = abs
 	}
 	_ = os.MkdirAll(root, 0o755)
-	return &Workspace{Root: root}
+	return &Workspace{Root: root, sessionRT: make(map[string]string)}
+}
+
+// SetSessionRoot overrides the root for a specific session.
+func (w *Workspace) SetSessionRoot(sessionID, path string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if path == "" {
+		delete(w.sessionRT, sessionID)
+		return
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return
+	}
+	w.sessionRT[sessionID] = abs
+}
+
+// EffectiveRoot returns the root for a session (session override > global).
+func (w *Workspace) EffectiveRoot(sessionID string) string {
+	if w == nil {
+		return ""
+	}
+	w.mu.RLock()
+	if r, ok := w.sessionRT[sessionID]; ok {
+		w.mu.RUnlock()
+		return r
+	}
+	w.mu.RUnlock()
+	return w.Root
 }
 
 func (w *Workspace) Resolve(rel string) (string, error) {
+	return w.ResolveForSession("", rel)
+}
+
+// ResolveForSession resolves a path under the session-specific root.
+func (w *Workspace) ResolveForSession(sessionID, rel string) (string, error) {
+	root := w.EffectiveRoot(sessionID)
+	if root == "" {
+		return "", fmt.Errorf("workspace not configured")
+	}
 	if rel == "" || rel == "." {
-		return w.Root, nil
+		return root, nil
 	}
 	clean := filepath.Clean(rel)
 	if filepath.IsAbs(clean) {
-		// still must be under root
-		abs := clean
-		rel2, err := filepath.Rel(w.Root, abs)
+		rel2, err := filepath.Rel(root, clean)
 		if err != nil || strings.HasPrefix(rel2, "..") {
 			return "", fmt.Errorf("path outside workspace: %s", rel)
 		}
-		return abs, nil
+		return clean, nil
 	}
-	full := filepath.Join(w.Root, clean)
+	full := filepath.Join(root, clean)
 	abs, err := filepath.Abs(full)
 	if err != nil {
 		return "", err
 	}
-	rel2, err := filepath.Rel(w.Root, abs)
+	rel2, err := filepath.Rel(root, abs)
 	if err != nil || strings.HasPrefix(rel2, "..") {
 		return "", fmt.Errorf("path outside workspace: %s", rel)
 	}
@@ -72,9 +114,9 @@ func (t *ReadFileTool) InputSchema() map[string]any {
 		"path": map[string]any{"type": "string"},
 	}, "required": []string{"path"}}
 }
-func (t *ReadFileTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
+func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	path, _ := args["path"].(string)
-	abs, err := t.ws.Resolve(path)
+	abs, err := t.ws.ResolveForSession(tool.SessionIDFrom(ctx), path)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
@@ -103,10 +145,10 @@ func (t *WriteFileTool) InputSchema() map[string]any {
 		"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"},
 	}, "required": []string{"path", "content"}}
 }
-func (t *WriteFileTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
+func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
-	abs, err := t.ws.Resolve(path)
+	abs, err := t.ws.ResolveForSession(tool.SessionIDFrom(ctx), path)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
@@ -138,7 +180,7 @@ func (t *EditFileTool) InputSchema() map[string]any {
 		"count":       map[string]any{"type": "integer", "description": "max replacements; 0 or omit = 1 for exact unless replace_all"},
 	}, "required": []string{"path", "old_string", "new_string"}}
 }
-func (t *EditFileTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
+func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	path, _ := args["path"].(string)
 	oldS, _ := args["old_string"].(string)
 	newS, _ := args["new_string"].(string)
@@ -146,7 +188,7 @@ func (t *EditFileTool) Execute(_ context.Context, args map[string]any) (tool.Res
 	replaceAll := boolArg(args, "replace_all")
 	nLimit := intArg(args, "count", -1)
 
-	abs, err := t.ws.Resolve(path)
+	abs, err := t.ws.ResolveForSession(tool.SessionIDFrom(ctx), path)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
@@ -292,13 +334,13 @@ func (t *GlobTool) InputSchema() map[string]any {
 		"path":    map[string]any{"type": "string"},
 	}, "required": []string{"pattern"}}
 }
-func (t *GlobTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
+func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	pattern, _ := args["pattern"].(string)
 	sub, _ := args["path"].(string)
 	if pattern == "" {
 		return tool.Result{Text: "pattern required", IsError: true}, nil
 	}
-	root, err := t.ws.Resolve(sub)
+	root, err := t.ws.ResolveForSession(tool.SessionIDFrom(ctx), sub)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
@@ -368,7 +410,7 @@ func (t *GrepTool) InputSchema() map[string]any {
 		"context_after":  map[string]any{"type": "integer"},
 	}, "required": []string{"pattern"}}
 }
-func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
+func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	pat, _ := args["pattern"].(string)
 	sub, _ := args["path"].(string)
 	gfilter, _ := args["glob"].(string)
@@ -385,7 +427,7 @@ func (t *GrepTool) Execute(_ context.Context, args map[string]any) (tool.Result,
 	if err != nil {
 		return tool.Result{Text: "invalid regex: " + err.Error(), IsError: true}, nil
 	}
-	root, err := t.ws.Resolve(sub)
+	root, err := t.ws.ResolveForSession(tool.SessionIDFrom(ctx), sub)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}

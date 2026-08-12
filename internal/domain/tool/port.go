@@ -25,3 +25,22 @@ type Registry interface {
 	Get(name string) ITool
 	List() []ITool
 }
+
+// --- Session context ---
+
+type ctxKey int
+
+const (
+	ctxSessionID ctxKey = iota + 1
+)
+
+// WithSessionID injects sessionID into context for tools.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, ctxSessionID, sessionID)
+}
+
+// SessionIDFrom extracts sessionID from context.
+func SessionIDFrom(ctx context.Context) string {
+	s, _ := ctx.Value(ctxSessionID).(string)
+	return s
+}

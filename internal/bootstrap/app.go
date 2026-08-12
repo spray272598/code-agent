@@ -176,6 +176,7 @@ func Build(cfg *config.Config) (*App, error) {
 	}
 
 	ws := coding.NewWorkspace(workspaceRoot)
+	perm := security.NewGuard(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite)
 	reg := tool.NewRegistry()
 	// local coding tools
 	localRead := coding.NewReadFile(ws)
@@ -205,6 +206,7 @@ func Build(cfg *config.Config) (*App, error) {
 		reg.Register(localGlob)
 		reg.Register(localGrep)
 	}
+	reg.Register(coding.NewSwitchWorkspace(ws, perm))
 	reg.Register(coding.NewMemorySave(memCtx))
 	reg.Register(coding.NewMemorySearch(memCtx))
 
@@ -318,8 +320,6 @@ func Build(cfg *config.Config) (*App, error) {
 			}
 		}
 	}
-
-	perm := security.NewGuard(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite)
 
 	// Orchestrator: Eino is primary; native is offline/mock fallback only.
 	// All tools (core + MCP) live in MapRegistry → Eino path wraps every tool with GuardedTool.

@@ -790,6 +790,12 @@ If a tool returns DENIED or CONFIRM, explain what the user must approve.
 For multi-step independent research, you may use the delegate tool when available.
 Prefer code_search for symbol/file discovery before blind glob.
 For deep multi-step implementation use prefix /deep ; for parallel roles use /team .
+
+## Workspace switching
+If the user asks to work on a project outside the current workspace, call switch_workspace first:
+{"name":"switch_workspace","args":{"path":"D:/some/project"}}
+After switching, all file tools operate in the new workspace. Do NOT attempt to access paths outside the workspace without switching.
+
 Be concise.`
 }
 

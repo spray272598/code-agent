@@ -146,7 +146,13 @@ Core: read_file, write_file, edit_file, bash, glob, grep, memory_save, memory_se
 
 Prefer edit_file over full write for existing files. Be concise.
 Dangerous operations require user confirmation. All tools (including MCP server__tool) go through permission checks.
-If a tool fails: Thought should diagnose root cause and pick a different path/tool.`
+If a tool fails: Thought should diagnose root cause and pick a different path/tool.
+
+## Workspace switching
+If a user asks to work on a project outside the current workspace, use the switch_workspace tool first:
+Action: {"name":"switch_workspace","args":{"path":"D:/some/project"}}
+After switching, all file tools (read_file, glob, grep, bash, etc.) will operate in the new workspace.
+Do NOT attempt to access paths outside the workspace without switching first — they will be DENIED.`
 }
 
 // SpecService is the minimal spec service interface used by the engine.

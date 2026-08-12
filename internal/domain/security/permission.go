@@ -54,6 +54,7 @@ type Guard struct {
 	denyStreak   map[string]int
 	circuitLimit int
 	workspace    string
+	sessionWS    map[string]string // sessionID → override workspace
 	pathSandbox  bool
 	confirmWrite bool
 	denyRules    []rule
@@ -79,6 +80,7 @@ func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
 		denyStreak:   make(map[string]int),
 		circuitLimit: 5,
 		workspace:    workspace,
+		sessionWS:    make(map[string]string),
 		pathSandbox:  pathSandbox,
 		confirmWrite: confirmWrite,
 		mcpConfirm:   true,
@@ -198,10 +200,11 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	}
 
 	// L2 path sandbox (also normalize path tricks / URL / Unicode)
-	if g.pathSandbox {
+	// switch_workspace is exempt: it needs to accept paths outside current workspace
+	if g.pathSandbox && tool != "switch_workspace" {
 		if p := pathArg(tool, args); p != "" {
 			norm := NormalizePathArg(p)
-			if !g.underWorkspace(norm) {
+			if !g.underWorkspace(sessionID, norm) {
 				g.incDeny(sessionID)
 				return Decision{Action: ActionDeny, Layer: "L2", RuleID: "path_sandbox", Reason: "path outside workspace", Tool: tool, Summary: summary}
 			}
@@ -303,15 +306,42 @@ func looksDangerousArgs(args map[string]any) bool {
 	return false
 }
 
-func (g *Guard) underWorkspace(p string) bool {
-	if g.workspace == "" {
+// SetSessionWorkspace overrides the workspace for a specific session.
+func (g *Guard) SetSessionWorkspace(sessionID, path string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if path == "" {
+		delete(g.sessionWS, sessionID)
+		return
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return
+	}
+	g.sessionWS[sessionID] = abs
+}
+
+// SessionWorkspace returns the effective workspace for a session (session override > global).
+func (g *Guard) SessionWorkspace(sessionID string) string {
+	g.mu.RLock()
+	if ws, ok := g.sessionWS[sessionID]; ok {
+		g.mu.RUnlock()
+		return ws
+	}
+	g.mu.RUnlock()
+	return g.workspace
+}
+
+func (g *Guard) underWorkspace(sessionID, p string) bool {
+	ws := g.SessionWorkspace(sessionID)
+	if ws == "" {
 		return true
 	}
 	// reject invalid UTF-8 / null from NormalizePathArg
 	if p == "" || strings.Contains(p, "\x00") {
 		return false
 	}
-	absW, err := filepath.Abs(g.workspace)
+	absW, err := filepath.Abs(ws)
 	if err != nil {
 		return false
 	}

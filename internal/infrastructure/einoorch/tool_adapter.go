@@ -153,6 +153,7 @@ func (t *GuardedTool) execCross(ctx context.Context, name string, args map[strin
 	t0 := time.Now()
 	observability.Current().AddToolCalls(1)
 
+	ctx = domtool.WithSessionID(ctx, sessionID)
 	res, err := t.Inner.Execute(ctx, args)
 	lat := time.Since(t0)
 	observability.Current().ObserveTool(lat)
