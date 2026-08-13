@@ -13,6 +13,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/domain/checkpoint"
+	"github.com/spray272598/code-agent/internal/domain/hook"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -45,6 +46,7 @@ type ChatApp struct {
 	blobs       blob.Store
 	ckStore     checkpoint.Store
 	runs        *checkpoint.RunRegistry
+	hooks       *hook.Bus
 	timeoutSec  int
 	workspace   string
 	rateEnabled bool
@@ -507,6 +509,105 @@ func (a *ChatApp) ActiveRuns() []string {
 		return nil
 	}
 	return a.runs.Active()
+}
+
+// SetHooks injects the lifecycle hook bus and registers a per-step checkpoint
+// handler that snapshots agent progress (step count + last tool) to durable store.
+// This enables crash/restart resume for non-HITL interruptions.
+func (a *ChatApp) SetHooks(h *hook.Bus) {
+	a.hooks = h
+	if a.hooks == nil || a.ckStore == nil {
+		return
+	}
+	a.hooks.On(hook.PostToolUse, func(ctx context.Context, ev hook.Event) error {
+		a.touchStep(ctx, ev.SessionID, ev.Step, ev.Tool)
+		return nil
+	})
+}
+
+// touchStep updates the running snapshot's step/lastTool. It is a no-op unless
+// the session currently has a StatusRunning snapshot (i.e. mid-run).
+func (a *ChatApp) touchStep(ctx context.Context, sessionID string, step int, tool string) {
+	if a.ckStore == nil || sessionID == "" {
+		return
+	}
+	snap, err := a.ckStore.Get(ctx, sessionID)
+	if err != nil || snap == nil {
+		return
+	}
+	if snap.Status != checkpoint.StatusRunning {
+		return
+	}
+	if step > snap.Step {
+		snap.Step = step
+	}
+	if tool != "" {
+		if snap.Meta == nil {
+			snap.Meta = map[string]any{}
+		}
+		snap.Meta["lastTool"] = tool
+		snap.Meta["lastToolAt"] = time.Now()
+	}
+	if err := a.ckStore.Save(ctx, snap); err != nil {
+		observability.LogError("step checkpoint save", err)
+	}
+}
+
+// ListResumable returns snapshots of runs that were interrupted by crash/restart:
+// Status=running but with no active in-process handle. After a process restart,
+// every Status=running snapshot is resumable.
+func (a *ChatApp) ListResumable(ctx context.Context) []*checkpoint.Snapshot {
+	if a.ckStore == nil {
+		return nil
+	}
+	list, err := a.ckStore.List(ctx, checkpoint.StatusRunning, 200)
+	if err != nil {
+		return nil
+	}
+	var out []*checkpoint.Snapshot
+	for _, s := range list {
+		if s == nil {
+			continue
+		}
+		if a.runs != nil && a.runs.IsRunning(s.SessionID) {
+			continue // actively running right now
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// ResumeSession continues an interrupted run, injecting step/tool context so the
+// agent can pick up near the break point instead of redoing completed steps.
+func (a *ChatApp) ResumeSession(ctx context.Context, sessionID, message string) (*ChatResponse, error) {
+	snap, err := a.GetCheckpoint(ctx, sessionID)
+	if err != nil || snap == nil {
+		return nil, fmt.Errorf("no resumable checkpoint for session %s", sessionID)
+	}
+	hint := ""
+	if snap.Step > 0 {
+		hint += fmt.Sprintf("上次中断于第 %d 步", snap.Step)
+	}
+	if t, ok := snap.Meta["lastTool"]; ok {
+		if hint != "" {
+			hint += "，"
+		}
+		hint += fmt.Sprintf("最后执行工具 %v", t)
+	}
+	if hint != "" {
+		hint += "。"
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "继续。"
+	}
+	if hint != "" {
+		message = message + "\n[断点上下文] " + hint + " 请从断点继续未完成的工作，不要重复已完成的步骤。"
+	}
+	req := ChatRequest{
+		SessionID: sessionID, UserID: snap.UserID, ProjectID: snap.ProjectID,
+		Message: message,
+	}
+	return a.Chat(req)
 }
 
 // RestoreCheckpoints rehydrates pending confirms from durable store (process start).

@@ -53,6 +53,15 @@ func (t *SearchTool) Execute(_ context.Context, args map[string]any) (tool.Resul
 	}
 	hits := t.Idx.Search(q, k)
 	if len(hits) == 0 {
+		// semantic fallback: natural-language query with no literal token hits
+		if sem := t.Idx.SearchSemantic(context.Background(), q, k); len(sem) > 0 {
+			var b strings.Builder
+			b.WriteString(fmt.Sprintf("code_search %q → %d semantic hits (files=%d)\n", q, len(sem), t.Idx.Stats().Files))
+			for i, h := range sem {
+				b.WriteString(fmt.Sprintf("%d. %s score=%.2f\n   %s\n", i+1, h.Path, h.Score, h.Snippet))
+			}
+			return tool.Result{Text: b.String()}, nil
+		}
 		return tool.Result{Text: fmt.Sprintf("no hits for %q (indexed files=%d)", q, t.Idx.Stats().Files)}, nil
 	}
 	var b strings.Builder

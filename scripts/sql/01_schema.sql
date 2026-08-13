@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS `core_memory` (
   `content`    TEXT         NOT NULL,
   `importance` INT          NOT NULL DEFAULT 50,
   `source`     VARCHAR(64)  NOT NULL DEFAULT '',
+  `embedding`  MEDIUMTEXT   NULL COMMENT 'JSON-encoded float32 vector for semantic search',
   `created_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
@@ -87,6 +88,8 @@ CREATE TABLE IF NOT EXISTS `core_memory` (
   KEY `idx_project` (`project_id`),
   KEY `idx_importance` (`importance`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='长期记忆';
+
+ALTER TABLE `core_memory` ADD COLUMN `embedding` MEDIUMTEXT NULL COMMENT 'JSON-encoded float32 vector';
 
 CREATE TABLE IF NOT EXISTS `mcp_server_config` (
   `id`           BIGINT       NOT NULL AUTO_INCREMENT,

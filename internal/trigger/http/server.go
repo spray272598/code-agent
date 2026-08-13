@@ -107,6 +107,8 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/session/cancel", s.handleSessionCancel)
 	mux.HandleFunc("/api/v1/session/checkpoint", s.handleSessionCheckpoint)
 	mux.HandleFunc("/api/v1/session/checkpoints", s.handleSessionCheckpoints)
+	mux.HandleFunc("/api/v1/session/resumable", s.handleSessionResumable)
+	mux.HandleFunc("/api/v1/session/resume", s.handleSessionResume)
 	mux.HandleFunc("/api/v1/session/runs", s.handleSessionRuns)
 	mux.HandleFunc("/api/v1/index/search", s.handleIndexSearch)
 	mux.HandleFunc("/api/v1/index/rebuild", s.handleIndexRebuild)
@@ -793,6 +795,32 @@ func (s *Server) handleSessionCheckpoints(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
+}
+
+func (s *Server) handleSessionResumable(w http.ResponseWriter, r *http.Request) {
+	list := s.app.ListResumable(r.Context())
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
+}
+
+func (s *Server) handleSessionResume(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SessionID string `json:"sessionId"`
+		Message   string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, "400", "invalid body")
+		return
+	}
+	if body.SessionID == "" {
+		writeErr(w, 400, "400", "sessionId required")
+		return
+	}
+	res, err := s.app.ResumeSession(r.Context(), body.SessionID, body.Message)
+	if err != nil {
+		writeErr(w, 400, "400", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": res})
 }
 
 func (s *Server) handleSessionRuns(w http.ResponseWriter, r *http.Request) {

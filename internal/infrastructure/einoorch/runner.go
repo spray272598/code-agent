@@ -134,6 +134,14 @@ func (r *Runner) SetMemory(m *memory.Service) {
 		r.prompt.SetMemory(m)
 	}
 }
+
+// SetSpecService injects spec-driven content (spec.md/tasks.md/checklist.md/CLAUDE.md)
+// into the system prompt for each turn.
+func (r *Runner) SetSpecService(s SpecProvider) {
+	if r.prompt != nil {
+		r.prompt.SetSpecService(s)
+	}
+}
 func (r *Runner) SetCompressorLLM(summarizer *contextx.Summarizer) {
 	if r.compressor != nil && summarizer != nil {
 		r.compressor.SetSummarizer(summarizer)
@@ -280,6 +288,9 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	var activeSkill *skill.Skill
 	if r.skills != nil && !isContinue(userInput) {
 		activeSkill = r.skills.Match(userInput)
+		if activeSkill == nil {
+			activeSkill = r.skills.MatchSemantic(ctx, userInput)
+		}
 		if activeSkill != nil {
 			publish(&engine.Event{Type: engine.EventSkill, SubType: activeSkill.ID, Content: "skill: " + activeSkill.Name, Timestamp: nowMs()})
 		}

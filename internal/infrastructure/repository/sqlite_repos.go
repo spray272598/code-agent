@@ -177,12 +177,13 @@ type SQLiteMemoryRepo struct{ db *sql.DB }
 func NewSQLiteMemoryRepo(db *sql.DB) *SQLiteMemoryRepo { return &SQLiteMemoryRepo{db: db} }
 
 func (r *SQLiteMemoryRepo) Save(ctx context.Context, item *memport.MemoryItem) error {
+	emb := memport.EncodeEmbedding(item.Embedding)
 	if item.ID == 0 {
 		res, err := r.db.ExecContext(ctx, `
-INSERT INTO core_memory (user_id,project_id,scope,category,content,importance,source,created_at)
-VALUES (?,?,?,?,?,?,?,?)`,
+INSERT INTO core_memory (user_id,project_id,scope,category,content,importance,source,embedding,created_at)
+VALUES (?,?,?,?,?,?,?,?,?)`,
 			item.UserID, item.ProjectID, string(item.Scope), item.Category, item.Content,
-			item.Importance, item.Source, time.Now().Format(time.RFC3339Nano))
+			item.Importance, item.Source, emb, time.Now().Format(time.RFC3339Nano))
 		if err != nil {
 			return err
 		}
@@ -191,8 +192,8 @@ VALUES (?,?,?,?,?,?,?,?)`,
 		return nil
 	}
 	_, err := r.db.ExecContext(ctx, `
-UPDATE core_memory SET content=?, importance=?, category=?, scope=? WHERE id=?`,
-		item.Content, item.Importance, item.Category, string(item.Scope), item.ID)
+UPDATE core_memory SET content=?, importance=?, category=?, scope=?, embedding=? WHERE id=?`,
+		item.Content, item.Importance, item.Category, string(item.Scope), emb, item.ID)
 	return err
 }
 
@@ -200,7 +201,7 @@ func (r *SQLiteMemoryRepo) List(ctx context.Context, userID, projectID string, s
 	if limit <= 0 {
 		limit = 20
 	}
-	q := `SELECT id,user_id,project_id,scope,category,content,importance,source FROM core_memory WHERE user_id=?`
+	q := `SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory WHERE user_id=?`
 	args := []any{userID}
 	if scope != "" {
 		q += ` AND scope=?`
@@ -226,7 +227,7 @@ func (r *SQLiteMemoryRepo) Search(ctx context.Context, userID, projectID, query 
 	}
 	// FTS-lite: LIKE over content; score by importance
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,user_id,project_id,scope,category,content,importance,source FROM core_memory
+SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory
 WHERE user_id=? AND content LIKE ?
 ORDER BY importance DESC LIMIT ?`, userID, "%"+query+"%", limit)
 	if err != nil {
@@ -250,6 +251,31 @@ ORDER BY importance DESC LIMIT ?`, userID, "%"+query+"%", limit)
 	return out, nil
 }
 
+func (r *SQLiteMemoryRepo) ListNoEmbedding(ctx context.Context, limit int) ([]memport.MemoryItem, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory
+WHERE embedding='' OR embedding IS NULL LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMemRows(rows)
+}
+
+func (r *SQLiteMemoryRepo) Prune(ctx context.Context, minImportance int, olderThan time.Time) (int, error) {
+	res, err := r.db.ExecContext(ctx, `
+DELETE FROM core_memory WHERE importance < ? AND created_at < ?`,
+		minImportance, olderThan.Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func (r *SQLiteMemoryRepo) Delete(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM core_memory WHERE id=?`, id)
 	return err
@@ -259,11 +285,12 @@ func scanMemRows(rows *sql.Rows) ([]memport.MemoryItem, error) {
 	var out []memport.MemoryItem
 	for rows.Next() {
 		var it memport.MemoryItem
-		var scope string
-		if err := rows.Scan(&it.ID, &it.UserID, &it.ProjectID, &scope, &it.Category, &it.Content, &it.Importance, &it.Source); err != nil {
+		var scope, emb string
+		if err := rows.Scan(&it.ID, &it.UserID, &it.ProjectID, &scope, &it.Category, &it.Content, &it.Importance, &it.Source, &emb); err != nil {
 			return nil, err
 		}
 		it.Scope = memport.Scope(scope)
+		it.Embedding = memport.DecodeEmbedding(emb)
 		out = append(out, it)
 	}
 	return out, rows.Err()

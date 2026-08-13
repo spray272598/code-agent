@@ -68,6 +68,11 @@ type LLMConfig struct {
 	APIKey   string `yaml:"api_key"`
 	APIBase  string `yaml:"api_base"`
 	UseMock  bool   `yaml:"use_mock"`
+	// Embedding (semantic memory search). Empty model → embedding disabled.
+	EmbeddingModel   string `yaml:"embedding_model"`
+	EmbeddingAPIBase string `yaml:"embedding_api_base"`
+	// EmbeddingEnabled is derived: true when EmbeddingModel != "" && APIKey != "".
+	EmbeddingEnabled bool `yaml:"-"`
 }
 
 type DatabaseConfig struct {
@@ -266,6 +271,12 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LLM_USE_MOCK"); v != "" {
 		cfg.LLM.UseMock = strings.EqualFold(v, "true") || v == "1"
 	}
+	if v := os.Getenv("EMBEDDING_MODEL"); v != "" {
+		cfg.LLM.EmbeddingModel = v
+	}
+	if v := os.Getenv("EMBEDDING_API_BASE"); v != "" {
+		cfg.LLM.EmbeddingAPIBase = v
+	}
 	if v := os.Getenv("CODE_AGENT_API_KEY"); v != "" {
 		cfg.Security.APIKeys = []string{v}
 	}
@@ -313,6 +324,8 @@ func applyEnv(cfg *Config) {
 	if cfg.LLM.APIKey == "" {
 		cfg.LLM.UseMock = true
 	}
+	// embedding enabled only when a model is configured and a real key exists
+	cfg.LLM.EmbeddingEnabled = cfg.LLM.EmbeddingModel != "" && cfg.LLM.APIKey != "" && !cfg.LLM.UseMock
 }
 
 func normalize(cfg *Config) {

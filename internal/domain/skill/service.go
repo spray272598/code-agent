@@ -1,28 +1,45 @@
 package skill
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 )
 
 type Service struct {
 	mu      sync.RWMutex
 	rootDir string
 	skills  map[string]*Skill
+	llm     port.ILLMPort
+	embed   port.IEmbeddingPort
+	// emb is a lazy cache of skill vectors (skillID -> embedding).
+	emb map[string][]float32
 }
 
 func NewService(rootDir string) *Service {
 	if rootDir == "" {
 		rootDir = "./skills"
 	}
-	s := &Service{rootDir: rootDir, skills: map[string]*Skill{}}
+	s := &Service{rootDir: rootDir, skills: map[string]*Skill{}, emb: map[string][]float32{}}
 	_ = s.Reload()
 	return s
 }
+
+// SetLLM injects an LLM for semantic skill matching fallback. When nil, Match
+// stays purely rule-based.
+func (s *Service) SetLLM(llm port.ILLMPort) { s.llm = llm }
+
+// SetEmbedder injects an embedding port for vector-based skill matching
+// (preferred fast path; LLM is the fallback). Reload clears the vector cache.
+func (s *Service) SetEmbedder(e port.IEmbeddingPort) { s.embed = e }
 
 func (s *Service) RootDir() string { return s.rootDir }
 
@@ -47,6 +64,7 @@ func (s *Service) Reload() error {
 	}
 	s.mu.Lock()
 	s.skills = loaded
+	s.emb = map[string][]float32{} // invalidate vector cache
 	s.mu.Unlock()
 	return nil
 }
@@ -107,6 +125,169 @@ func (s *Service) Match(userInput string) *Skill {
 		return nil
 	}
 	return best
+}
+
+const skillMatchSystemPrompt = `You decide whether a user message should activate one of the available skills.
+Reply with STRICT JSON: {"skill":"<id>"} to activate, or {"skill":""} when no skill fits.
+Choose a skill ONLY when the message is clearly within its domain. Be conservative: when unsure, return empty.`
+
+// skillEmbThreshold is the cosine similarity floor for vector-based skill match.
+const skillEmbThreshold = 0.55
+
+// MatchSemantic resolves a skill for natural-language input when rule matching
+// missed. Fast path: vector similarity (cheap). Fallback: LLM judgment.
+func (s *Service) MatchSemantic(ctx context.Context, userInput string) *Skill {
+	if s == nil {
+		return nil
+	}
+	// fast path: embedding similarity
+	if sk := s.MatchEmbedding(ctx, userInput); sk != nil {
+		return sk
+	}
+	// fallback: LLM judgment
+	if s.llm == nil {
+		return nil
+	}
+	return s.matchLLM(ctx, userInput)
+}
+
+// MatchEmbedding ranks skills by cosine similarity of the user input against
+// each skill's name+description+triggers. Returns nil when no vector passes the
+// threshold or the embedder is unavailable.
+func (s *Service) MatchEmbedding(ctx context.Context, userInput string) *Skill {
+	if s == nil || s.embed == nil {
+		return nil
+	}
+	cands := s.List()
+	if len(cands) == 0 {
+		return nil
+	}
+	qvecs, err := s.embed.Embed(ctx, []string{userInput})
+	if err != nil || len(qvecs) != 1 || len(qvecs[0]) == 0 {
+		return nil
+	}
+	qvec := qvecs[0]
+
+	bestID := ""
+	bestSim := 0.0
+	for _, sk := range cands {
+		if !sk.Enabled {
+			continue
+		}
+		vec := s.skillVector(ctx, sk)
+		if len(vec) == 0 {
+			continue
+		}
+		if sim := cosSim(qvec, vec); sim > bestSim {
+			bestSim = sim
+			bestID = sk.ID
+		}
+	}
+	if bestSim < skillEmbThreshold {
+		return nil
+	}
+	return s.Get(bestID)
+}
+
+// skillVector returns (computing + caching) the embedding of a skill's textual
+// identity: name + description + triggers.
+func (s *Service) skillVector(ctx context.Context, sk *Skill) []float32 {
+	s.mu.RLock()
+	if v, ok := s.emb[sk.ID]; ok {
+		s.mu.RUnlock()
+		return v
+	}
+	s.mu.RUnlock()
+
+	text := strings.Join(append([]string{sk.Name, sk.Description}, sk.Triggers...), " ")
+	vecs, err := s.embed.Embed(ctx, []string{text})
+	if err != nil || len(vecs) != 1 || len(vecs[0]) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	s.emb[sk.ID] = vecs[0]
+	s.mu.Unlock()
+	return vecs[0]
+}
+
+// matchLLM is the LLM fallback for skill matching.
+func (s *Service) matchLLM(ctx context.Context, userInput string) *Skill {
+	cands := s.List()
+	if len(cands) == 0 {
+		return nil
+	}
+
+	var b strings.Builder
+	for _, sk := range cands {
+		if !sk.Enabled {
+			continue
+		}
+		b.WriteString("- id: ")
+		b.WriteString(sk.ID)
+		b.WriteString("\n  name: ")
+		b.WriteString(sk.Name)
+		if sk.Description != "" {
+			b.WriteString("\n  description: ")
+			b.WriteString(sk.Description)
+		}
+		if len(sk.Triggers) > 0 {
+			b.WriteString("\n  triggers: ")
+			b.WriteString(strings.Join(sk.Triggers, ", "))
+		}
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		return nil
+	}
+
+	resp, err := s.llm.Generate(ctx, &port.ChatRequest{
+		SystemPrompt: skillMatchSystemPrompt + "\n\n## Available skills\n" + b.String(),
+		Messages:     []port.ChatMessage{{Role: "user", Content: userInput}},
+		Temperature:  0.1,
+		MaxTokens:    64,
+	})
+	if err != nil || resp == nil {
+		return nil
+	}
+	id := parseSkillMatch(resp.Content)
+	if id == "" {
+		return nil
+	}
+	return s.Get(id)
+}
+
+// cosSim computes cosine similarity between two equal-length float32 vectors.
+func cosSim(a, b []float32) float64 {
+	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		ai := float64(a[i])
+		bi := float64(b[i])
+		dot += ai * bi
+		na += ai * ai
+		nb += bi * bi
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+}
+
+// parseSkillMatch extracts {"skill":"<id>"} from an LLM reply.
+func parseSkillMatch(content string) string {
+	content = strings.TrimSpace(content)
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start < 0 || end <= start {
+		return ""
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(content[start:end+1]), &m); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(m["skill"])
 }
 
 func (s *Service) PromptSection(sk *Skill) string {

@@ -49,8 +49,9 @@ func migrate(db *sql.DB, path string) error {
 			continue
 		}
 		if _, err := db.Exec(stmt); err != nil {
-			// ignore duplicate
-			if !strings.Contains(err.Error(), "already exists") {
+			// ignore duplicate (table/column already exists)
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "already exists") && !strings.Contains(msg, "duplicate column") {
 				return fmt.Errorf("%w\nstmt: %s", err, truncate(stmt, 120))
 			}
 		}

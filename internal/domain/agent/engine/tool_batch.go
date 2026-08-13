@@ -206,7 +206,7 @@ func (l *Loop) runToolCalls(
 			l.toolCache.Put(tc.Name, tc.Args, resText)
 		}
 		if l.hooks != nil {
-			l.hooks.Emit(ctx, hook.Event{Point: hook.PostToolUse, SessionID: session.ID, Tool: tc.Name, Args: tc.Args, Result: resText})
+			l.hooks.Emit(ctx, hook.Event{Point: hook.PostToolUse, SessionID: session.ID, Step: step, Tool: tc.Name, Args: tc.Args, Result: resText})
 		}
 		publish(&Event{Type: EventObservation, SubType: tc.Name, Step: step, Content: truncate(resText, EventObservationMaxChars), Timestamp: now()})
 		publish(&Event{Type: EventToolResult, SubType: tc.Name, Step: step, Content: truncate(resText, EventResultMaxChars), Timestamp: now()})

@@ -13,6 +13,12 @@ import (
 	domtool "github.com/spray272598/code-agent/internal/domain/tool"
 )
 
+// SpecProvider supplies spec-driven content (spec.md/tasks.md/checklist.md/CLAUDE.md)
+// for system-prompt injection. Implemented by spec.Service in domain/spec.
+type SpecProvider interface {
+	PromptSection() string
+}
+
 // PromptBuilder builds dynamic system prompts (persona + tools + skill + memory + budget).
 type PromptBuilder struct {
 	mu       sync.RWMutex
@@ -20,6 +26,7 @@ type PromptBuilder struct {
 	tools    *domtool.MapRegistry
 	skills   *skill.Service
 	mem      *memory.Service
+	spec     SpecProvider
 	cacheKey string
 	cacheVal string
 }
@@ -33,6 +40,7 @@ func NewPromptBuilder(base string, tools *domtool.MapRegistry) *PromptBuilder {
 
 func (p *PromptBuilder) SetSkills(s *skill.Service) { p.skills = s }
 func (p *PromptBuilder) SetMemory(m *memory.Service) { p.mem = m }
+func (p *PromptBuilder) SetSpecService(s SpecProvider) { p.spec = s }
 
 // Build returns system prompt for this turn (cached when static parts unchanged).
 func (p *PromptBuilder) Build(ctx context.Context, userID, projectID, userInput string, activeSkill *skill.Skill, tokenBudget int) string {
@@ -84,11 +92,20 @@ func (p *PromptBuilder) Build(ctx context.Context, userID, projectID, userInput 
 		p.mu.Unlock()
 	}
 
-	// dynamic memory block
+	// dynamic blocks: memory + spec (spec is dynamic so task/checklist progress reflects on next turn)
+	var dyn []string
 	if p.mem != nil && userID != "" {
 		if block := p.mem.FormatForPrompt(ctx, userID, projectID, userInput, 8); block != "" {
-			return static + "\n" + block
+			dyn = append(dyn, block)
 		}
+	}
+	if p.spec != nil {
+		if sec := p.spec.PromptSection(); sec != "" {
+			dyn = append(dyn, sec)
+		}
+	}
+	if len(dyn) > 0 {
+		return static + "\n" + strings.Join(dyn, "\n")
 	}
 	return static
 }

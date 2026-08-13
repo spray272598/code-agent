@@ -3,8 +3,6 @@ package sshtool
 import (
 	"context"
 	"testing"
-
-	"github.com/spray272598/code-agent/internal/domain/tool"
 )
 
 func TestExecTool_Name(t *testing.T) {

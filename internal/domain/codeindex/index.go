@@ -4,6 +4,7 @@ package codeindex
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 )
 
 var (
@@ -52,8 +55,11 @@ type Index struct {
 	// term -> path -> tf
 	posting map[string]map[string]int
 	// path -> first lines for snippet
-	docs    map[string][]string
-	stats   Stats
+	docs map[string][]string
+	stats Stats
+	// semantic search (optional): file summary vectors
+	embed   port.IEmbeddingPort
+	fileEmb map[string][]float32
 }
 
 func New(root string) *Index {
@@ -65,8 +71,12 @@ func New(root string) *Index {
 		root:    root,
 		posting: map[string]map[string]int{},
 		docs:    map[string][]string{},
+		fileEmb: map[string][]float32{},
 	}
 }
+
+// SetEmbedder enables optional semantic search over file summaries.
+func (idx *Index) SetEmbedder(e port.IEmbeddingPort) { idx.embed = e }
 
 func (idx *Index) Root() string {
 	if idx == nil {
@@ -202,6 +212,152 @@ func (idx *Index) Search(query string, k int) []Hit {
 		out = append(out, h)
 	}
 	return out
+}
+
+// BuildEmbeddings computes a summary vector per file for semantic search.
+// Capped by maxFiles to bound cost (files are processed in lexical order).
+// Returns the number of files embedded.
+func (idx *Index) BuildEmbeddings(ctx context.Context, maxFiles int) int {
+	if idx == nil || idx.embed == nil {
+		return 0
+	}
+	if maxFiles <= 0 {
+		maxFiles = 300
+	}
+	idx.mu.RLock()
+	paths := make([]string, 0, len(idx.docs))
+	for p := range idx.docs {
+		paths = append(paths, p)
+	}
+	idx.mu.RUnlock()
+	sort.Strings(paths)
+	if len(paths) > maxFiles {
+		paths = paths[:maxFiles]
+	}
+
+	emb := map[string][]float32{}
+	// batch embeddings to reduce round-trips
+	const batch = 32
+	for i := 0; i < len(paths); i += batch {
+		end := i + batch
+		if end > len(paths) {
+			end = len(paths)
+		}
+		batchPaths := paths[i:end]
+		texts := make([]string, 0, len(batchPaths))
+		for _, p := range batchPaths {
+			texts = append(texts, idx.fileSummary(p))
+		}
+		vecs, err := idx.embed.Embed(ctx, texts)
+		if err != nil {
+			continue
+		}
+		for j, p := range batchPaths {
+			if j < len(vecs) && len(vecs[j]) > 0 {
+				emb[p] = vecs[j]
+			}
+		}
+	}
+	idx.mu.Lock()
+	idx.fileEmb = emb
+	idx.mu.Unlock()
+	return len(emb)
+}
+
+// fileSummary builds a compact textual summary of a file for embedding.
+func (idx *Index) fileSummary(path string) string {
+	idx.mu.RLock()
+	lines := idx.docs[path]
+	idx.mu.RUnlock()
+	s := path
+	if len(lines) > 0 {
+		joined := strings.Join(lines, " ")
+		if len(joined) > 500 {
+			joined = joined[:500]
+		}
+		s += " " + joined
+	}
+	return s
+}
+
+// SearchSemantic ranks files by cosine similarity of the query against file
+// summaries. Returns nil when the embedder is unavailable or no vectors exist.
+func (idx *Index) SearchSemantic(ctx context.Context, query string, k int) []Hit {
+	if idx == nil || idx.embed == nil || query == "" {
+		return nil
+	}
+	if k <= 0 {
+		k = 8
+	}
+	qvecs, err := idx.embed.Embed(ctx, []string{query})
+	if err != nil || len(qvecs) != 1 || len(qvecs[0]) == 0 {
+		return nil
+	}
+	qvec := qvecs[0]
+
+	idx.mu.RLock()
+	type kv struct {
+		p string
+		s float64
+	}
+	var arr []kv
+	for p, vec := range idx.fileEmb {
+		if len(vec) == 0 {
+			continue
+		}
+		if sim := cosSimIdx(qvec, vec); sim > 0.2 {
+			arr = append(arr, kv{p, sim})
+		}
+	}
+	idx.mu.RUnlock()
+
+	sort.Slice(arr, func(i, j int) bool {
+		if arr[i].s == arr[j].s {
+			return arr[i].p < arr[j].p
+		}
+		return arr[i].s > arr[j].s
+	})
+	if len(arr) > k {
+		arr = arr[:k]
+	}
+	out := make([]Hit, 0, len(arr))
+	for _, e := range arr {
+		out = append(out, Hit{Path: e.p, Score: e.s, Snippet: idx.snippetForPath(e.p)})
+	}
+	return out
+}
+
+func (idx *Index) snippetForPath(p string) string {
+	idx.mu.RLock()
+	lines := idx.docs[p]
+	idx.mu.RUnlock()
+	if len(lines) == 0 {
+		return ""
+	}
+	s := strings.TrimSpace(lines[0])
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
+}
+
+// cosSimIdx computes cosine similarity between two float32 vectors.
+func cosSimIdx(a, b []float32) float64 {
+	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		ai := float64(a[i])
+		bi := float64(b[i])
+		dot += ai * bi
+		na += ai * ai
+		nb += bi * bi
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
 func snippetFor(lines []string, qtoks []string) string {

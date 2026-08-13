@@ -85,9 +85,11 @@ func migrate(db *sql.DB) error {
   content TEXT NOT NULL,
   importance INTEGER NOT NULL DEFAULT 50,
   source TEXT NOT NULL DEFAULT '',
+  embedding TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 )`,
 		`CREATE INDEX IF NOT EXISTS idx_mem_user ON core_memory(user_id, scope)`,
+		`ALTER TABLE core_memory ADD COLUMN embedding TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL DEFAULT '',
@@ -116,10 +118,22 @@ func migrate(db *sql.DB) error {
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
+			// idempotent column add: ignore "duplicate column" when re-migrating
+			if isDupColumnErr(err) {
+				continue
+			}
 			return fmt.Errorf("%w\nstmt: %s", err, truncate(s, 80))
 		}
 	}
 	return nil
+}
+
+func isDupColumnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate column")
 }
 
 func truncate(s string, n int) string {

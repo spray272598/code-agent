@@ -38,6 +38,7 @@ func IsAbort(err error) bool {
 type Event struct {
 	Point     Point
 	SessionID string
+	Step      int
 	Tool      string
 	Args      map[string]any
 	Result    string

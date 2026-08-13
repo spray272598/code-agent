@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/application"
+	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/auth"
@@ -30,6 +31,7 @@ import (
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/slash"
+	"github.com/spray272598/code-agent/internal/domain/spec"
 	sshport "github.com/spray272598/code-agent/internal/domain/ssh/port"
 	"github.com/spray272598/code-agent/internal/domain/sshtool"
 	"github.com/spray272598/code-agent/internal/domain/subagent"
@@ -297,6 +299,41 @@ func Build(cfg *config.Config) (*App, error) {
 		log.Printf("[bootstrap] skills=%d dir=%s\n", len(skillSvc.List()), skillSvc.RootDir())
 	}
 
+	// spec-driven development: load spec.md/tasks.md/checklist.md/CLAUDE.md from workspace root
+	specSvc := spec.NewService(workspaceRoot)
+	if specSvc.HasSpec() || specSvc.HasCLAUDE() {
+		log.Printf("[bootstrap] spec loaded: title=%q has_spec=%v has_claude=%v progress=%.0f%%\n",
+			specSvc.GetTitle(), specSvc.HasSpec(), specSvc.HasCLAUDE(), specSvc.Progress())
+	}
+
+	// semantic memory extraction (LLM-backed; falls back to rules when unavailable)
+	memSvc.SetExtractor(memory.NewLLMExtractor(llmPort))
+	// embedding (shared by memory search, skill matching, code index)
+	var embedder port.IEmbeddingPort
+	if cfg.LLM.EmbeddingEnabled {
+		embedder = llm.NewOpenAIEmbedding(cfg.LLM.APIKey, cfg.LLM.EmbeddingAPIBase, cfg.LLM.EmbeddingModel)
+		memSvc.SetEmbedder(embedder)
+		log.Printf("[bootstrap] embedding enabled model=%s\n", cfg.LLM.EmbeddingModel)
+		// backfill stored memories that predate embedding
+		if n := memSvc.Backfill(context.Background(), 500); n > 0 {
+			log.Printf("[bootstrap] memory embedding backfilled %d item(s)\n", n)
+		}
+		// async code-index semantic vectors (non-blocking startup)
+		codeIdx.SetEmbedder(embedder)
+		go func() {
+			if n := codeIdx.BuildEmbeddings(context.Background(), 300); n > 0 {
+				log.Printf("[bootstrap] code index embedded %d file(s)\n", n)
+			}
+		}()
+	} else {
+		log.Printf("[bootstrap] embedding disabled (set llm.embedding_model to enable)\n")
+	}
+	// semantic skill matching: vector fast-path + LLM fallback
+	if skillSvc != nil {
+		skillSvc.SetLLM(llmPort)
+		skillSvc.SetEmbedder(embedder)
+	}
+
 	// MCP (infra manager implements domain port)
 	var mcpMgr *inframcp.Manager
 	var mcpBridge *mcpsvc.ToolBridge
@@ -346,7 +383,10 @@ func Build(cfg *config.Config) (*App, error) {
 		er.SetSummaryRepo(summaryRepo)
 		er.SetSkills(skillSvc)
 		er.SetMemory(memSvc)
-		er.SetIntentRouter(intent.NewClassifier(nil))
+		er.SetSpecService(specSvc)
+		intentClassifier := intent.NewClassifier(nil)
+		intentClassifier.SetLLM(llmPort)
+		er.SetIntentRouter(intentClassifier)
 		er.SetCompressorLLM(contextx.NewSummarizer(llmPort))
 		runner = er
 		orch = "eino"
@@ -359,6 +399,7 @@ func Build(cfg *config.Config) (*App, error) {
 		loop.SetMemory(memSvc, memCtx)
 		loop.SetAudit(auditRepo)
 		loop.SetSummaryRepo(summaryRepo)
+		loop.SetSpecService(specSvc)
 		if blobStore != nil {
 			loop.SetBlobStore(blobStore, 4000)
 		}
@@ -392,6 +433,8 @@ func Build(cfg *config.Config) (*App, error) {
 		Redis: rdb, TimeoutSec: cfg.Agent.TimeoutSec, Workspace: workspaceRoot,
 		RateEnabled: cfg.RateLimit.Enabled, RatePerMin: cfg.RateLimit.PerMinute,
 	}, chatOpts...)
+	// per-step checkpoint snapshots (crash/restart resume)
+	chat.SetHooks(hooks)
 
 	// rehydrate HITL pendings from durable checkpoints (cross-process interrupt)
 	if n, err := chat.RestoreCheckpoints(context.Background()); err != nil {

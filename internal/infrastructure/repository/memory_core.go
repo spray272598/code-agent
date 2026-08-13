@@ -45,17 +45,21 @@ func (r *MemoryCoreRepo) Save(_ context.Context, item *memport.MemoryItem) error
 	if item.ID == 0 {
 		item.ID = r.seq.Add(1)
 	}
+	cp := *item
+	if len(cp.Embedding) > 0 {
+		cp.Embedding = append([]float32(nil), cp.Embedding...)
+	}
 	// upsert
 	for i := range r.data {
-		if r.data[i].item.ID == item.ID {
+		if r.data[i].item.ID == cp.ID {
 			r.unindex(r.data[i].item)
-			r.data[i] = memItem{item: *item, lastUsed: time.Now()}
-			r.indexItem(*item)
+			r.data[i] = memItem{item: cp, lastUsed: time.Now()}
+			r.indexItem(cp)
 			return nil
 		}
 	}
-	r.data = append(r.data, memItem{item: *item, lastUsed: time.Now()})
-	r.indexItem(*item)
+	r.data = append(r.data, memItem{item: cp, lastUsed: time.Now()})
+	r.indexItem(cp)
 	r.evictLocked()
 	return nil
 }
@@ -160,6 +164,41 @@ func (r *MemoryCoreRepo) Search(_ context.Context, userID, projectID, query stri
 		out = append(out, r.data[ranked[i].idx].item)
 	}
 	return out, nil
+}
+
+func (r *MemoryCoreRepo) ListNoEmbedding(_ context.Context, limit int) ([]memport.MemoryItem, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	var out []memport.MemoryItem
+	for _, mi := range r.data {
+		if len(mi.item.Embedding) == 0 {
+			out = append(out, mi.item)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryCoreRepo) Prune(_ context.Context, minImportance int, olderThan time.Time) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := 0
+	kept := make([]memItem, 0, len(r.data))
+	for _, mi := range r.data {
+		if mi.item.Importance < minImportance && mi.lastUsed.Before(olderThan) {
+			r.unindex(mi.item)
+			removed++
+			continue
+		}
+		kept = append(kept, mi)
+	}
+	r.data = kept
+	return removed, nil
 }
 
 func (r *MemoryCoreRepo) Delete(_ context.Context, id int64) error {

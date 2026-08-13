@@ -275,6 +275,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	var activeSkill *skill.Skill
 	if l.skills != nil && !continuing {
 		activeSkill = l.skills.Match(userInput)
+		if activeSkill == nil {
+			activeSkill = l.skills.MatchSemantic(ctx, userInput)
+		}
 		if activeSkill != nil {
 			publish(&Event{Type: EventSkill, SubType: activeSkill.ID, Content: "skill: " + activeSkill.Name, Data: activeSkill, Timestamp: now()})
 		}
