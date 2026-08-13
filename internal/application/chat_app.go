@@ -302,6 +302,28 @@ func (a *ChatApp) trySlash(req *ChatRequest) (*ChatResponse, bool, bool) {
 	return &ChatResponse{SessionID: sid, Response: res.Response, Slash: true}, true, false
 }
 
+// acquireRunLock prevents the same session from running concurrently across
+// multiple instances. Returns a release func; nil error means proceed. Lock
+// failures are non-fatal when Redis is absent (single-instance mode).
+func (a *ChatApp) acquireRunLock(ctx context.Context, sessionID string) (func(), error) {
+	if a.redis == nil || !a.redis.Enabled() || sessionID == "" {
+		return func() {}, nil
+	}
+	val := newID("lock")
+	ttl := time.Duration(a.timeoutSec)*time.Second + 15*time.Second
+	ok, err := a.redis.TryLock(ctx, "run:lock:"+sessionID, val, ttl)
+	if err != nil {
+		// lock errors must not block runs
+		return func() {}, nil
+	}
+	if !ok {
+		return nil, fmt.Errorf("session %s is already running", sessionID)
+	}
+	return func() {
+		_ = a.redis.Unlock(context.Background(), "run:lock:"+sessionID, val)
+	}, nil
+}
+
 func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	forceCompact := false
 	if resp, handled, fc := a.trySlash(&req); handled {
@@ -319,6 +341,11 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	if err := a.checkRate(ctx, req.UserID); err != nil {
 		return nil, err
 	}
+	unlock, err := a.acquireRunLock(ctx, session.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if a.redis != nil && a.redis.Enabled() {
 		if err := a.redis.Set(ctx, "sess:hot:"+session.ID, req.Message, 24*time.Hour); err != nil {
 			observability.Warnf("sess hot set: %v", err)
@@ -405,6 +432,11 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 		cancel()
 		return nil, nil, err
 	}
+	unlock, err := a.acquireRunLock(ctx, session.ID)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
 	if a.runs != nil {
 		a.runs.Register(session.ID, cancel)
 	}
@@ -413,6 +445,7 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 	go func() {
 		defer close(ch)
 		defer cancel()
+		defer unlock()
 		if a.runs != nil {
 			defer a.runs.Unregister(session.ID, cancel)
 		}

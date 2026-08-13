@@ -38,6 +38,7 @@ Thumbs.db
 # Go
 vendor/
 coverage.out
+cover
 *.test
 
 # Node (if any debug ui)

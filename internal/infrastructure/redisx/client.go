@@ -67,6 +67,25 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return c.rdb.Get(ctx, key).Result()
 }
 
+// TryLock acquires a distributed lock (SET NX). Returns true on success.
+// When Redis is disabled it returns true so single-instance runs are unaffected.
+func (c *Client) TryLock(ctx context.Context, key, val string, ttl time.Duration) (bool, error) {
+	if !c.Enabled() {
+		return true, nil
+	}
+	return c.rdb.SetNX(ctx, key, val, ttl).Result()
+}
+
+// Unlock releases a distributed lock only if we still hold it (compare-and-delete),
+// preventing one instance from unlatching a lock owned by another.
+func (c *Client) Unlock(ctx context.Context, key, val string) error {
+	if !c.Enabled() {
+		return nil
+	}
+	const lua = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`
+	return c.rdb.Eval(ctx, lua, []string{key}, val).Err()
+}
+
 func (c *Client) IncrBy(ctx context.Context, key string, n int64, ttl time.Duration) (int64, error) {
 	if !c.Enabled() {
 		return 0, nil

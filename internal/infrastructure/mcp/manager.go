@@ -188,8 +188,10 @@ func (m *Manager) startOne(ctx context.Context, cfg model.ServerConfig) error {
 	switch strings.ToLower(cfg.Transport) {
 	case "stdio", "":
 		client = NewStdioClient(cfg)
+	case "sse", "http", "streamable", "streamable-http":
+		client = NewHTTPClient(cfg)
 	default:
-		return fmt.Errorf("transport %s not implemented yet (use stdio)", cfg.Transport)
+		return fmt.Errorf("transport %s not supported (use stdio or http)", cfg.Transport)
 	}
 	if err := client.Initialize(ctx); err != nil {
 		_ = client.Close()

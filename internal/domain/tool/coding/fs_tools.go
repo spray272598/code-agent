@@ -155,6 +155,11 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) (tool.
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
+	// idempotent write: skip if the file already has identical content.
+	// This makes resume-after-crash safe — redoing a completed write is a no-op.
+	if existing, err := os.ReadFile(abs); err == nil && string(existing) == content {
+		return tool.Result{Text: fmt.Sprintf("write_file %s: content unchanged (idempotent, no write needed)", path)}, nil
+	}
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
@@ -243,6 +248,11 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) (tool.R
 		}
 		count := strings.Count(content, needle)
 		if count == 0 {
+			// idempotent edit: if the target text is already present, the edit
+			// was already applied (e.g. a resumed run redoing a completed step).
+			if newS != "" && strings.Contains(content, newS) {
+				return tool.Result{Text: "edit_file: change already applied (idempotent, no edit needed)"}, nil
+			}
 			return tool.Result{Text: "old_string not found", IsError: true}, nil
 		}
 		limit := 1
