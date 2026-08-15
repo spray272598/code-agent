@@ -70,7 +70,8 @@ security:
 
 mcp:
   enabled: true
-  servers: []
+  # 启动时加载的 mcp.json（VS Code / Claude Desktop 风格 {"mcpServers": {...}}）
+  config_file: "./mcp.json"
 
 skills:
   enabled: true

@@ -343,6 +343,24 @@ func Build(cfg *config.Config) (*App, error) {
 		mcpMgr.OnToolsChanged(func(defs []model.ToolDef) {
 			mcpBridge.ApplyDefs(defs)
 		})
+		// auto-load servers from mcp.json (VS Code style) if configured
+		if cfg.MCP.ConfigFile != "" {
+			servers, err := inframcp.LoadServersFromFile(cfg.MCP.ConfigFile)
+			if err != nil {
+				log.Printf("[bootstrap] mcp config %s: %v\n", cfg.MCP.ConfigFile, err)
+			} else {
+				for _, sc := range servers {
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+					err := mcpMgr.AddOrUpdate(ctx, sc)
+					cancel()
+					if err != nil {
+						log.Printf("[bootstrap] mcp server %s: %v\n", sc.Name, err)
+					} else {
+						log.Printf("[bootstrap] mcp server loaded: %s (transport=%s)\n", sc.Name, sc.Transport)
+					}
+				}
+			}
+		}
 		// auto-load demo if present
 		if demo := findMCPDemo(); demo != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

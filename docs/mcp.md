@@ -2,15 +2,46 @@
 
 ## Overview
 
-Code-Agent embeds an **MCP manager** (stdio transport) and bridges tools into the agent registry as `server__tool` names when collisions exist.
+Code-Agent embeds an **MCP manager** (stdio + HTTP transports) and bridges tools into the agent registry as `server__tool` names when collisions exist.
 
 ```
-Agent Loop → tool.MapRegistry → MCPTool → Manager.CallTool → StdioClient JSON-RPC
+Agent Loop → tool.MapRegistry → MCPTool → Manager.CallTool → StdioClient/HTTPClient JSON-RPC
 ```
 
 All MCP tools pass **security.Guard** (default CONFIRM; deny patterns on args; path sandbox when `path` present).
 
-## Install API
+## Install methods
+
+### 1. mcp.json file (recommended, VS Code / Claude Desktop style)
+
+Create `mcp.json` and point to it from config:
+
+```yaml
+# configs/config.yaml
+mcp:
+  enabled: true
+  config_file: "./mcp.json"
+```
+
+```json
+{
+  "mcpServers": {
+    "fetch": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://example.com/mcp"
+    }
+  }
+}
+```
+
+Servers are loaded automatically at startup. See `mcp.json.example`.
+
+### 2. Install API (runtime)
 
 ```http
 POST /api/v1/mcp/servers
@@ -26,6 +57,19 @@ Content-Type: application/json
   "timeoutSec": 30
 }
 ```
+
+## mcp.json field mapping
+
+| mcp.json key | Domain `ServerConfig` | Notes |
+|---|---|---|
+| `type` | `Transport` | `stdio` (default) \| `sse` \| `http` |
+| `command` | `Command` | required for stdio |
+| `args` | `Args` | e.g. `["mcp-server-fetch", "--ignore-robots-txt"]` |
+| `env` | `Env` | process env for stdio |
+| `headers` | `Env` | extra HTTP headers (merged into Env) |
+| `url` | `URL` | required for sse/http |
+| `enabled` | `Enabled` | default `true` |
+| `timeout` | `TimeoutSec` | seconds, default 60 |
 
 ## Health / list
 

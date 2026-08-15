@@ -139,6 +139,9 @@ type SecurityConfig struct {
 
 type MCPConfig struct {
 	Enabled bool `yaml:"enabled"`
+	// ConfigFile is the path to an mcp.json (VS Code / Claude Desktop style
+	// {"mcpServers": {...}}) file loaded at startup. Empty = none.
+	ConfigFile string `yaml:"config_file"`
 }
 
 type SkillsConfig struct {
