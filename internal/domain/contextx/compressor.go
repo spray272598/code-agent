@@ -52,12 +52,15 @@ func (c *Compressor) CompressLevels(ctx context.Context, history []map[string]an
 	}
 	before := estimateHistory(history)
 
-	// L0: truncate long contents
+	// L0: truncate long contents.
+	// Use head-tail truncation so the trailing part (often the tool result's
+	// conclusion/error) is kept instead of being silently dropped — a pure
+	// head-only truncation risks losing exactly the most useful tail.
 	trimmed := make([]map[string]any, len(history))
 	for i, m := range history {
 		cp := copyMap(m)
 		if content, ok := cp["content"].(string); ok && len([]rune(content)) > common.CompressLongContentMaxRunes {
-			cp["content"] = common.TruncateRunes(content, common.CompressLongContentMaxRunes)
+			cp["content"] = common.TruncateRunesKeepTail(content, common.CompressLongContentMaxRunes)
 		}
 		trimmed[i] = cp
 	}
