@@ -28,4 +28,7 @@ type HealthStatus struct {
 	ToolCount int    `json:"toolCount"`
 	LastError string `json:"lastError,omitempty"`
 	Enabled   bool   `json:"enabled"`
+	// State is the connection circuit-breaker state: "normal", "retry",
+	// "open", or "half_open". Empty implies normal.
+	State string `json:"state,omitempty"`
 }

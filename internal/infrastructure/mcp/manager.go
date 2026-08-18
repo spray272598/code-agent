@@ -12,6 +12,39 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 )
 
+// Watchdog + circuit-breaker tuning. The watchdog runs a fixed 15s tick; the
+// per-server state machine below decides whether each tick actually pings or
+// reconnects a given server, so a permanently dead server can never be
+// hammered at a fixed high frequency.
+const (
+	watchdogInterval = 15 * time.Second // heartbeat / reconnect tick
+	pingTimeout      = 5 * time.Second  // per-heartbeat ping deadline
+	reconnectTimeout = 20 * time.Second // per-reconnect attempt deadline
+
+	maxConsecutiveFailures = 5                // consecutive failures before circuit opens
+	baseBackoff            = 15 * time.Second // first retry delay (aligns with watchdog tick)
+	maxBackoff             = 5 * time.Minute  // exponential backoff ceiling
+	openWindow             = 60 * time.Second // circuit-open duration before half-open probe
+)
+
+// connStateType is the per-server connection circuit-breaker state.
+type connStateType string
+
+const (
+	stateNormal   connStateType = "normal"    // online, heartbeats passing
+	stateRetry    connStateType = "retry"     // offline, waiting out exponential backoff
+	stateOpen     connStateType = "open"      // circuit open, stop reconnecting for a window
+	stateHalfOpen connStateType = "half_open" // open window elapsed, allow one probe
+)
+
+// connState tracks the reconnect circuit-breaker for a single server.
+type connState struct {
+	state       connStateType
+	failCount   int       // consecutive failures (drives backoff + open threshold)
+	nextRetryAt time.Time // when the next reconnect attempt is allowed (retry)
+	openUntil   time.Time // when the open window ends and half-open may start (open)
+}
+
 // Manager implements mcpport.IMCPManagerPort. Lives in infrastructure only.
 type Manager struct {
 	mu          sync.RWMutex
@@ -21,6 +54,7 @@ type Manager struct {
 	toolDefs    []model.ToolDef
 	onChange    func([]model.ToolDef)
 	lastErr     map[string]string
+	states      map[string]*connState // per-server circuit-breaker state
 	stopWatch   chan struct{}
 	watchOnce   sync.Once
 	reconnectMu sync.Mutex
@@ -32,6 +66,7 @@ func NewManager() *Manager {
 		configs:   make(map[string]model.ServerConfig),
 		toolRoute: make(map[string]string),
 		lastErr:   make(map[string]string),
+		states:    make(map[string]*connState),
 		stopWatch: make(chan struct{}),
 	}
 	m.startWatchdog()
@@ -47,7 +82,7 @@ func NewManager() *Manager {
 func (m *Manager) startWatchdog() {
 	m.watchOnce.Do(func() {
 		go func() {
-			t := time.NewTicker(15 * time.Second)
+			t := time.NewTicker(watchdogInterval)
 			defer t.Stop()
 			for {
 				select {
@@ -75,7 +110,7 @@ func (m *Manager) healthCheck() {
 	m.mu.RUnlock()
 
 	for _, c := range snapshot {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 		err := c.Ping(ctx)
 		cancel()
 		if err == nil {
@@ -89,36 +124,91 @@ func (m *Manager) healthCheck() {
 		if cur, ok := m.clients[name]; ok && cur == c {
 			_ = c.Close()
 			delete(m.clients, name)
-			m.lastErr[name] = "heartbeat failed: " + err.Error()
 		}
 		m.mu.Unlock()
+		// Advance the circuit-breaker: this failure bumps failCount and, past
+		// the threshold, opens the circuit so reconnectOffline stops retrying.
+		m.recordFailure(name, fmt.Errorf("heartbeat failed: %w", err))
 	}
 }
 
+// reconnectOffline walks every enabled but offline server and decides, per the
+// circuit-breaker state, whether this tick may attempt a reconnect:
+//   - retry:     only when the exponential-backoff deadline has passed
+//   - open:      skip until the open window elapses, then transition to half-open
+//   - half_open: allow a single probe
+//
+// This is what turns the fixed 15s watchdog tick into an exponential-backoff +
+// circuit-breaker schedule instead of a tight reconnect loop.
 func (m *Manager) reconnectOffline() {
+	now := time.Now()
+
+	type candidate struct {
+		cfg   model.ServerConfig
+		state connStateType
+	}
+
 	m.mu.RLock()
-	var need []model.ServerConfig
+	var need []candidate
 	for name, cfg := range m.configs {
 		if !cfg.Enabled {
 			continue
 		}
-		if _, online := m.clients[name]; !online {
-			need = append(need, cfg)
+		if _, online := m.clients[name]; online {
+			continue
+		}
+
+		st := m.states[name]
+		state := stateRetry
+		var nextRetryAt, openUntil time.Time
+		if st != nil {
+			state = st.state
+			nextRetryAt = st.nextRetryAt
+			openUntil = st.openUntil
+		}
+
+		switch state {
+		case stateOpen:
+			if now.Before(openUntil) {
+				continue // circuit open — stop pinging for the window
+			}
+			need = append(need, candidate{cfg: cfg, state: stateHalfOpen})
+		case stateRetry:
+			if now.Before(nextRetryAt) {
+				continue // still backing off
+			}
+			need = append(need, candidate{cfg: cfg, state: stateRetry})
+		case stateHalfOpen:
+			need = append(need, candidate{cfg: cfg, state: stateHalfOpen})
+		default: // stateNormal but offline (no state recorded yet)
+			need = append(need, candidate{cfg: cfg, state: stateRetry})
 		}
 	}
 	m.mu.RUnlock()
-	for _, cfg := range need {
-		log.Printf("[mcp] watchdog reconnect %s\n", cfg.Name)
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		err := m.reconnect(ctx, cfg.Name)
+
+	for _, cand := range need {
+		// Transition open → half_open only once, right before the probe, so a
+		// failed half-open probe can be routed back to open by recordFailure.
+		if cand.state == stateHalfOpen {
+			m.mu.Lock()
+			if st := m.states[cand.cfg.Name]; st != nil && st.state == stateOpen {
+				st.state = stateHalfOpen
+			}
+			m.mu.Unlock()
+		}
+		log.Printf("[mcp] watchdog reconnect %s (state=%s)\n", cand.cfg.Name, cand.state)
+		ctx, cancel := context.WithTimeout(context.Background(), reconnectTimeout)
+		err := m.reconnect(ctx, cand.cfg.Name)
 		cancel()
 		if err != nil {
-			log.Printf("[mcp] reconnect %s failed: %v\n", cfg.Name, err)
+			log.Printf("[mcp] reconnect %s failed: %v\n", cand.cfg.Name, err)
 		}
 	}
 }
 
-// reconnect restarts a server by name using stored config.
+// reconnect restarts a server by name using stored config. On success it
+// resets the circuit-breaker back to normal; on failure it advances it
+// (failCount++ / exponential backoff / open circuit).
 func (m *Manager) reconnect(ctx context.Context, name string) error {
 	m.reconnectMu.Lock()
 	defer m.reconnectMu.Unlock()
@@ -129,16 +219,74 @@ func (m *Manager) reconnect(ctx context.Context, name string) error {
 		return fmt.Errorf("no config for %s", name)
 	}
 	if err := m.startOne(ctx, cfg); err != nil {
-		m.mu.Lock()
-		m.lastErr[name] = err.Error()
-		m.mu.Unlock()
+		m.recordFailure(name, err)
 		return err
 	}
-	m.mu.Lock()
-	delete(m.lastErr, name)
-	m.mu.Unlock()
+	// Connection established: clear the error and reset the breaker to normal.
+	m.recordSuccess(name)
 	_, err := m.refreshTools(ctx)
 	return err
+}
+
+// backoffFor returns the exponential backoff delay for the nth consecutive
+// failure (1-based): baseBackoff, 2x, 4x, ... capped at maxBackoff.
+func backoffFor(failCount int) time.Duration {
+	d := baseBackoff
+	for i := 1; i < failCount; i++ {
+		d *= 2
+		if d >= maxBackoff {
+			return maxBackoff
+		}
+	}
+	return d
+}
+
+// recordSuccess resets the per-server circuit-breaker to normal after a
+// successful connection. Must be called with m.mu NOT held.
+func (m *Manager) recordSuccess(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.lastErr, name)
+	if st := m.states[name]; st != nil {
+		st.state = stateNormal
+		st.failCount = 0
+		st.nextRetryAt = time.Time{}
+		st.openUntil = time.Time{}
+	}
+}
+
+// recordFailure advances the per-server circuit-breaker on a failed connect or
+// heartbeat. Must be called with m.mu NOT held.
+func (m *Manager) recordFailure(name string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastErr[name] = err.Error()
+
+	st := m.states[name]
+	if st == nil {
+		st = &connState{}
+		m.states[name] = st
+	}
+
+	switch st.state {
+	case stateHalfOpen:
+		// Half-open probe failed: re-open the circuit for a fresh window.
+		st.state = stateOpen
+		st.openUntil = time.Now().Add(openWindow)
+		st.failCount = maxConsecutiveFailures
+	case stateOpen:
+		// Should only happen via a user-triggered reconnect during open; extend.
+		st.openUntil = time.Now().Add(openWindow)
+	default: // stateNormal or stateRetry
+		st.failCount++
+		if st.failCount >= maxConsecutiveFailures {
+			st.state = stateOpen
+			st.openUntil = time.Now().Add(openWindow)
+		} else {
+			st.state = stateRetry
+			st.nextRetryAt = time.Now().Add(backoffFor(st.failCount))
+		}
+	}
 }
 
 func (m *Manager) OnToolsChanged(cb func([]model.ToolDef)) {
@@ -164,14 +312,10 @@ func (m *Manager) AddOrUpdate(ctx context.Context, cfg model.ServerConfig) error
 		return m.Remove(cfg.Name)
 	}
 	if err := m.startOne(ctx, cfg); err != nil {
-		m.mu.Lock()
-		m.lastErr[cfg.Name] = err.Error()
-		m.mu.Unlock()
+		m.recordFailure(cfg.Name, err)
 		return err
 	}
-	m.mu.Lock()
-	delete(m.lastErr, cfg.Name)
-	m.mu.Unlock()
+	m.recordSuccess(cfg.Name)
 	_, err := m.refreshTools(ctx)
 	return err
 }
@@ -212,6 +356,7 @@ func (m *Manager) Remove(name string) error {
 	}
 	delete(m.configs, name)
 	delete(m.lastErr, name)
+	delete(m.states, name)
 	m.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -298,9 +443,18 @@ func (m *Manager) Health(ctx context.Context) []model.HealthStatus {
 	var out []model.HealthStatus
 	for name, cfg := range m.configs {
 		_, online := m.clients[name]
+		state := stateNormal
+		if !online {
+			if st := m.states[name]; st != nil {
+				state = st.state
+			} else {
+				state = stateRetry
+			}
+		}
 		out = append(out, model.HealthStatus{
 			Name: name, Online: online, Transport: cfg.Transport,
 			ToolCount: counts[name], LastError: m.lastErr[name], Enabled: cfg.Enabled,
+			State: string(state),
 		})
 	}
 	return out
