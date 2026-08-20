@@ -23,6 +23,8 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/host"
 	"github.com/spray272598/code-agent/internal/domain/intent"
+	"github.com/spray272598/code-agent/internal/domain/kms"
+	"github.com/spray272598/code-agent/internal/domain/llmkey"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -48,7 +50,9 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
+	vectorinfra "github.com/spray272598/code-agent/internal/infrastructure/vector"
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
+	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
 	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/trigger/ws"
@@ -60,10 +64,12 @@ type App struct {
 	Tools   *tool.MapRegistry
 	Perm    *security.Guard
 	Redis   *redisx.Client
-	MCP     *inframcp.Manager
+	MCP     *inframcp.UserFactory
 	Skills  *skill.Service
 	Memory  *memory.Service
 	Hooks   *hook.Bus
+	KMS     kms.CryptoSealer
+	LLMKey  llmkey.Repository
 	Blobs   blob.Store
 	Index   *codeindex.Index
 	CKStore checkpoint.Store
@@ -72,7 +78,14 @@ type App struct {
 	Bridge  *host.Bridge
 	HostHub *ws.HostHub
 	SSHPool *sshinfra.Pool
-	Closer  func()
+
+	// Multi-tenant account repos (Sprint 1.1)
+	UserRepo    auth.UserRepository
+	OrgRepo     auth.OrgRepository
+	DeviceRepo  auth.DeviceRepository
+	RefreshRepo auth.RefreshTokenRepository
+
+	Closer func()
 }
 
 func Build(cfg *config.Config) (*App, error) {
@@ -145,8 +158,61 @@ func Build(cfg *config.Config) (*App, error) {
 		closer = func() {}
 		cfg.Database.Type = "memory"
 	}
+
+	// multi-tenant account repos (Sprint 1.1)
+	var userRepo auth.UserRepository
+	var orgRepo auth.OrgRepository
+	var deviceRepo auth.DeviceRepository
+	var refreshRepo auth.RefreshTokenRepository
+	switch strings.ToLower(cfg.Database.Type) {
+	case "mysql":
+		userRepo = repository.NewMySQLUserRepo(db)
+		orgRepo = repository.NewMySQLOrgRepo(db)
+		deviceRepo = repository.NewMySQLDeviceRepo(db)
+		refreshRepo = repository.NewMySQLRefreshTokenRepo(db)
+	case "sqlite", "sqlite3":
+		userRepo = repository.NewSQLiteUserRepo(db)
+		orgRepo = repository.NewSQLiteOrgRepo(db)
+		deviceRepo = repository.NewSQLiteDeviceRepo(db)
+		refreshRepo = repository.NewSQLiteRefreshTokenRepo(db)
+	default:
+		userRepo = repository.NewMemoryUserRepo()
+		orgRepo = repository.NewMemoryOrgRepo()
+		deviceRepo = repository.NewMemoryDeviceRepo()
+		refreshRepo = repository.NewMemoryRefreshTokenRepo()
+	}
+
 	memSvc := memory.NewService(memRepo)
 	memCtx := &coding.MemoryContext{Svc: memSvc}
+
+	// Sprint 2.8: KMS sealer (AES-256-GCM). Constructed once at boot; all
+	// encrypting repos (SSH, LLM Key) share the same sealer. The keyfile
+	// lives at ./secrets/kms.key (or CODE_AGENT_KMS_KEY env override).
+	sealer, err := kmsinfra.NewSealer()
+	if err != nil {
+		log.Fatalf("[bootstrap] kms sealer: %v", err)
+	}
+	log.Printf("[bootstrap] kms sealer active key id=%s\n", sealer.KeyID())
+
+	// Sprint 2.3: per-user LLM API key store. The repository encrypts API keys
+	// at rest via the sealer above; in memory mode we use the in-memory repo
+	// (still encrypted in RAM via the sealer for consistency).
+	var llmKeyRepo llmkey.Repository
+	switch strings.ToLower(cfg.Database.Type) {
+	case "mysql":
+		if db != nil {
+			llmKeyRepo = repository.NewMySQLLLMKeyRepo(db, sealer)
+		}
+	case "sqlite", "sqlite3":
+		if db != nil {
+			llmKeyRepo = repository.NewSQLiteLLMKeyRepo(db, sealer)
+		}
+	default:
+		llmKeyRepo = repository.NewMemoryLLMKeyRepo(sealer)
+	}
+	if llmKeyRepo == nil {
+		llmKeyRepo = repository.NewMemoryLLMKeyRepo(sealer) // safe fallback
+	}
 
 	rdb := redisx.New(cfg.Redis)
 	llmPort := llm.NewFromConfig(cfg)
@@ -218,12 +284,17 @@ func Build(cfg *config.Config) (*App, error) {
 	if cfg.SSH.Enabled {
 		sshPool = sshinfra.NewPool()
 		if db != nil {
+			var raw sshport.IConnectionRepository
 			switch strings.ToLower(cfg.Database.Type) {
 			case "mysql":
-				sshRepo = sshinfra.NewMySQLConnRepo(db)
+				raw = sshinfra.NewMySQLConnRepo(db)
 			default:
-				sshRepo = sshinfra.NewSQLiteConnRepo(db)
+				raw = sshinfra.NewSQLiteConnRepo(db)
 			}
+			// Sprint 2.9: wrap the raw SSH repo so Password/PrivateKey are
+			// stored as KMS ciphertext. Fail-closed: the decorator propagates
+			// any KMS error rather than silently downgrading to plaintext.
+			sshRepo = sshinfra.NewEncryptingConnRepo(raw, sealer)
 		}
 		if sshRepo != nil {
 			// auto-load saved connections
@@ -328,21 +399,45 @@ func Build(cfg *config.Config) (*App, error) {
 	} else {
 		log.Printf("[bootstrap] embedding disabled (set llm.embedding_model to enable)\n")
 	}
+
+	// Sprint 1.10/1.11: wire the in-process dense-vector backend. Qdrant (or
+	// other remote backends) plug into the same IVectorIndex when the network
+	// registry is available; the MemIndex is the safe default that always
+	// works and exercises the abstraction.
+	vecIdx := vectorinfra.NewMemIndex()
+	memSvc.SetVectorIndex(vecIdx, "memories")
+	if cfg.LLM.EmbeddingEnabled {
+		if n := memSvc.BackfillVector(context.Background(), 500); n > 0 {
+			log.Printf("[bootstrap] vector backfill indexed %d memory/ies\n", n)
+		}
+	}
 	// semantic skill matching: vector fast-path + LLM fallback
 	if skillSvc != nil {
 		skillSvc.SetLLM(llmPort)
 		skillSvc.SetEmbedder(embedder)
 	}
 
-	// MCP (infra manager implements domain port)
-	var mcpMgr *inframcp.Manager
+	// MCP — Sprint 1.6: per-user factory (no global singleton).
+	// The factory caches one Manager per userID; the system-level (owner="")
+	// Manager is only used to seed servers loaded from mcp.json / demo into
+	// the bootstrap "system" tenant so any user inheriting the bootstrap config
+	// gets the same baseline. Production users add their own servers via the
+	// authenticated /api/v1/mcp/servers endpoint.
+	var mcpFactory *inframcp.UserFactory
 	var mcpBridge *mcpsvc.ToolBridge
 	if cfg.MCP.Enabled {
-		mcpMgr = inframcp.NewManager()
-		mcpBridge = mcpsvc.NewToolBridge(mcpMgr, reg)
-		mcpMgr.OnToolsChanged(func(defs []model.ToolDef) {
+		mcpFactory = inframcp.NewUserFactory(func(userID string) *inframcp.Manager {
+			return inframcp.NewUserManager(userID)
+		})
+		// system manager: bootstrap-loaded servers (cfg.MCP.ConfigFile, demo)
+		sysMgr := inframcp.NewUserManager("")
+		mcpBridge = mcpsvc.NewToolBridgeWithFactory(mcpFactory, reg)
+		sysMgr.OnToolsChanged(func(defs []model.ToolDef) {
 			mcpBridge.ApplyDefs(defs)
 		})
+		// prime the cache with the system manager under the "" key so
+		// ForUserID("") returns the seeded one
+		mcpFactory.PrimeSystem(sysMgr)
 		// auto-load servers from mcp.json (VS Code style) if configured
 		if cfg.MCP.ConfigFile != "" {
 			servers, err := inframcp.LoadServersFromFile(cfg.MCP.ConfigFile)
@@ -351,7 +446,7 @@ func Build(cfg *config.Config) (*App, error) {
 			} else {
 				for _, sc := range servers {
 					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-					err := mcpMgr.AddOrUpdate(ctx, sc)
+					err := sysMgr.AddOrUpdate(ctx, sc)
 					cancel()
 					if err != nil {
 						log.Printf("[bootstrap] mcp server %s: %v\n", sc.Name, err)
@@ -364,7 +459,7 @@ func Build(cfg *config.Config) (*App, error) {
 		// auto-load demo if present
 		if demo := findMCPDemo(); demo != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err := mcpMgr.AddOrUpdate(ctx, model.ServerConfig{
+			err := sysMgr.AddOrUpdate(ctx, model.ServerConfig{
 				Name: "demo", Transport: "stdio", Command: demo, Enabled: true, TimeoutSec: 30,
 			})
 			cancel()
@@ -440,8 +535,8 @@ func Build(cfg *config.Config) (*App, error) {
 	if blobStore != nil {
 		chatOpts = append(chatOpts, application.WithBlobStore(blobStore))
 	}
-	if mcpMgr != nil {
-		chatOpts = append(chatOpts, application.WithMCP(mcpMgr))
+	if mcpFactory != nil {
+		chatOpts = append(chatOpts, application.WithMCPFactory(mcpFactory))
 	}
 	if sshPool != nil {
 		chatOpts = append(chatOpts, application.WithSSH(sshPool, sshRepo))
@@ -453,6 +548,21 @@ func Build(cfg *config.Config) (*App, error) {
 	}, chatOpts...)
 	// per-step checkpoint snapshots (crash/restart resume)
 	chat.SetHooks(hooks)
+
+	// multi-tenant auth service (Sprint 1.2): org+owner signup, member invite,
+	// email verification, and credential auth. JWT issuance arrives in Sprint 1.3.
+	chat.SetAuthService(application.NewAuthService(userRepo, orgRepo, nil))
+
+	// token service (Sprint 1.3): HS256 access tokens + rotating refresh tokens.
+	chat.SetTokenService(application.NewTokenService(userRepo, refreshRepo, []byte(cfg.JWTSecret), []byte(cfg.JWTSecretPrev)))
+
+	// device authorization service (Sprint 1.4): RFC8628 device flow for the TUI.
+	chat.SetDeviceService(application.NewDeviceService(
+		deviceRepo, userRepo, chat.TokenService(),
+		cfg.Auth.VerificationURI,
+		time.Duration(cfg.Auth.DeviceCodeTTLSec)*time.Second,
+		time.Duration(cfg.Auth.DevicePollIntervalSec)*time.Second,
+	))
 
 	// rehydrate HITL pendings from durable checkpoints (cross-process interrupt)
 	if n, err := chat.RestoreCheckpoints(context.Background()); err != nil {
@@ -487,13 +597,19 @@ func Build(cfg *config.Config) (*App, error) {
 
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,
-		MCP: mcpMgr, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
+		MCP: mcpFactory, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
 		Blobs: blobStore, Index: codeIdx, CKStore: ckStore, Runs: runReg,
 		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
 		SSHPool: sshPool,
+		UserRepo:    userRepo,
+		OrgRepo:     orgRepo,
+		DeviceRepo:  deviceRepo,
+		RefreshRepo: refreshRepo,
+		KMS:    sealer,
+		LLMKey: llmKeyRepo,
 		Closer: func() {
-			if mcpMgr != nil {
-				_ = mcpMgr.Close()
+			if mcpFactory != nil {
+				mcpFactory.ResetAll()
 			}
 			if sshPool != nil {
 				sshPool.CloseAll()

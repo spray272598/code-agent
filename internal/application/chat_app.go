@@ -14,6 +14,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/domain/checkpoint"
 	"github.com/spray272598/code-agent/internal/domain/hook"
+	"github.com/spray272598/code-agent/internal/domain/llmkey"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -40,9 +41,9 @@ type ChatApp struct {
 	redis       *redisx.Client
 	skills      *skill.Service
 	slash       *slash.Registry
-	mcp         mcpport.IMCPManagerPort
 	memSvc      *memory.Service
 	auditRepo   audit.Repository
+	llmKeyRepo  llmkey.Repository
 	blobs       blob.Store
 	ckStore     checkpoint.Store
 	runs        *checkpoint.RunRegistry
@@ -54,14 +55,58 @@ type ChatApp struct {
 	keys        *auth.KeyStore
 	sshPool     *sshinfra.Pool
 	sshRepo     sshport.IConnectionRepository
+	authSvc     *AuthService
+	tokenSvc    *TokenService
+	deviceSvc   *DeviceService
+	// Sprint 1.6: MCP is now per-user. ChatApp no longer holds a single global
+	// Manager; callers obtain the per-user Manager via MCPFactory().For(ctx).
+	mcpFactory mcpport.IUserMCPManagerFactory
 }
 
 // Set* methods retained for gradual migration; prefer application.Option.
 func (a *ChatApp) SetSkills(s *skill.Service)       { a.skills = s }
-func (a *ChatApp) SetMCP(m mcpport.IMCPManagerPort) { a.mcp = m }
 func (a *ChatApp) SetMemory(s *memory.Service)      { a.memSvc = s }
 func (a *ChatApp) SetAudit(r audit.Repository)      { a.auditRepo = r }
+func (a *ChatApp) SetLLMKey(r llmkey.Repository)    { a.llmKeyRepo = r }
 func (a *ChatApp) SetBlobStore(s blob.Store)        { a.blobs = s }
+
+// SetMCPFactory injects the per-user MCP factory (Sprint 1.6). After this is
+// called ChatApp no longer accepts direct Manager wiring; the factory is the
+// only way to obtain a Manager for a given tenant.
+func (a *ChatApp) SetMCPFactory(f mcpport.IUserMCPManagerFactory) { a.mcpFactory = f }
+
+// MCPFactory returns the per-user MCP factory (never nil if SetMCPFactory
+// was called by bootstrap).
+func (a *ChatApp) MCPFactory() mcpport.IUserMCPManagerFactory { return a.mcpFactory }
+
+// MCPFor is a convenience: returns the per-user Manager for the tenant on ctx.
+// Equivalent to MCPFactory().For(ctx). Callers MUST stamp the asserted userID
+// on ctx via mcp.WithAssertedUser before invoking CallTool on the returned
+// manager.
+func (a *ChatApp) MCPFor(ctx context.Context) (mcpport.IMCPManagerPort, error) {
+	if a.mcpFactory == nil {
+		return nil, fmt.Errorf("mcp factory not configured")
+	}
+	return a.mcpFactory.For(ctx)
+}
+
+// SetAuthService injects the multi-tenant auth service (Sprint 1.2).
+func (a *ChatApp) SetAuthService(s *AuthService) { a.authSvc = s }
+
+// AuthService returns the multi-tenant auth service, or nil if not configured.
+func (a *ChatApp) AuthService() *AuthService { return a.authSvc }
+
+// SetTokenService injects the JWT/refresh token service (Sprint 1.3).
+func (a *ChatApp) SetTokenService(s *TokenService) { a.tokenSvc = s }
+
+// TokenService returns the token service, or nil if not configured.
+func (a *ChatApp) TokenService() *TokenService { return a.tokenSvc }
+
+// SetDeviceService injects the RFC8628 device authorization service (Sprint 1.4).
+func (a *ChatApp) SetDeviceService(s *DeviceService) { a.deviceSvc = s }
+
+// DeviceService returns the device authorization service, or nil if not configured.
+func (a *ChatApp) DeviceService() *DeviceService { return a.deviceSvc }
 
 // SetSSH injects SSH pool and repository.
 func (a *ChatApp) SetSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository) {
@@ -73,10 +118,10 @@ func (a *ChatApp) SetSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository
 func (a *ChatApp) SSHPool() *sshinfra.Pool      { return a.sshPool }
 func (a *ChatApp) Slash() *slash.Registry       { return a.slash }
 func (a *ChatApp) Skills() *skill.Service       { return a.skills }
-func (a *ChatApp) MCP() mcpport.IMCPManagerPort { return a.mcp }
 func (a *ChatApp) Memory() *memory.Service      { return a.memSvc }
 func (a *ChatApp) Audit() audit.Repository      { return a.auditRepo }
 func (a *ChatApp) Blobs() blob.Store            { return a.blobs }
+func (a *ChatApp) LLMKey() llmkey.Repository    { return a.llmKeyRepo }
 
 func (a *ChatApp) GetBlob(ctx context.Context, key string) ([]byte, error) {
 	if a.blobs == nil {
@@ -85,11 +130,21 @@ func (a *ChatApp) GetBlob(ctx context.Context, key string) ([]byte, error) {
 	return a.blobs.Get(ctx, key)
 }
 
-func (a *ChatApp) ListAudit(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+func (a *ChatApp) ListAudit(ctx context.Context, userID, sessionID string, limit int) ([]audit.Entry, error) {
 	if a.auditRepo == nil {
 		return nil, nil
 	}
-	return a.auditRepo.ListBySession(ctx, sessionID, limit)
+	return a.auditRepo.ListBySession(ctx, userID, sessionID, limit)
+}
+
+// ListAuditCtx is the ctx-driven (Sprint 1.6) form: the userID is taken from
+// tenant.From(ctx). Use this from HTTP handlers that already passed through
+// authJWT so the principal's userID is the only valid filter.
+func (a *ChatApp) ListAuditCtx(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+	if a.auditRepo == nil {
+		return nil, nil
+	}
+	return a.auditRepo.ListForUser(ctx, sessionID, limit)
 }
 
 // SaveMemory API/helper
@@ -116,8 +171,12 @@ func (a *ChatApp) SearchMemory(ctx context.Context, userID, projectID, query str
 
 // InstallMCP installs/updates an MCP server via domain port.
 func (a *ChatApp) InstallMCP(ctx context.Context, name, transport, command string, args []string, env map[string]string, url string, enabled bool, timeout int) error {
-	if a.mcp == nil {
+	if a.mcpFactory == nil {
 		return fmt.Errorf("mcp disabled")
+	}
+	mgr, err := a.mcpFactory.For(ctx)
+	if err != nil {
+		return fmt.Errorf("mcp tenant: %w", err)
 	}
 	if transport == "" {
 		transport = "stdio"
@@ -125,7 +184,7 @@ func (a *ChatApp) InstallMCP(ctx context.Context, name, transport, command strin
 	if timeout <= 0 {
 		timeout = 60
 	}
-	return a.mcp.AddOrUpdate(ctx, mcpmodel.ServerConfig{
+	return mgr.AddOrUpdate(ctx, mcpmodel.ServerConfig{
 		Name: name, Transport: transport, Command: command, Args: args,
 		Env: env, URL: url, Enabled: enabled, TimeoutSec: timeout,
 	})
@@ -255,11 +314,21 @@ func (a *ChatApp) slashCtx() slash.Context {
 			}
 			return b.String()
 		},
-		ListMCP: func() string {
-			if a.mcp == nil {
+		ListMCP: func(sctx slash.Context) string {
+			if a.mcpFactory == nil {
 				return "(mcp disabled)"
 			}
-			hs := a.mcp.Health(context.Background())
+			// ListMCP is the per-user view from within the agent session. The
+			// slash handler context carries the session's userID; build a tenant
+			// ctx and let the factory resolve this user's Manager.
+			if sctx.UserID == "" {
+				return "(no session)"
+			}
+			mgr, err := a.mcpFactory.ForUserID(sctx.UserID)
+			if err != nil || mgr == nil {
+				return "(mcp disabled)"
+			}
+			hs := mgr.Health(context.Background())
 			if len(hs) == 0 {
 				return "(no mcp servers installed)"
 			}

@@ -151,3 +151,93 @@ CREATE TABLE IF NOT EXISTS `ssh_connection` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='SSH远程连接配置';
+
+-- ----------------------------
+-- organizations (租户)
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `organizations` (
+  `id`         CHAR(26)     NOT NULL,
+  `name`       VARCHAR(128) NOT NULL DEFAULT '',
+  `slug`       VARCHAR(64)  NOT NULL DEFAULT '',
+  `plan`       VARCHAR(16)  NOT NULL DEFAULT 'free',
+  `owner_id`   CHAR(26)     NOT NULL DEFAULT '',
+  `created_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_orgs_slug` (`slug`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='组织/租户';
+
+-- ----------------------------
+-- users (平台用户 / 租户成员)
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `users` (
+  `id`              CHAR(26)     NOT NULL,
+  `org_id`          CHAR(26)     NOT NULL,
+  `email`           VARCHAR(254) NOT NULL,
+  `password_hash`   CHAR(60)     NOT NULL DEFAULT '',
+  `display_name`    VARCHAR(128) NOT NULL DEFAULT '',
+  `role`            VARCHAR(16)  NOT NULL DEFAULT 'member',
+  `status`          VARCHAR(16)  NOT NULL DEFAULT 'pending',
+  `email_verified`  TINYINT(1)   NOT NULL DEFAULT 0,
+  `verify_token`    VARCHAR(64)  NOT NULL DEFAULT '',
+  `quota_tokens`    BIGINT       NULL DEFAULT NULL,
+  `quota_reset_at`  DATETIME     NULL DEFAULT NULL,
+  `created_at`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_users_org_email` (`org_id`, `email`),
+  KEY `idx_users_verify` (`verify_token`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台用户';
+
+-- ----------------------------
+-- devices (RFC8628 设备授权)
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `devices` (
+  `id`            CHAR(26)     NOT NULL,
+  `user_code`     VARCHAR(12)  NOT NULL,
+  `user_id`       CHAR(26)     NOT NULL DEFAULT '',
+  `org_id`        CHAR(26)     NOT NULL DEFAULT '',
+  `status`        VARCHAR(16)  NOT NULL DEFAULT 'pending',
+  `scope`         VARCHAR(256) NOT NULL DEFAULT '',
+  `expires_at`    DATETIME     NOT NULL,
+  `last_poll_at`  DATETIME     NULL DEFAULT NULL,
+  `approved_at`   DATETIME     NULL DEFAULT NULL,
+  `created_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_devices_user_code` (`user_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='RFC8628 设备授权';
+
+-- ----------------------------
+-- refresh_tokens (刷新令牌 JTI)
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `refresh_tokens` (
+  `id`          CHAR(26)     NOT NULL,
+  `user_id`     CHAR(26)     NOT NULL,
+  `org_id`      CHAR(26)     NOT NULL DEFAULT '',
+  `device_id`   CHAR(26)     NOT NULL DEFAULT '',
+  `token_hash`  CHAR(64)     NOT NULL,
+  `scope`       VARCHAR(256) NOT NULL DEFAULT '',
+  `expires_at`  DATETIME     NOT NULL,
+  `revoked`     TINYINT(1)   NOT NULL DEFAULT 0,
+  `created_at`  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_rt_user` (`user_id`),
+  KEY `idx_rt_token_hash` (`token_hash`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='刷新令牌(JTI)';
+
+-- ----------------------------
+-- llm_keys (Sprint 2.3: per-user LLM API keys, KMS-encrypted)
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `llm_keys` (
+  `user_id`      CHAR(26)     NOT NULL,
+  `alias`        VARCHAR(128) NOT NULL,
+  `provider`     VARCHAR(64)  NOT NULL,
+  `api_key_kms`  TEXT         NOT NULL,
+  `api_base_kms` TEXT         NOT NULL,
+  `enabled`      TINYINT(1)   NOT NULL DEFAULT 1,
+  `created_at`   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`user_id`, `alias`),
+  KEY `idx_llm_keys_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='per-user LLM API keys (KMS-encrypted)';

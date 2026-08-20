@@ -115,6 +115,74 @@ func migrate(db *sql.DB) error {
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )`,
+		`CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  slug TEXT NOT NULL DEFAULT '',
+  plan TEXT NOT NULL DEFAULT 'free',
+  owner_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_orgs_slug ON organizations(slug)`,
+		`CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  password_hash TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'member',
+  status TEXT NOT NULL DEFAULT 'pending',
+  email_verified INTEGER NOT NULL DEFAULT 0,
+  verify_token TEXT NOT NULL DEFAULT '',
+  quota_tokens INTEGER,
+  quota_reset_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_org_email ON users(org_id, email)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_verify ON users(verify_token)`,
+		`CREATE TABLE IF NOT EXISTS devices (
+  id TEXT PRIMARY KEY,
+  user_code TEXT NOT NULL,
+  user_id TEXT NOT NULL DEFAULT '',
+  org_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  scope TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  last_poll_at TEXT,
+  approved_at TEXT,
+  created_at TEXT NOT NULL
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_devices_user_code ON devices(user_code)`,
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT '',
+  org_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_rt_user ON refresh_tokens(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_rt_token_hash ON refresh_tokens(token_hash)`,
+
+		// Sprint 2.3: per-user LLM API keys (encrypted via KMS)
+		`CREATE TABLE IF NOT EXISTS llm_keys (
+  user_id TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  api_key_kms TEXT NOT NULL,
+  api_base_kms TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, alias)
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_llm_keys_user ON llm_keys(user_id)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {

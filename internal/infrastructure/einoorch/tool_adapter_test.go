@@ -47,7 +47,10 @@ func (m *memAudit) Append(_ context.Context, e audit.Entry) error {
 	m.entries = append(m.entries, e)
 	return nil
 }
-func (m *memAudit) ListBySession(context.Context, string, int) ([]audit.Entry, error) {
+func (m *memAudit) ListBySession(context.Context, string, string, int) ([]audit.Entry, error) {
+	return m.entries, nil
+}
+func (m *memAudit) ListForUser(context.Context, string, int) ([]audit.Entry, error) {
 	return m.entries, nil
 }
 

@@ -3,10 +3,17 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
 
 	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/tenant"
 )
+
+// ErrTenantMissing is returned by ListForUser implementations when ctx does
+// not carry a tenant.Tenant (Sprint 1.6 invariant: business code must not
+// query multi-tenant repositories outside an authenticated request).
+var ErrTenantMissing = errors.New("tenant missing from context")
 
 // MemoryAuditRepo in-process audit ring buffer.
 type MemoryAuditRepo struct {
@@ -29,7 +36,7 @@ func (r *MemoryAuditRepo) Append(_ context.Context, e audit.Entry) error {
 	return nil
 }
 
-func (r *MemoryAuditRepo) ListBySession(_ context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+func (r *MemoryAuditRepo) ListBySession(_ context.Context, userID, sessionID string, limit int) ([]audit.Entry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if limit <= 0 {
@@ -37,11 +44,28 @@ func (r *MemoryAuditRepo) ListBySession(_ context.Context, sessionID string, lim
 	}
 	var out []audit.Entry
 	for i := len(r.data) - 1; i >= 0 && len(out) < limit; i-- {
-		if sessionID == "" || r.data[i].SessionID == sessionID {
-			out = append(out, r.data[i])
+		e := r.data[i]
+		// Multi-tenant isolation (Sprint 1.7): always filter by userID; sessionID is optional.
+		if e.UserID != userID {
+			continue
 		}
+		if sessionID != "" && e.SessionID != sessionID {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out, nil
+}
+
+// ListForUser is the ctx-driven (Sprint 1.6) form. Returns ErrTenantMissing if
+// ctx has no tenant.Tenant — refusing to leak rows to a missing/unauthenticated
+// caller is the safe default.
+func (r *MemoryAuditRepo) ListForUser(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+	t, ok := tenant.From(ctx)
+	if !ok || t.UserID == "" {
+		return nil, ErrTenantMissing
+	}
+	return r.ListBySession(ctx, t.UserID, sessionID, limit)
 }
 
 // MySQLAuditRepo persists to audit_log.
@@ -60,13 +84,20 @@ INSERT INTO audit_log (user_id, session_id, action, tool, detail, decision) VALU
 	return err
 }
 
-func (r *MySQLAuditRepo) ListBySession(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+func (r *MySQLAuditRepo) ListBySession(ctx context.Context, userID, sessionID string, limit int) ([]audit.Entry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT user_id, session_id, action, tool, IFNULL(detail,''), decision FROM audit_log
-WHERE session_id=? ORDER BY id DESC LIMIT ?`, sessionID, limit)
+	// Multi-tenant isolation (Sprint 1.7): always scope by user_id; session_id is an optional refinement.
+	q := `SELECT user_id, session_id, action, tool, IFNULL(detail,''), decision FROM audit_log WHERE user_id=?`
+	args := []any{userID}
+	if sessionID != "" {
+		q += ` AND session_id=?`
+		args = append(args, sessionID)
+	}
+	q += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +111,16 @@ WHERE session_id=? ORDER BY id DESC LIMIT ?`, sessionID, limit)
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ListForUser is the ctx-driven (Sprint 1.6) form: extracts the tenant from
+// ctx and delegates to ListBySession so the isolation rule lives in one place.
+func (r *MySQLAuditRepo) ListForUser(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+	t, ok := tenant.From(ctx)
+	if !ok || t.UserID == "" {
+		return nil, ErrTenantMissing
+	}
+	return r.ListBySession(ctx, t.UserID, sessionID, limit)
 }
 
 func itoa(n int64) string {

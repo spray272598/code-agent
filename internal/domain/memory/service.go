@@ -2,25 +2,46 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/tenant"
+	"github.com/spray272598/code-agent/internal/domain/vector"
 )
+
+// ErrTenantMissing is returned by ctx-driven entry points (SearchCtx) when the
+// caller is not authenticated. Business code that flows through authJWT never
+// sees this; tests and admin tools must inject a tenant via tenant.With.
+var ErrTenantMissing = errors.New("tenant missing from context")
 
 // Service long-term memory: user + project scopes (walicode CoreMemory inspired).
 type Service struct {
-	repo      memport.IMemoryRepository
-	extractor Extractor
-	embedder  port.IEmbeddingPort
+	repo       memport.IMemoryRepository
+	extractor  Extractor
+	embedder   port.IEmbeddingPort
+	vector     vector.IVectorIndex // Sprint 1.10: optional dense-vector backend
+	collection string              // collection name when vector is set
 }
 
 func NewService(repo memport.IMemoryRepository) *Service {
 	return &Service{repo: repo}
+}
+
+// SetVectorIndex wires an optional dense-vector backend (Sprint 1.10). When
+// set, Search and findDuplicate prefer vector search with a strict user_id
+// payload filter; on ErrUnavailable or any other error they fall back to the
+// in-process cosine rerank so behavior degrades gracefully. Save additionally
+// upserts new items into the index (best-effort, errors are logged not raised).
+func (s *Service) SetVectorIndex(idx vector.IVectorIndex, collection string) {
+	s.vector = idx
+	s.collection = collection
 }
 
 // SetExtractor injects a memory extractor (e.g. LLM-backed) for semantic
@@ -73,7 +94,12 @@ func (s *Service) Save(ctx context.Context, item *memport.MemoryItem) error {
 	if id, dup := s.findDuplicate(ctx, item, item.Embedding); dup {
 		item.ID = id
 	}
-	return s.repo.Save(ctx, item)
+	if err := s.repo.Save(ctx, item); err != nil {
+		return err
+	}
+	// Best-effort vector upsert (Sprint 1.10): keeps the dense index in sync.
+	s.indexOne(ctx, item)
+	return nil
 }
 
 // dupThreshold is the cosine similarity above which a new memory is treated as
@@ -82,9 +108,30 @@ const dupThreshold = 0.88
 
 // findDuplicate returns the ID of the most semantically similar existing memory
 // (within user+project scope) when its similarity exceeds dupThreshold.
+// Sprint 1.10: prefers the vector index with a strict user_id payload filter
+// (multi-tenant safe); on ErrUnavailable or any error falls back to the
+// in-process cosine over List.
 func (s *Service) findDuplicate(ctx context.Context, item *memport.MemoryItem, emb []float32) (int64, bool) {
 	if s.embedder == nil || len(emb) == 0 {
 		return 0, false
+	}
+	if s.vector != nil && s.collection != "" && item.UserID != "" {
+		filter := map[string]any{"user_id": item.UserID}
+		hits, err := s.vector.Search(ctx, s.collection, emb, 5, filter)
+		if err == nil {
+			for _, h := range hits {
+				if h.Score >= dupThreshold {
+					if id, perr := strconv.ParseInt(h.ID, 10, 64); perr == nil && id != item.ID {
+						return id, true
+					}
+				}
+			}
+			return 0, false
+		}
+		if !errors.Is(err, vector.ErrUnavailable) {
+			log.Printf("[memory] vector findDuplicate: %v", err)
+		}
+		// fall through to legacy path
 	}
 	existing, err := s.List(ctx, item.UserID, item.ProjectID, "", 200)
 	if err != nil || len(existing) == 0 {
@@ -171,7 +218,7 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		return s.repo.Search(ctx, userID, projectID, query, limit)
 	}
 
-	// hybrid: keyword recall (candidates) + cosine rerank on top
+	// hybrid: keyword recall (candidates) + vector-indexed rerank
 	qvecs, err := s.embedder.Embed(ctx, []string{query})
 	if err != nil || len(qvecs) != 1 || len(qvecs[0]) == 0 {
 		// embedding unavailable → graceful keyword fallback
@@ -188,7 +235,28 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		return nil, nil
 	}
 
-	// score = cosine similarity (+ small importance boost); rerank desc
+	// Sprint 1.10: ask the backend to rank with a strict user_id payload filter.
+	// The vector index CANNOT return cross-tenant results; the score is only
+	// used to boost the existing candidate ordering.
+	var idOrder map[int64]float32
+	if s.vector != nil && s.collection != "" && userID != "" {
+		filter := map[string]any{"user_id": userID}
+		hits, verr := s.vector.Search(ctx, s.collection, qvec, limit*4, filter)
+		if verr == nil {
+			idOrder = make(map[int64]float32, len(hits))
+			for _, h := range hits {
+				if id, perr := strconv.ParseInt(h.ID, 10, 64); perr == nil {
+					idOrder[id] = h.Score
+				}
+			}
+		} else if !errors.Is(verr, vector.ErrUnavailable) {
+			log.Printf("[memory] vector search: %v", verr)
+		}
+	}
+
+	// score = cosine similarity (+ small importance boost); vector hits add a
+	// tiny boost so an item that the backend says is relevant floats to the top,
+	// even if its in-process cosine is slightly lower than another's.
 	type scored struct {
 		it    memport.MemoryItem
 		score float64
@@ -199,7 +267,10 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		if len(it.Embedding) > 0 {
 			sim = memport.CosineSimilarity(qvec, it.Embedding)
 		}
-		score := sim + float64(it.Importance)/10000 // tiny tiebreak, keep semantic dominant
+		score := sim + float64(it.Importance)/10000
+		if v, ok := idOrder[it.ID]; ok {
+			score += float64(v) + 0.001 // backend hint dominates in-process score
+		}
 		ranked = append(ranked, scored{it: it, score: score})
 	}
 	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
@@ -209,6 +280,90 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		out = append(out, ranked[i].it)
 	}
 	return out, nil
+}
+
+// SearchCtx is the ctx-driven (Sprint 1.6/1.10) entry point: derives userID
+// from tenant.From(ctx). Returns ErrTenantMissing when ctx is unauthenticated.
+func (s *Service) SearchCtx(ctx context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+	t, ok := tenant.From(ctx)
+	if !ok || t.UserID == "" {
+		return nil, ErrTenantMissing
+	}
+	return s.Search(ctx, t.UserID, projectID, query, limit)
+}
+
+// BackfillVector (Sprint 1.11) ensures the dense-vector index reflects every
+// memory that has an embedding. For items lacking one, it embeds them on the
+// fly (when an embedder is configured) and persists the embedding. Returns
+// the number of items upserted. Errors from the vector backend are logged, not
+// returned, so a misconfigured backend never blocks startup.
+func (s *Service) BackfillVector(ctx context.Context, limit int) int {
+	if s == nil || s.repo == nil {
+		return 0
+	}
+	if s.vector == nil || s.collection == "" {
+		return 0
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	items, err := s.repo.ListNoEmbedding(ctx, limit)
+	if err != nil {
+		log.Printf("[memory] backfill-vector list: %v", err)
+		return 0
+	}
+	n := 0
+	for _, it := range items {
+		if it.UserID == "" {
+			continue
+		}
+		if len(it.Embedding) == 0 {
+			if s.embedder == nil {
+				continue
+			}
+			vecs, eerr := s.embedder.Embed(ctx, []string{it.Content})
+			if eerr != nil || len(vecs) != 1 || len(vecs[0]) == 0 {
+				log.Printf("[memory] backfill-vector embed %d: %v", it.ID, eerr)
+				continue
+			}
+			it.Embedding = vecs[0]
+			if serr := s.repo.Save(ctx, &it); serr != nil {
+				log.Printf("[memory] backfill-vector save %d: %v", it.ID, serr)
+				continue
+			}
+		}
+		if uerr := s.vector.Upsert(ctx, s.collection, []vector.Point{pointOf(&it)}); uerr != nil {
+			log.Printf("[memory] backfill-vector upsert %d: %v", it.ID, uerr)
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// indexOne is the best-effort vector upsert after a successful Save.
+func (s *Service) indexOne(ctx context.Context, item *memport.MemoryItem) {
+	if s.vector == nil || s.collection == "" || item == nil {
+		return
+	}
+	if item.UserID == "" || len(item.Embedding) == 0 {
+		return
+	}
+	if err := s.vector.Upsert(ctx, s.collection, []vector.Point{pointOf(item)}); err != nil && !errors.Is(err, vector.ErrUnavailable) {
+		log.Printf("[memory] vector upsert %d: %v", item.ID, err)
+	}
+}
+
+func pointOf(it *memport.MemoryItem) vector.Point {
+	return vector.Point{
+		ID:     strconv.FormatInt(it.ID, 10),
+		Vector: it.Embedding,
+		Payload: map[string]any{
+			"user_id":    it.UserID,
+			"project_id": it.ProjectID,
+			"scope":      string(it.Scope),
+		},
+	}
 }
 
 // FormatForPrompt retrieves top memories for user+project and formats for system prompt.

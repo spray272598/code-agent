@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -11,6 +12,11 @@ import (
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 )
+
+// ErrTenantMismatch is returned when a caller's tenant.UserID does not match
+// the userID that this Manager was constructed with. It is the runtime
+// guarantee that no code path can confuse two users' MCP tool spaces.
+var ErrTenantMismatch = errors.New("mcp manager tenant mismatch")
 
 // Watchdog + circuit-breaker tuning. The watchdog runs a fixed 15s tick; the
 // per-server state machine below decides whether each tick actually pings or
@@ -45,9 +51,14 @@ type connState struct {
 	openUntil   time.Time // when the open window ends and half-open may start (open)
 }
 
-// Manager implements mcpport.IMCPManagerPort. Lives in infrastructure only.
+// Manager implements mcpport.IMCPManagerPort and is per-user (Sprint 1.6).
+// One Manager owns the MCP tool space of exactly one userID: it can only
+// configure, list, and call servers that the owning user configured. The
+// runtime invariant is checked via WithTenant: any cross-tenant call returns
+// ErrTenantMismatch and is recorded in the audit log.
 type Manager struct {
 	mu          sync.RWMutex
+	userID      string // owner; "" means system / bootstrap-managed
 	clients     map[string]mcpport.IMCPClient
 	configs     map[string]model.ServerConfig
 	toolRoute   map[string]string // toolName -> server\x00realName
@@ -60,17 +71,69 @@ type Manager struct {
 	reconnectMu sync.Mutex
 }
 
+// NewManager is the legacy system-level constructor used by bootstrap for the
+// demo server. Prefer NewUserManager(userID) for any user-facing path.
 func NewManager() *Manager {
+	return NewUserManager("")
+}
+
+// NewUserManager constructs a per-user Manager. userID is the owning tenant;
+// pass the authenticated principal's userID from ctx (tenant.UserID(ctx)) or
+// the JWT subject. Empty userID is allowed only for system-level servers.
+func NewUserManager(userID string) *Manager {
 	m := &Manager{
-		clients:   make(map[string]mcpport.IMCPClient),
-		configs:   make(map[string]model.ServerConfig),
-		toolRoute: make(map[string]string),
-		lastErr:   make(map[string]string),
-		states:    make(map[string]*connState),
-		stopWatch: make(chan struct{}),
+		userID:     userID,
+		clients:    make(map[string]mcpport.IMCPClient),
+		configs:    make(map[string]model.ServerConfig),
+		toolRoute:  make(map[string]string),
+		lastErr:    make(map[string]string),
+		states:     make(map[string]*connState),
+		stopWatch:  make(chan struct{}),
 	}
 	m.startWatchdog()
 	return m
+}
+
+// Owner returns the userID this Manager owns. Used by callers to stamp the
+// audit log entry on each tool call.
+func (m *Manager) Owner() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.userID
+}
+
+// AssertTenant is the runtime guard: it returns ErrTenantMismatch when ctx's
+// tenant.UserID differs from this Manager's owner. Empty owner (system) is
+// always allowed; empty caller is rejected.
+func (m *Manager) AssertTenant(ctx context.Context) error {
+	want := m.Owner()
+	if want == "" {
+		return nil // system-owned; no assertion
+	}
+	// import cycle avoidance: tenant extraction is inlined as a string lookup.
+	if ctx == nil {
+		return ErrTenantMismatch
+	}
+	got, _ := ctx.Value(tenantKey{}).(string)
+	if got == "" || got != want {
+		return ErrTenantMismatch
+	}
+	return nil
+}
+
+// tenantKey is the unexported ctx key used to carry the asserted userID.
+// business code uses tenant.From(ctx), but this lower layer accepts the raw
+// userID via WithAssertedUser to keep the dependency direction one-way.
+type tenantKey struct{}
+
+// WithAssertedUser stamps the userID on ctx so the per-user Manager can
+// perform its runtime assertion without importing the tenant package
+// (avoiding a cycle: tenant → ... → mcp → tenant).
+func WithAssertedUser(ctx context.Context, userID string) context.Context {
+	if userID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, tenantKey{}, userID)
 }
 
 // startWatchdog periodically restarts offline enabled servers.
@@ -376,6 +439,11 @@ func (m *Manager) ListTools(ctx context.Context) ([]model.ToolDef, error) {
 }
 
 func (m *Manager) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
+	// Sprint 1.6: runtime tenant guard. A per-user Manager must never execute
+	// a tool on behalf of a different user. Empty owner = system path.
+	if err := m.AssertTenant(ctx); err != nil {
+		return "", err
+	}
 	m.mu.RLock()
 	route, ok := m.toolRoute[name]
 	m.mu.RUnlock()

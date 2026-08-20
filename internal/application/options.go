@@ -1,6 +1,8 @@
 package application
 
 import (
+	"context"
+
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/auth"
@@ -13,6 +15,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/slash"
 	sshport "github.com/spray272598/code-agent/internal/domain/ssh/port"
+	mcpinfra "github.com/spray272598/code-agent/internal/infrastructure/mcp"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
@@ -28,8 +31,39 @@ func WithSkills(s *skill.Service) Option {
 
 // WithMCP injects MCP manager.
 func WithMCP(m mcpport.IMCPManagerPort) Option {
-	return func(a *ChatApp) { a.mcp = m }
+	return func(a *ChatApp) { a.mcpFactory = legacyMCPFactoryAdapter(m) }
 }
+
+// WithMCPFactory injects the per-user MCP factory (Sprint 1.6). Prefer this
+// over WithMCP for any multi-tenant deployment.
+func WithMCPFactory(f mcpport.IUserMCPManagerFactory) Option {
+	return func(a *ChatApp) { a.mcpFactory = f }
+}
+
+// legacyMCPFactoryAdapter wraps a single global Manager (pre-1.6 bootstrap
+// path) into a per-user factory anchored to userID="". This lets old tests
+// keep working without re-wiring every call site.
+func legacyMCPFactoryAdapter(m mcpport.IMCPManagerPort) mcpport.IUserMCPManagerFactory {
+	return &systemOnlyFactory{inner: m}
+}
+
+type systemOnlyFactory struct{ inner mcpport.IMCPManagerPort }
+
+func (f *systemOnlyFactory) For(ctx context.Context) (mcpport.IMCPManagerPort, error) {
+	if f.inner == nil {
+		return nil, mcpinfra.ErrTenantMismatch
+	}
+	return f.inner, nil
+}
+func (f *systemOnlyFactory) ForUserID(_ string) (mcpport.IMCPManagerPort, error) {
+	if f.inner == nil {
+		return nil, mcpinfra.ErrTenantMismatch
+	}
+	return f.inner, nil
+}
+func (f *systemOnlyFactory) Metrics() mcpport.FactoryMetric { return mcpport.FactoryMetric{} }
+func (f *systemOnlyFactory) Count() int                     { return 1 }
+func (f *systemOnlyFactory) ResetAll()                      {}
 
 // WithMemory injects memory service.
 func WithMemory(s *memory.Service) Option {

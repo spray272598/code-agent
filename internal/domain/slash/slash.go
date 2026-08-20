@@ -24,7 +24,7 @@ type Context struct {
 	// Injected helpers
 	ListTools  func() []map[string]string
 	ListSkills func() string
-	ListMCP    func() string
+	ListMCP    func(sctx Context) string
 	HelpExtra  string
 }
 
@@ -77,7 +77,7 @@ func NewRegistry() *Registry {
 		if ctx.ListMCP == nil {
 			return Result{Handled: true, Response: "(mcp unavailable)"}
 		}
-		return Result{Handled: true, Response: ctx.ListMCP()}
+		return Result{Handled: true, Response: ctx.ListMCP(ctx)}
 	})
 	r.Register("cost", "Show rough session token usage / metrics hint", func(args string, ctx Context) Result {
 		return Result{Handled: true, Response: "See GET /api/v1/metrics and GET /api/v1/memory. Redis: token:user:{id}:{day}."}

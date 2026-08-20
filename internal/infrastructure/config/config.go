@@ -30,6 +30,26 @@ type Config struct {
 	Host       HostConfig       `yaml:"host"`
 	OTLP       OTLPConfig       `yaml:"otlp"`
 	SSH        SSHConfig        `yaml:"ssh"`
+	// JWTSecret signs platform access/refresh tokens (HS256). Rotate by moving the
+	// current value to JWTSecretPrev and setting a new JWTSecret; tokens signed with
+	// either secret remain valid during the overlap window.
+	JWTSecret     string `yaml:"jwt_secret"`
+	JWTSecretPrev string `yaml:"jwt_secret_prev"`
+	// Auth holds RFC8628 device-flow / web-approval settings (Sprint 1.4).
+	Auth AuthConfig `yaml:"auth"`
+}
+
+// AuthConfig device authorization (RFC8628) settings.
+type AuthConfig struct {
+	// VerificationURI is where the user enters the user_code in a browser
+	// (e.g. https://app.example.com/devices/verify).
+	VerificationURI string `yaml:"verification_uri"`
+	// DeviceCodeTTLSec is how long a device_code/user_code stays valid.
+	DeviceCodeTTLSec int `yaml:"device_code_ttl_sec"`
+	// DevicePollIntervalSec is the minimum seconds between device token polls.
+	DevicePollIntervalSec int `yaml:"device_poll_interval_sec"`
+	// UserCodeLen is the length (before formatting) of the human user_code.
+	UserCodeLen int `yaml:"user_code_len"`
 }
 
 // SSHConfig SSH remote operations toggle.
@@ -229,6 +249,12 @@ func Default() *Config {
 		SubAgent: SubAgentConfig{Enabled: true, MaxConcurrent: 3, DefaultSteps: 8},
 		Host: HostConfig{Mode: "server", PreferHost: false},
 		OTLP: OTLPConfig{Enabled: false, Endpoint: "localhost:4318", Insecure: true, Service: "code-agent"},
+		Auth: AuthConfig{
+			VerificationURI:       "http://localhost:3000/devices/verify",
+			DeviceCodeTTLSec:      300,
+			DevicePollIntervalSec: 5,
+			UserCodeLen:           8,
+		},
 	}
 }
 

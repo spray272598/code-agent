@@ -14,11 +14,14 @@ import (
 
 	"github.com/spray272598/code-agent/internal/api/dto"
 	"github.com/spray272598/code-agent/internal/application"
+	authdomain "github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/codeindex"
 	"github.com/spray272598/code-agent/internal/domain/host"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/tenant"
 	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/trigger/ws"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Server struct {
@@ -92,16 +95,18 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/permission/pending", s.handlePermPending)
 	mux.HandleFunc("/api/v1/permission/approve", s.handlePermApprove)
 	mux.HandleFunc("/api/v1/permission/reject", s.handlePermReject)
-	mux.HandleFunc("/api/v1/mcp/servers", s.handleMCPServers)
-	mux.HandleFunc("/api/v1/mcp/health", s.handleMCPHealth)
-	mux.HandleFunc("/api/v1/mcp/tools", s.handleMCPTools)
+	// MCP endpoints — Sprint 1.6: per-user. The factory resolves the Manager for
+	// the authenticated tenant; cross-tenant reads return ErrTenantMismatch.
+	mux.HandleFunc("/api/v1/mcp/servers", s.authJWT(s.handleMCPServers))
+	mux.HandleFunc("/api/v1/mcp/health", s.authJWT(s.handleMCPHealth))
+	mux.HandleFunc("/api/v1/mcp/tools", s.authJWT(s.handleMCPTools))
 	mux.HandleFunc("/api/v1/skills", s.handleSkills)
 	mux.HandleFunc("/api/v1/skills/install", s.handleSkillInstall)
 	mux.HandleFunc("/api/v1/skills/uninstall", s.handleSkillUninstall)
 	mux.HandleFunc("/api/v1/skills/reload", s.handleSkillReload)
 	mux.HandleFunc("/api/v1/memory", s.handleMemory)
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
-	mux.HandleFunc("/api/v1/audit", s.handleAudit)
+	mux.HandleFunc("/api/v1/audit", s.authJWT(s.handleAudit))
 	mux.HandleFunc("/api/v1/blobs", s.handleBlobGet)
 	mux.HandleFunc("/api/v1/host/devices", s.handleHostDevices)
 	mux.HandleFunc("/api/v1/session/cancel", s.handleSessionCancel)
@@ -118,13 +123,25 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/admin/log-level", s.handleLogLevel)
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/docs", s.handleSwaggerUI)
+
+	// multi-tenant auth (Sprint 1.2): public endpoints
+	mux.HandleFunc("/api/v1/auth/signup", s.handleSignup)
+	mux.HandleFunc("/api/v1/auth/verify", s.handleVerify)
+	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("/api/v1/auth/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/v1/me", s.authJWT(s.handleMe))
+
+	// device authorization (RFC8628, Sprint 1.4)
+	mux.HandleFunc("/api/v1/device/code", s.handleDeviceCode)
+	mux.HandleFunc("/api/v1/device/token", s.handleDeviceToken)
+	mux.HandleFunc("/api/v1/device/approve", s.authJWT(s.handleDeviceApprove))
 	mux.HandleFunc("/metrics", observability.WritePrometheus) // Prometheus scrape (auth-skipped)
 	if s.hostHub != nil {
 		mux.Handle("/ws/host", s.hostHub)
 		log.Printf("[http] host agent ws: /ws/host?token=&deviceId=\n")
 	}
 
-	handler := s.corsMiddleware(limitBody(s.maxBody, auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux)))))
+	handler := s.corsMiddleware(limitBody(s.maxBody, auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(observability.RequestSpanMiddleware(mux))))))
 	s.srv = &http.Server{
 		Addr:              s.addr,
 		Handler:           handler,
@@ -179,21 +196,36 @@ func auth(app *application.ChatApp, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// public / health / metrics / openapi / host ws (ws auth itself)
 		switch r.URL.Path {
-		case "/health", "/metrics", "/ws/host", "/api/v1/openapi.json", "/docs":
+		case "/health", "/metrics", "/ws/host", "/api/v1/openapi.json", "/docs",
+		"/api/v1/auth/signup", "/api/v1/auth/verify", "/api/v1/auth/login", "/api/v1/auth/refresh",
+		"/api/v1/device/code", "/api/v1/device/token":
 			next.ServeHTTP(w, r)
 			return
 		}
+		// 1) Bearer JWT is the primary credential (Sprint 1.3+). The gateway only
+		//    decides allow/deny; downstream authJWT re-validates and injects the
+		//    principal for /api/v1/me and /api/v1/device/approve.
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+			if tok := app.TokenService(); tok != nil {
+				if _, err := tok.Validate(strings.TrimPrefix(h, "Bearer ")); err == nil {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		// 2) API key fallback (dev / host-agent). With no keys configured this opens
+		//    the gate (dev mode); in production it validates the static key.
 		key := r.Header.Get("X-API-Key")
 		if key == "" {
 			if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 				key = strings.TrimPrefix(h, "Bearer ")
 			}
 		}
-		if !app.Auth(key) {
-			writeErr(w, http.StatusUnauthorized, "401", "invalid api key")
+		if app.Auth(key) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		writeErr(w, http.StatusUnauthorized, "401", "unauthorized")
 	})
 }
 
@@ -257,6 +289,325 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": "ok", "time": time.Now().Format(time.RFC3339)})
+}
+
+// ---- multi-tenant auth handlers (Sprint 1.2) ----
+
+func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	svc := s.app.AuthService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
+		return
+	}
+	var body struct {
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		DisplayName string `json:"displayName"`
+		OrgName     string `json:"orgName"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	org, u, err := svc.Signup(r.Context(), body.Email, body.Password, body.DisplayName, body.OrgName)
+	if err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"orgId":   org.ID,
+		"orgSlug": org.Slug,
+		"userId":  u.ID,
+		"email":   u.Email,
+		"status":  u.Status,
+		"message": "verification email sent",
+	}})
+}
+
+func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	svc := s.app.AuthService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	u, err := svc.VerifyEmail(r.Context(), body.Token)
+	if err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"userId": u.ID,
+		"email":  u.Email,
+		"status": u.Status,
+	}})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	svc := s.app.AuthService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
+		return
+	}
+	var body struct {
+		OrgID    string `json:"orgId"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	u, err := svc.AuthenticatePassword(r.Context(), body.OrgID, body.Email, body.Password)
+	if err != nil {
+		writeJSON(w, 401, errMap(err))
+		return
+	}
+	tok := s.app.TokenService()
+	if tok == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "token service unavailable"})
+		return
+	}
+	access, refresh, err := tok.IssuePair(r.Context(), u, "")
+	if err != nil {
+		writeJSON(w, 500, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"accessToken":  access,
+		"refreshToken": refresh,
+		"tokenType":    "Bearer",
+		"expiresIn":    900,
+		"user": map[string]any{
+			"userId": u.ID, "orgId": u.OrgID, "email": u.Email,
+			"role": u.Role, "emailVerified": u.EmailVerified, "status": u.Status,
+		},
+	}})
+}
+
+// handleRefresh rotates an opaque refresh token into a fresh access+refresh pair.
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	tok := s.app.TokenService()
+	if tok == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "token service unavailable"})
+		return
+	}
+	var body struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	access, refresh, err := tok.Refresh(r.Context(), body.RefreshToken)
+	if err != nil {
+		writeJSON(w, 401, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"accessToken":  access,
+		"refreshToken": refresh,
+		"tokenType":    "Bearer",
+		"expiresIn":    900,
+	}})
+}
+
+// handleMe returns the authenticated principal (requires a valid Bearer JWT).
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	p := authdomain.PrincipalFrom(r.Context())
+	if p == nil {
+		writeJSON(w, 401, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"userId": p.UserID, "orgId": p.OrgID, "deviceId": p.DeviceID,
+		"role": p.Role, "email": p.Email,
+	}})
+}
+
+// authJWT validates the Bearer access token and injects the principal into the
+// request context for downstream handlers.
+func (s *Server) authJWT(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok := s.app.TokenService()
+		if tok == nil {
+			writeJSON(w, 503, map[string]any{"code": "503", "message": "token service unavailable"})
+			return
+		}
+		authz := r.Header.Get("Authorization")
+		if len(authz) < 7 || authz[:7] != "Bearer " {
+			writeJSON(w, 401, map[string]any{"code": "401", "message": "missing bearer token"})
+			return
+		}
+		claims, err := tok.Validate(authz[7:])
+		if err != nil {
+			writeJSON(w, 401, map[string]any{"code": "401", "message": "invalid token"})
+			return
+		}
+		p := &authdomain.Principal{
+			UserID:   claims.Sub,
+			OrgID:    claims.Org,
+			DeviceID: claims.DID,
+			Role:     claims.Role,
+			Email:    claims.Email,
+		}
+		// Sprint 1.8: tag the request span with multi-tenant identifiers so every
+		// downstream span inherits them via the active trace context.
+		observability.SetTenantAttrs(trace.SpanFromContext(r.Context()), p)
+		next(w, r.WithContext(authdomain.WithPrincipal(r.Context(), p)))
+	}
+}
+
+// ---- RFC8628 device authorization handlers (Sprint 1.4) ----
+
+// handleDeviceCode is the device authorization request: the device obtains a
+// device_code (kept secret on the device) and a user_code (shown to the user).
+func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	svc := s.app.DeviceService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "device auth unavailable"})
+		return
+	}
+	var body struct {
+		ClientID   string `json:"client_id"`
+		Scope      string `json:"scope"`
+		DeviceName string `json:"device_name"`
+		Platform   string `json:"platform"`
+		UserAgent  string `json:"user_agent"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	res, err := svc.StartAuthorization(r.Context(), application.DeviceAuthParams{
+		ClientID: body.ClientID, Scope: body.Scope, DeviceName: body.DeviceName,
+		Platform: body.Platform, UserAgent: body.UserAgent,
+	})
+	if err != nil {
+		writeJSON(w, 500, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"deviceCode":      res.DeviceCode,
+		"userCode":        res.UserCode,
+		"verificationUri": res.VerificationURI,
+		"expiresIn":       res.ExpiresIn,
+		"interval":        res.Interval,
+	}})
+}
+
+// handleDeviceToken is the RFC8628 polling endpoint the device calls on a fixed
+// interval until the user approves (or the code expires).
+func (s *Server) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	svc := s.app.DeviceService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "device auth unavailable"})
+		return
+	}
+	var body struct {
+		GrantType  string `json:"grant_type"`
+		DeviceCode string `json:"device_code"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.GrantType != "urn:ietf:params:oauth:grant-type:device_code" {
+		writeJSON(w, 400, map[string]any{"code": "400", "message": "unsupported_grant_type"})
+		return
+	}
+	out, err := svc.Poll(r.Context(), body.DeviceCode)
+	if err != nil {
+		writeJSON(w, 500, errMap(err))
+		return
+	}
+	switch out.Status {
+	case application.PollApproved:
+		writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+			"accessToken":  out.AccessToken,
+			"refreshToken": out.RefreshToken,
+			"tokenType":    out.TokenType,
+			"expiresIn":    out.ExpiresIn,
+		}})
+	case application.PollPending:
+		writeJSON(w, 400, map[string]any{"code": "400", "message": out.OAuthError, "data": map[string]any{
+			"status": out.Status, "oauthError": out.OAuthError,
+		}})
+	default:
+		writeJSON(w, 400, map[string]any{"code": "400", "message": out.OAuthError, "data": map[string]any{
+			"status": out.Status, "oauthError": out.OAuthError,
+		}})
+	}
+}
+
+// handleDeviceApprove is called by the web SPA / browser (an authenticated user
+// with a valid Bearer JWT) to approve or deny a pending device by its user_code.
+func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	p := authdomain.PrincipalFrom(r.Context())
+	if p == nil {
+		writeJSON(w, 401, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+	svc := s.app.DeviceService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "device auth unavailable"})
+		return
+	}
+	var body struct {
+		UserCode string `json:"user_code"`
+		Deny     bool   `json:"deny"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	var err error
+	if body.Deny {
+		err = svc.Deny(r.Context(), body.UserCode)
+	} else {
+		err = svc.Approve(r.Context(), body.UserCode, p.UserID, p.OrgID)
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		switch err {
+		case application.ErrDeviceNotFound:
+			status = http.StatusNotFound
+		case application.ErrDeviceAlreadyApproved:
+			status = http.StatusConflict
+		case application.ErrDeviceExpired:
+			status = http.StatusGone
+		}
+		writeJSON(w, status, map[string]any{"code": fmt.Sprintf("%d", status), "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "message": "ok"})
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -440,9 +791,11 @@ func (s *Server) handlePermReject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
-	m := s.app.MCP()
-	if m == nil {
-		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+	// authJWT already ran; principal is on ctx. Use the per-user factory so
+	// user A never sees user B's server list.
+	m, err := s.app.MCPFor(r.Context())
+	if err != nil {
+		writeJSON(w, 401, map[string]any{"code": "401", "message": err.Error()})
 		return
 	}
 	switch r.Method {
@@ -515,27 +868,23 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) installMCP(ctx context.Context, name, transport, command string, args []string, env map[string]string, url string, enabled bool, timeout int) error {
-	m := s.app.MCP()
-	if m == nil {
-		return fmt.Errorf("mcp disabled")
-	}
-	// use type from domain model via bootstrap-installed manager — dynamic import
+	// use type from domain model via bootstrap-installed factory — dynamic import
 	return s.app.InstallMCP(ctx, name, transport, command, args, env, url, enabled, timeout)
 }
 
 func (s *Server) handleMCPHealth(w http.ResponseWriter, r *http.Request) {
-	m := s.app.MCP()
-	if m == nil {
-		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+	m, err := s.app.MCPFor(r.Context())
+	if err != nil {
+		writeJSON(w, 401, map[string]any{"code": "401", "message": err.Error()})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": m.Health(r.Context())})
 }
 
 func (s *Server) handleMCPTools(w http.ResponseWriter, r *http.Request) {
-	m := s.app.MCP()
-	if m == nil {
-		writeJSON(w, 200, map[string]any{"code": "0000", "data": []any{}})
+	m, err := s.app.MCPFor(r.Context())
+	if err != nil {
+		writeJSON(w, 401, map[string]any{"code": "401", "message": err.Error()})
 		return
 	}
 	list, err := m.ListTools(r.Context())
@@ -700,8 +1049,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	// Sprint 1.6 + 1.7: tenant scoping comes from ctx. Cross-tenant reads return
+	// nothing because ListForUser refuses to run when ctx has no tenant.
+	t, ok := tenant.From(r.Context())
+	if !ok || t.UserID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
 	sid := r.URL.Query().Get("sessionId")
-	list, err := s.app.ListAudit(r.Context(), sid, 100)
+	list, err := s.app.ListAuditCtx(r.Context(), sid, 100)
 	if err != nil {
 		writeJSON(w, 500, errMap(err))
 		return
@@ -1008,6 +1364,9 @@ const openAPISpec = `{
     "/api/v1/index/search": {"get": {"summary": "Code index search", "parameters":[{"name":"q","in":"query","required":true,"schema":{"type":"string"}}]}},
     "/api/v1/index/rebuild": {"post": {"summary": "Rebuild code index"}},
     "/api/v1/index/stats": {"get": {"summary": "Code index stats"}},
+    "/api/v1/device/code": {"post": {"summary": "RFC8628 device authorization (issue device_code + user_code)", "security": [], "responses": {"200": {"description": "deviceCode,userCode,verificationUri,expiresIn,interval"}}}},
+    "/api/v1/device/token": {"post": {"summary": "RFC8628 device token polling (grant_type=device_code)", "security": [], "responses": {"200": {"description": "tokens once approved"}, "400": {"description": "authorization_pending / slow_down / access_denied / expired_token / invalid_grant"}}}},
+    "/api/v1/device/approve": {"post": {"summary": "Approve/deny a device by user_code (requires Bearer JWT)", "responses": {"200": {"description": "ok"}}}},
     "/api/v1/admin/log-level": {"get": {"summary": "Get log level"}, "post": {"summary": "Set log level"}},
     "/api/v1/openapi.json": {"get": {"summary": "This document", "security": []}},
     "/metrics": {"get": {"summary": "Prometheus text", "security": []}},

@@ -8,6 +8,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/session/model"
+	"github.com/spray272598/code-agent/internal/domain/tenant"
 )
 
 // --- Session ---
@@ -311,14 +312,15 @@ VALUES (?,?,?,?,?,?,?,?)`,
 	return err
 }
 
-func (r *SQLiteAuditRepo) ListBySession(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+func (r *SQLiteAuditRepo) ListBySession(ctx context.Context, userID, sessionID string, limit int) ([]audit.Entry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	q := `SELECT user_id,session_id,action,tool,detail,decision,latency_ms,created_at FROM audit_log`
-	var args []any
+	// Multi-tenant isolation (Sprint 1.7): always scope by user_id; session_id is optional.
+	q := `SELECT user_id,session_id,action,tool,detail,decision,latency_ms,created_at FROM audit_log WHERE user_id=?`
+	args := []any{userID}
 	if sessionID != "" {
-		q += ` WHERE session_id=?`
+		q += ` AND session_id=?`
 		args = append(args, sessionID)
 	}
 	q += ` ORDER BY id DESC LIMIT ?`
@@ -338,4 +340,14 @@ func (r *SQLiteAuditRepo) ListBySession(ctx context.Context, sessionID string, l
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ListForUser is the ctx-driven (Sprint 1.6) form. Delegates to ListBySession
+// once the tenant is resolved.
+func (r *SQLiteAuditRepo) ListForUser(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
+	t, ok := tenant.From(ctx)
+	if !ok || t.UserID == "" {
+		return nil, ErrTenantMissing
+	}
+	return r.ListBySession(ctx, t.UserID, sessionID, limit)
 }
