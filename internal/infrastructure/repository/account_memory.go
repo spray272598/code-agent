@@ -64,6 +64,18 @@ func (r *MemoryUserRepo) FindByVerifyToken(_ context.Context, token string) (*au
 	return nil, nil
 }
 
+func (r *MemoryUserRepo) FindByResetToken(_ context.Context, token string) (*auth.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, u := range r.byID {
+		if u.ResetToken == token && u.Status == auth.StatusActive {
+			cp := *u
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (r *MemoryUserRepo) ListByOrg(_ context.Context, orgID string) ([]*auth.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

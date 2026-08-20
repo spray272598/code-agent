@@ -37,15 +37,17 @@ var _ auth.UserRepository = (*SQLiteUserRepo)(nil)
 
 func (r *SQLiteUserRepo) Save(ctx context.Context, u *auth.User) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO users (id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,quota_tokens,quota_reset_at,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO users (id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   org_id=excluded.org_id, email=excluded.email, password_hash=excluded.password_hash,
   display_name=excluded.display_name, role=excluded.role, status=excluded.status,
   email_verified=excluded.email_verified, verify_token=excluded.verify_token,
+  reset_token=excluded.reset_token, reset_expires_at=excluded.reset_expires_at,
   quota_tokens=excluded.quota_tokens, quota_reset_at=excluded.quota_reset_at, updated_at=excluded.updated_at`,
 		u.ID, u.OrgID, u.Email, u.PasswordHash, u.DisplayName, u.Role, u.Status,
-		boolToInt(u.EmailVerified), u.VerifyToken, quotaVal(u.QuotaTokens), sqliteTime(u.QuotaResetAt),
+		boolToInt(u.EmailVerified), u.VerifyToken, nullStr(u.ResetToken), sqliteTime(u.ResetExpiresAt),
+		quotaVal(u.QuotaTokens), sqliteTime(u.QuotaResetAt),
 		sqliteTime(nowOr(u.CreatedAt)), time.Now().Format(time.RFC3339Nano))
 	return err
 }
@@ -60,6 +62,10 @@ func (r *SQLiteUserRepo) FindByEmail(ctx context.Context, orgID, email string) (
 
 func (r *SQLiteUserRepo) FindByVerifyToken(ctx context.Context, token string) (*auth.User, error) {
 	return scanUserSQLite(r.db.QueryRowContext(ctx, userColsSQLite+` WHERE verify_token=? AND status=?`, token, auth.StatusPending))
+}
+
+func (r *SQLiteUserRepo) FindByResetToken(ctx context.Context, token string) (*auth.User, error) {
+	return scanUserSQLite(r.db.QueryRowContext(ctx, userColsSQLite+` WHERE reset_token=? AND status=?`, token, auth.StatusActive))
 }
 
 func (r *SQLiteUserRepo) ListByOrg(ctx context.Context, orgID string) ([]*auth.User, error) {
@@ -79,21 +85,22 @@ func (r *SQLiteUserRepo) ListByOrg(ctx context.Context, orgID string) ([]*auth.U
 	return out, rows.Err()
 }
 
-const userColsSQLite = `SELECT id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,quota_tokens,quota_reset_at,created_at,updated_at FROM users`
+const userColsSQLite = `SELECT id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at FROM users`
 
 func scanUserSQLite(s scanner) (*auth.User, error) {
 	var u auth.User
-	var cAt, uAt, qAt string
+	var cAt, uAt, qAt, rAt string
 	var quotaTokens sql.NullInt64
 	var emailVerified int
-	if err := s.Scan(&u.ID, &u.OrgID, &u.Email, u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&emailVerified, &u.VerifyToken, &quotaTokens, &qAt, &cAt, &uAt); err != nil {
+	if err := s.Scan(&u.ID, &u.OrgID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
+		&emailVerified, &u.VerifyToken, &u.ResetToken, &rAt, &quotaTokens, &qAt, &cAt, &uAt); err != nil {
 		return nil, err
 	}
 	u.EmailVerified = emailVerified != 0
 	if quotaTokens.Valid {
 		u.QuotaTokens = quotaTokens.Int64
 	}
+	u.ResetExpiresAt = parseTime(rAt)
 	u.QuotaResetAt = parseTime(qAt)
 	u.CreatedAt = parseTime(cAt)
 	u.UpdatedAt = parseTime(uAt)

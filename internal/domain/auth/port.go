@@ -8,6 +8,7 @@ type UserRepository interface {
 	FindByID(ctx context.Context, id string) (*User, error)
 	FindByEmail(ctx context.Context, orgID, email string) (*User, error)
 	FindByVerifyToken(ctx context.Context, token string) (*User, error)
+	FindByResetToken(ctx context.Context, token string) (*User, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*User, error)
 }
 

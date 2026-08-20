@@ -44,6 +44,9 @@ type User struct {
 	Status        string
 	EmailVerified bool
 	VerifyToken   string
+	// ResetToken is the one-time password reset token (empty when not pending).
+	ResetToken    string
+	ResetExpiresAt time.Time
 	// QuotaTokens is the per-reset token budget; negative means unlimited.
 	QuotaTokens int64
 	QuotaResetAt time.Time

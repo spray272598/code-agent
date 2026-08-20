@@ -129,7 +129,11 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/auth/verify", s.handleVerify)
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/v1/auth/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/v1/auth/forgot-password", s.handleForgotPassword)
+	mux.HandleFunc("/api/v1/auth/reset-password", s.handleResetPassword)
 	mux.HandleFunc("/api/v1/me", s.authJWT(s.handleMe))
+	mux.HandleFunc("/api/v1/me/profile", s.authJWT(s.handleUpdateProfile))
+	mux.HandleFunc("/api/v1/me/password", s.authJWT(s.handleChangePassword))
 
 	// device authorization (RFC8628, Sprint 1.4)
 	mux.HandleFunc("/api/v1/device/code", s.handleDeviceCode)
@@ -198,6 +202,7 @@ func auth(app *application.ChatApp, next http.Handler) http.Handler {
 		switch r.URL.Path {
 		case "/health", "/metrics", "/ws/host", "/api/v1/openapi.json", "/docs",
 		"/api/v1/auth/signup", "/api/v1/auth/verify", "/api/v1/auth/login", "/api/v1/auth/refresh",
+		"/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
 		"/api/v1/device/code", "/api/v1/device/token":
 			next.ServeHTTP(w, r)
 			return
@@ -367,13 +372,33 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		OrgID    string `json:"orgId"`
+		OrgSlug  string `json:"orgSlug"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	u, err := svc.AuthenticatePassword(r.Context(), body.OrgID, body.Email, body.Password)
+	// Sprint 2.1 dev: accept either orgId or orgSlug. The SPA uses slug because
+	// ULID orgIds are inconvenient to type; the handler resolves slug → id here.
+	orgID := body.OrgID
+	if orgID == "" && body.OrgSlug != "" {
+		resolved, rerr := s.app.AuthService().OrgRepo().FindBySlug(r.Context(), body.OrgSlug)
+		if rerr != nil {
+			writeJSON(w, 401, errMap(rerr))
+			return
+		}
+		if resolved == nil {
+			writeJSON(w, 401, map[string]any{"code": "401", "message": "organization not found"})
+			return
+		}
+		orgID = resolved.ID
+	}
+	if orgID == "" {
+		writeJSON(w, 400, map[string]any{"code": "400", "message": "orgId or orgSlug required"})
+		return
+	}
+	u, err := svc.AuthenticatePassword(r.Context(), orgID, body.Email, body.Password)
 	if err != nil {
 		writeJSON(w, 401, errMap(err))
 		return
@@ -430,17 +455,156 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-// handleMe returns the authenticated principal (requires a valid Bearer JWT).
+// handleMe returns the authenticated principal plus the freshest profile from
+// the user store (requires a valid Bearer JWT).
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	p := authdomain.PrincipalFrom(r.Context())
 	if p == nil {
 		writeJSON(w, 401, map[string]any{"code": "401", "message": "unauthenticated"})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+	out := map[string]any{
 		"userId": p.UserID, "orgId": p.OrgID, "deviceId": p.DeviceID,
 		"role": p.Role, "email": p.Email,
+	}
+	svc := s.app.AuthService()
+	if svc != nil {
+		if u, err := svc.GetUser(r.Context(), p.UserID); err == nil && u != nil {
+			out["displayName"] = u.DisplayName
+			out["emailVerified"] = u.EmailVerified
+			out["status"] = u.Status
+			out["role"] = u.Role
+			out["createdAt"] = u.CreatedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": out})
+}
+
+// handleUpdateProfile updates the display name of the authenticated user.
+func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	p := authdomain.PrincipalFrom(r.Context())
+	if p == nil {
+		writeJSON(w, 401, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+	var body struct {
+		DisplayName string `json:"displayName"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	svc := s.app.AuthService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
+		return
+	}
+	u, err := svc.UpdateProfile(r.Context(), p.UserID, body.DisplayName)
+	if err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
+		"userId": u.ID, "displayName": u.DisplayName, "email": u.Email, "role": u.Role,
 	}})
+}
+
+// handleChangePassword verifies the current password and sets a new one.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	p := authdomain.PrincipalFrom(r.Context())
+	if p == nil {
+		writeJSON(w, 401, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+	var body struct {
+		OldPassword string `json:"oldPassword"`
+		NewPassword string `json:"newPassword"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	svc := s.app.AuthService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
+		return
+	}
+	if err := svc.ChangePassword(r.Context(), p.UserID, body.OldPassword, body.NewPassword); err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"ok": true}})
+}
+
+// handleForgotPassword issues a password reset email for the given org+email.
+func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	var body struct {
+		OrgID   string `json:"orgId"`
+		OrgSlug string `json:"orgSlug"`
+		Email   string `json:"email"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	svc := s.app.AuthService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
+		return
+	}
+	orgID := body.OrgID
+	if orgID == "" && body.OrgSlug != "" {
+		resolved, rerr := svc.OrgRepo().FindBySlug(r.Context(), body.OrgSlug)
+		if rerr != nil {
+			writeJSON(w, 401, errMap(rerr))
+			return
+		}
+		orgID = resolved.ID
+	}
+	if orgID == "" {
+		writeJSON(w, 400, map[string]any{"code": "400", "message": "orgSlug or orgId required"})
+		return
+	}
+	if err := svc.RequestPasswordReset(r.Context(), orgID, body.Email); err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	// Always report success to avoid leaking which accounts exist.
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"ok": true}})
+}
+
+// handleResetPassword consumes a reset token and sets a new password.
+func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"code": "405"})
+		return
+	}
+	var body struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"newPassword"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	svc := s.app.AuthService()
+	if svc == nil {
+		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
+		return
+	}
+	if err := svc.ResetPassword(r.Context(), body.Token, body.NewPassword); err != nil {
+		writeJSON(w, 400, errMap(err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"ok": true}})
 }
 
 // authJWT validates the Bearer access token and injects the principal into the

@@ -180,13 +180,16 @@ CREATE TABLE IF NOT EXISTS `users` (
   `status`          VARCHAR(16)  NOT NULL DEFAULT 'pending',
   `email_verified`  TINYINT(1)   NOT NULL DEFAULT 0,
   `verify_token`    VARCHAR(64)  NOT NULL DEFAULT '',
+  `reset_token`     VARCHAR(64)  NOT NULL DEFAULT '',
+  `reset_expires_at` DATETIME    NULL DEFAULT NULL,
   `quota_tokens`    BIGINT       NULL DEFAULT NULL,
   `quota_reset_at`  DATETIME     NULL DEFAULT NULL,
   `created_at`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_users_org_email` (`org_id`, `email`),
-  KEY `idx_users_verify` (`verify_token`)
+  KEY `idx_users_verify` (`verify_token`),
+  KEY `idx_users_reset` (`reset_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台用户';
 
 -- ----------------------------

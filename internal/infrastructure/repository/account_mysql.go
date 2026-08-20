@@ -36,6 +36,14 @@ func nullTime(t time.Time) any {
 	return t
 }
 
+// nullStr returns nil for the empty string so nullable columns stay NULL.
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // nowOr returns t unless zero, in which case it returns the current time.
 func nowOr(t time.Time) time.Time {
 	if t.IsZero() {
@@ -52,19 +60,21 @@ func NewMySQLUserRepo(db *sql.DB) *MySQLUserRepo { return &MySQLUserRepo{db: db}
 
 var _ auth.UserRepository = (*MySQLUserRepo)(nil)
 
-const userCols = `SELECT id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,quota_tokens,quota_reset_at,created_at,updated_at FROM users`
+const userCols = `SELECT id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at FROM users`
 
 func (r *MySQLUserRepo) Save(ctx context.Context, u *auth.User) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO users (id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,quota_tokens,quota_reset_at,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO users (id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON DUPLICATE KEY UPDATE
   org_id=VALUES(org_id), email=VALUES(email), password_hash=VALUES(password_hash),
   display_name=VALUES(display_name), role=VALUES(role), status=VALUES(status),
   email_verified=VALUES(email_verified), verify_token=VALUES(verify_token),
+  reset_token=VALUES(reset_token), reset_expires_at=VALUES(reset_expires_at),
   quota_tokens=VALUES(quota_tokens), quota_reset_at=VALUES(quota_reset_at), updated_at=VALUES(updated_at)`,
 		u.ID, u.OrgID, u.Email, u.PasswordHash, u.DisplayName, u.Role, u.Status,
-		boolToInt(u.EmailVerified), u.VerifyToken, quotaVal(u.QuotaTokens), nullTime(u.QuotaResetAt),
+		boolToInt(u.EmailVerified), u.VerifyToken, nullStr(u.ResetToken), nullTime(u.ResetExpiresAt),
+		quotaVal(u.QuotaTokens), nullTime(u.QuotaResetAt),
 		nowOr(u.CreatedAt), time.Now())
 	return err
 }
@@ -79,6 +89,10 @@ func (r *MySQLUserRepo) FindByEmail(ctx context.Context, orgID, email string) (*
 
 func (r *MySQLUserRepo) FindByVerifyToken(ctx context.Context, token string) (*auth.User, error) {
 	return scanUser(r.db.QueryRowContext(ctx, userCols+` WHERE verify_token=? AND status=?`, token, auth.StatusPending))
+}
+
+func (r *MySQLUserRepo) FindByResetToken(ctx context.Context, token string) (*auth.User, error) {
+	return scanUser(r.db.QueryRowContext(ctx, userCols+` WHERE reset_token=? AND status=?`, token, auth.StatusActive))
 }
 
 func (r *MySQLUserRepo) ListByOrg(ctx context.Context, orgID string) ([]*auth.User, error) {
@@ -100,11 +114,11 @@ func (r *MySQLUserRepo) ListByOrg(ctx context.Context, orgID string) ([]*auth.Us
 
 func scanUser(s scanner) (*auth.User, error) {
 	var u auth.User
-	var createdAt, updatedAt, quotaResetAt sql.NullTime
+	var createdAt, updatedAt, quotaResetAt, resetExpiresAt sql.NullTime
 	var quotaTokens sql.NullInt64
 	var emailVerified int
 	if err := s.Scan(&u.ID, &u.OrgID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&emailVerified, &u.VerifyToken, &quotaTokens, &quotaResetAt, &createdAt, &updatedAt); err != nil {
+		&emailVerified, &u.VerifyToken, &u.ResetToken, &resetExpiresAt, &quotaTokens, &quotaResetAt, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	u.EmailVerified = emailVerified != 0
@@ -112,6 +126,7 @@ func scanUser(s scanner) (*auth.User, error) {
 		u.QuotaTokens = quotaTokens.Int64
 	}
 	u.QuotaResetAt = quotaResetAt.Time
+	u.ResetExpiresAt = resetExpiresAt.Time
 	u.CreatedAt = createdAt.Time
 	u.UpdatedAt = updatedAt.Time
 	return &u, nil

@@ -135,6 +135,8 @@ func migrate(db *sql.DB) error {
   status TEXT NOT NULL DEFAULT 'pending',
   email_verified INTEGER NOT NULL DEFAULT 0,
   verify_token TEXT NOT NULL DEFAULT '',
+  reset_token TEXT NOT NULL DEFAULT '',
+  reset_expires_at TEXT,
   quota_tokens INTEGER,
   quota_reset_at TEXT,
   created_at TEXT NOT NULL,
@@ -142,6 +144,7 @@ func migrate(db *sql.DB) error {
 )`,
 		`CREATE INDEX IF NOT EXISTS idx_users_org_email ON users(org_id, email)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_verify ON users(verify_token)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_reset ON users(reset_token)`,
 		`CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
   user_code TEXT NOT NULL,
