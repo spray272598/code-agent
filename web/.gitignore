@@ -1,0 +1,19 @@
+# Sprint 2.1 — Web SPA bundling artifacts + dev-only secrets.
+node_modules/
+dist/
+.vite/
+*.local
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+coverage/
+*.tsbuildinfo
+
+# tsc -b emits these next to vite.config.ts because tsconfig.node.json
+# uses composite: true. They're build artifacts.
+vite.config.d.ts
+vite.config.d.ts.map
+vite.config.js
+vite.config.js.map
