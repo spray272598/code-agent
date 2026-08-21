@@ -1,9 +1,9 @@
 // Package tenant is the Sprint 1.6 multi-tenant context primitive.
 //
 // Tenant is the canonical, lightweight shape carried in ctx for every business
-// layer call: it identifies the authenticated user + organization scope so that
-// downstream repositories, services and middleware can derive the row-level
-// filter without taking userID/orgID as explicit parameters at every call site.
+// layer call: it identifies the authenticated user so that downstream
+// repositories, services and middleware can derive the row-level filter
+// without taking userID as an explicit parameter at every call site.
 //
 // Tenant is intentionally a subset of authdomain.Principal (no JWT fields like
 // Role/Email/DeviceID). Use Principal when you need identity metadata; use
@@ -12,13 +12,12 @@ package tenant
 
 import "context"
 
-// Tenant is the multi-tenant scope for a request.
+// Tenant is the scope for a request.
 type Tenant struct {
 	UserID string
-	OrgID  string
 }
 
-func (t Tenant) IsZero() bool { return t.UserID == "" && t.OrgID == "" }
+func (t Tenant) IsZero() bool { return t.UserID == "" }
 
 type ctxKey struct{}
 
@@ -53,10 +52,4 @@ func MustFrom(ctx context.Context) Tenant {
 func UserID(ctx context.Context) string {
 	t, _ := From(ctx)
 	return t.UserID
-}
-
-// OrgID returns just the org id (empty string when absent).
-func OrgID(ctx context.Context) string {
-	t, _ := From(ctx)
-	return t.OrgID
 }

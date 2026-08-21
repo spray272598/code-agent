@@ -32,25 +32,22 @@ func (consoleEmailSender) SendPasswordReset(_ context.Context, to, link string) 
 	return nil
 }
 
-// AuthService handles the account lifecycle: organization + owner signup,
-// member registration, email verification, and credential authentication.
-// JWT issuance is added in Sprint 1.3.
+// AuthService handles the account lifecycle: signup, email verification, and
+// credential authentication. JWT issuance is added in Sprint 1.3.
 type AuthService struct {
 	users         auth.UserRepository
-	orgs          auth.OrgRepository
 	email         EmailSender
 	bcryptCost    int
 	verifyBaseURL string
 }
 
-// NewAuthService wires the account repos. Pass nil email to use the console sender.
-func NewAuthService(users auth.UserRepository, orgs auth.OrgRepository, email EmailSender) *AuthService {
+// NewAuthService wires the account repo. Pass nil email to use the console sender.
+func NewAuthService(users auth.UserRepository, email EmailSender) *AuthService {
 	if email == nil {
 		email = consoleEmailSender{}
 	}
 	return &AuthService{
 		users:         users,
-		orgs:          orgs,
 		email:         email,
 		bcryptCost:    bcrypt.DefaultCost,
 		verifyBaseURL: "https://app.example.com",
@@ -65,70 +62,29 @@ func (s *AuthService) WithVerifyBaseURL(u string) *AuthService {
 	return s
 }
 
-// Signup creates a new organization and its owner account (pending verification).
-func (s *AuthService) Signup(ctx context.Context, email, password, displayName, orgName string) (*auth.Organization, *auth.User, error) {
+// Signup creates a new platform account (pending verification). The first
+// registered user is granted the owner role; there is no organization concept.
+func (s *AuthService) Signup(ctx context.Context, email, password, displayName string) (*auth.User, error) {
 	email = normalizeEmail(email)
 	if !validEmail(email) {
-		return nil, nil, errors.New("invalid email")
+		return nil, errors.New("invalid email")
 	}
 	if len(password) < 8 {
-		return nil, nil, errors.New("password must be at least 8 characters")
+		return nil, errors.New("password must be at least 8 characters")
 	}
-	if strings.TrimSpace(orgName) == "" {
-		return nil, nil, errors.New("organization name required")
-	}
-
-	base := slugify(orgName)
-	slug := base
-	for i := 0; i < 5; i++ {
-		existing, err := s.orgs.FindBySlug(ctx, slug)
-		if err != nil {
-			return nil, nil, err
-		}
-		if existing == nil {
-			break
-		}
-		slug = base + "-" + auth.RandomToken(4)
-	}
-
-	org := &auth.Organization{
-		ID:        auth.NewULID(),
-		Name:      strings.TrimSpace(orgName),
-		Slug:      slug,
-		Plan:      auth.PlanFree,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	if err := s.orgs.Save(ctx, org); err != nil {
-		return nil, nil, err
-	}
-	u, err := s.createUser(ctx, org.ID, email, password, displayName, auth.RoleOwner)
-	if err != nil {
-		return nil, nil, err
-	}
-	return org, u, nil
+	return s.createUser(ctx, email, password, displayName, auth.RoleOwner)
 }
 
-// Register adds a member account to an existing organization (invite flow).
-func (s *AuthService) Register(ctx context.Context, orgID, email, password, displayName string) (*auth.User, error) {
-	if orgID == "" {
-		return nil, errors.New("org_id required")
-	}
-	org, err := s.orgs.FindByID(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	if org == nil {
-		return nil, errors.New("organization not found")
-	}
-	return s.createUser(ctx, orgID, email, password, displayName, auth.RoleMember)
+// Register creates an additional account (invite flow, no org scoping).
+func (s *AuthService) Register(ctx context.Context, email, password, displayName string) (*auth.User, error) {
+	return s.createUser(ctx, email, password, displayName, auth.RoleMember)
 }
 
 // createUser hashes the password, persists a pending user, and triggers the
-// verification email. Quota defaults to unlimited (-1).
-func (s *AuthService) createUser(ctx context.Context, orgID, email, password, displayName, role string) (*auth.User, error) {
-	if existing, _ := s.users.FindByEmail(ctx, orgID, email); existing != nil {
-		return nil, errors.New("email already registered in this organization")
+// verification email. Email addresses are globally unique.
+func (s *AuthService) createUser(ctx context.Context, email, password, displayName, role string) (*auth.User, error) {
+	if existing, _ := s.users.FindByEmail(ctx, email); existing != nil {
+		return nil, errors.New("email already registered")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
 	if err != nil {
@@ -136,7 +92,6 @@ func (s *AuthService) createUser(ctx context.Context, orgID, email, password, di
 	}
 	u := &auth.User{
 		ID:            auth.NewULID(),
-		OrgID:         orgID,
 		Email:         email,
 		PasswordHash:  string(hash),
 		DisplayName:   displayName,
@@ -177,10 +132,6 @@ func (s *AuthService) VerifyEmail(ctx context.Context, token string) (*auth.User
 	}
 	return u, nil
 }
-
-// OrgRepo returns the underlying organization repository so the HTTP layer can
-// resolve a slug to an id without leaking the field out of the package.
-func (s *AuthService) OrgRepo() auth.OrgRepository { return s.orgs }
 
 // GetUser returns a user by id (nil when not found).
 func (s *AuthService) GetUser(ctx context.Context, userID string) (*auth.User, error) {
@@ -232,11 +183,11 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 }
 
 // RequestPasswordReset issues a time-limited reset token and emails the link.
-// It always succeeds from the caller's perspective when the org+email is unknown,
+// It always succeeds from the caller's perspective when the email is unknown,
 // to avoid leaking which accounts exist.
-func (s *AuthService) RequestPasswordReset(ctx context.Context, orgID, email string) error {
+func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
 	email = normalizeEmail(email)
-	u, err := s.users.FindByEmail(ctx, orgID, email)
+	u, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
 		return err
 	}
@@ -282,12 +233,12 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, newPassword stri
 	return s.users.Save(ctx, u)
 }
 
-// AuthenticatePassword verifies credentials for an active account within an org.
+// AuthenticatePassword verifies credentials for an active account.
 // It returns the same generic error for unknown users, inactive accounts, and
 // wrong passwords to avoid user enumeration.
-func (s *AuthService) AuthenticatePassword(ctx context.Context, orgID, email, password string) (*auth.User, error) {
+func (s *AuthService) AuthenticatePassword(ctx context.Context, email, password string) (*auth.User, error) {
 	email = normalizeEmail(email)
-	u, err := s.users.FindByEmail(ctx, orgID, email)
+	u, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
@@ -306,23 +257,4 @@ func normalizeEmail(e string) string {
 
 func validEmail(e string) bool {
 	return strings.Contains(e, "@") && strings.Contains(e, ".") && len(e) <= 254
-}
-
-// slugify converts an org name to a URL-safe slug (a-z0-9 and dashes).
-func slugify(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == ' ' || r == '-' || r == '_':
-			b.WriteRune('-')
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		out = "org"
-	}
-	return out
 }

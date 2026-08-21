@@ -2,7 +2,7 @@ package auth
 
 import "time"
 
-// Role values for a user inside an organization.
+// Role values for a user.
 const (
 	RoleOwner   = "owner"
 	RoleAdmin   = "admin"
@@ -26,17 +26,9 @@ const (
 	DeviceExpired  = "expired"
 )
 
-// Subscription plan of an organization.
-const (
-	PlanFree        = "free"
-	PlanPro         = "pro"
-	PlanEnterprise  = "enterprise"
-)
-
-// User is a platform account belonging to exactly one organization (tenant).
+// User is a platform account.
 type User struct {
 	ID            string
-	OrgID         string
 	Email         string
 	PasswordHash  string
 	DisplayName   string
@@ -54,23 +46,11 @@ type User struct {
 	UpdatedAt   time.Time
 }
 
-// Organization is the tenant root. Every user, memory and session is scoped to it.
-type Organization struct {
-	ID        string
-	Name      string
-	Slug      string
-	Plan      string
-	OwnerID   string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
 // Device is an RFC8628 device authorization record (the device_code is the primary key).
 type Device struct {
 	ID         string // device_code
 	UserCode   string
 	UserID     string
-	OrgID      string
 	Status     string
 	Scope      string
 	ExpiresAt  time.Time
@@ -84,7 +64,6 @@ type Device struct {
 type RefreshToken struct {
 	ID        string
 	UserID    string
-	OrgID     string
 	DeviceID  string
 	TokenHash string
 	Scope     string

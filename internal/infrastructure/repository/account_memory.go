@@ -10,13 +10,12 @@ import (
 // ---- User (in-memory) ----
 
 type MemoryUserRepo struct {
-	mu    sync.RWMutex
-	byID  map[string]*auth.User
-	byOrg map[string][]*auth.User
+	mu   sync.RWMutex
+	byID map[string]*auth.User
 }
 
 func NewMemoryUserRepo() *MemoryUserRepo {
-	return &MemoryUserRepo{byID: make(map[string]*auth.User), byOrg: make(map[string][]*auth.User)}
+	return &MemoryUserRepo{byID: make(map[string]*auth.User)}
 }
 
 var _ auth.UserRepository = (*MemoryUserRepo)(nil)
@@ -26,7 +25,6 @@ func (r *MemoryUserRepo) Save(_ context.Context, u *auth.User) error {
 	defer r.mu.Unlock()
 	cp := *u
 	r.byID[u.ID] = &cp
-	r.byOrg[u.OrgID] = append(r.byOrg[u.OrgID], &cp)
 	return nil
 }
 
@@ -40,11 +38,11 @@ func (r *MemoryUserRepo) FindByID(_ context.Context, id string) (*auth.User, err
 	return nil, nil
 }
 
-func (r *MemoryUserRepo) FindByEmail(_ context.Context, orgID, email string) (*auth.User, error) {
+func (r *MemoryUserRepo) FindByEmail(_ context.Context, email string) (*auth.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, u := range r.byID {
-		if u.OrgID == orgID && u.Email == email {
+		if u.Email == email {
 			cp := *u
 			return &cp, nil
 		}
@@ -72,60 +70,6 @@ func (r *MemoryUserRepo) FindByResetToken(_ context.Context, token string) (*aut
 			cp := *u
 			return &cp, nil
 		}
-	}
-	return nil, nil
-}
-
-func (r *MemoryUserRepo) ListByOrg(_ context.Context, orgID string) ([]*auth.User, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]*auth.User, 0, len(r.byOrg[orgID]))
-	for _, u := range r.byOrg[orgID] {
-		cp := *u
-		out = append(out, &cp)
-	}
-	return out, nil
-}
-
-// ---- Organization (in-memory) ----
-
-type MemoryOrgRepo struct {
-	mu     sync.RWMutex
-	byID   map[string]*auth.Organization
-	bySlug map[string]*auth.Organization
-}
-
-func NewMemoryOrgRepo() *MemoryOrgRepo {
-	return &MemoryOrgRepo{byID: make(map[string]*auth.Organization), bySlug: make(map[string]*auth.Organization)}
-}
-
-var _ auth.OrgRepository = (*MemoryOrgRepo)(nil)
-
-func (r *MemoryOrgRepo) Save(_ context.Context, o *auth.Organization) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	cp := *o
-	r.byID[o.ID] = &cp
-	r.bySlug[o.Slug] = &cp
-	return nil
-}
-
-func (r *MemoryOrgRepo) FindByID(_ context.Context, id string) (*auth.Organization, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if o, ok := r.byID[id]; ok {
-		cp := *o
-		return &cp, nil
-	}
-	return nil, nil
-}
-
-func (r *MemoryOrgRepo) FindBySlug(_ context.Context, slug string) (*auth.Organization, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if o, ok := r.bySlug[slug]; ok {
-		cp := *o
-		return &cp, nil
 	}
 	return nil, nil
 }

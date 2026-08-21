@@ -9,11 +9,10 @@ import (
 	authdomain "github.com/spray272598/code-agent/internal/domain/auth"
 )
 
-// Multi-tenant OTel attribute keys (Sprint 1.8). Keep the names stable —
-// dashboards and alerting rules reference them.
+// OTel attribute keys that identify the principal (Sprint 1.8). Keep the names
+// stable — dashboards and alerting rules reference them.
 const (
 	TenantAttrUserID   = attribute.Key("code_agent.user_id")
-	TenantAttrOrgID    = attribute.Key("code_agent.org_id")
 	TenantAttrDeviceID = attribute.Key("code_agent.device_id")
 )
 
@@ -23,12 +22,9 @@ func TenantAttrs(p *authdomain.Principal) []attribute.KeyValue {
 	if p == nil {
 		return nil
 	}
-	out := make([]attribute.KeyValue, 0, 3)
+	out := make([]attribute.KeyValue, 0, 2)
 	if p.UserID != "" {
 		out = append(out, TenantAttrUserID.String(p.UserID))
-	}
-	if p.OrgID != "" {
-		out = append(out, TenantAttrOrgID.String(p.OrgID))
 	}
 	if p.DeviceID != "" {
 		out = append(out, TenantAttrDeviceID.String(p.DeviceID))

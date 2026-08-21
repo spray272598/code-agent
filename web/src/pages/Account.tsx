@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 
 interface Me {
   userId: string;
-  orgId: string;
   deviceId?: string;
   email?: string;
   role: string;
@@ -104,7 +103,6 @@ export default function Account() {
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <Row label="用户 ID" value={String(me?.userId ?? "—")} mono />
-          <Row label="组织 ID" value={String(me?.orgId ?? "—")} mono />
           <Row label="邮箱" value={String(me?.email ?? "—")} />
           <Row
             label="邮箱验证"

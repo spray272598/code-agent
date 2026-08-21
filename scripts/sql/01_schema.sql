@@ -153,26 +153,10 @@ CREATE TABLE IF NOT EXISTS `ssh_connection` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='SSH远程连接配置';
 
 -- ----------------------------
--- organizations (租户)
--- ----------------------------
-CREATE TABLE IF NOT EXISTS `organizations` (
-  `id`         CHAR(26)     NOT NULL,
-  `name`       VARCHAR(128) NOT NULL DEFAULT '',
-  `slug`       VARCHAR(64)  NOT NULL DEFAULT '',
-  `plan`       VARCHAR(16)  NOT NULL DEFAULT 'free',
-  `owner_id`   CHAR(26)     NOT NULL DEFAULT '',
-  `created_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_orgs_slug` (`slug`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='组织/租户';
-
--- ----------------------------
--- users (平台用户 / 租户成员)
+-- users (平台用户)
 -- ----------------------------
 CREATE TABLE IF NOT EXISTS `users` (
   `id`              CHAR(26)     NOT NULL,
-  `org_id`          CHAR(26)     NOT NULL,
   `email`           VARCHAR(254) NOT NULL,
   `password_hash`   CHAR(60)     NOT NULL DEFAULT '',
   `display_name`    VARCHAR(128) NOT NULL DEFAULT '',
@@ -187,7 +171,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `created_at`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_users_org_email` (`org_id`, `email`),
+  UNIQUE KEY `uk_users_email` (`email`),
   KEY `idx_users_verify` (`verify_token`),
   KEY `idx_users_reset` (`reset_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台用户';
@@ -199,7 +183,6 @@ CREATE TABLE IF NOT EXISTS `devices` (
   `id`            CHAR(26)     NOT NULL,
   `user_code`     VARCHAR(12)  NOT NULL,
   `user_id`       CHAR(26)     NOT NULL DEFAULT '',
-  `org_id`        CHAR(26)     NOT NULL DEFAULT '',
   `status`        VARCHAR(16)  NOT NULL DEFAULT 'pending',
   `scope`         VARCHAR(256) NOT NULL DEFAULT '',
   `expires_at`    DATETIME     NOT NULL,
@@ -216,7 +199,6 @@ CREATE TABLE IF NOT EXISTS `devices` (
 CREATE TABLE IF NOT EXISTS `refresh_tokens` (
   `id`          CHAR(26)     NOT NULL,
   `user_id`     CHAR(26)     NOT NULL,
-  `org_id`      CHAR(26)     NOT NULL DEFAULT '',
   `device_id`   CHAR(26)     NOT NULL DEFAULT '',
   `token_hash`  CHAR(64)     NOT NULL,
   `scope`       VARCHAR(256) NOT NULL DEFAULT '',

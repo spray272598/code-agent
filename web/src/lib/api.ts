@@ -13,7 +13,6 @@ const USER_KEY = "codeagent.user";
 
 export interface AuthUser {
   userId: string;
-  orgId: string;
   role: string;
   email?: string;
 }

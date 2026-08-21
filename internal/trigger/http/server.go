@@ -124,7 +124,7 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/docs", s.handleSwaggerUI)
 
-	// multi-tenant auth (Sprint 1.2): public endpoints
+	// auth (Sprint 1.2): public endpoints
 	mux.HandleFunc("/api/v1/auth/signup", s.handleSignup)
 	mux.HandleFunc("/api/v1/auth/verify", s.handleVerify)
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
@@ -296,7 +296,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": "ok", "time": time.Now().Format(time.RFC3339)})
 }
 
-// ---- multi-tenant auth handlers (Sprint 1.2) ----
+// ---- auth handlers (Sprint 1.2) ----
 
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -312,19 +312,16 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		Email       string `json:"email"`
 		Password    string `json:"password"`
 		DisplayName string `json:"displayName"`
-		OrgName     string `json:"orgName"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	org, u, err := svc.Signup(r.Context(), body.Email, body.Password, body.DisplayName, body.OrgName)
+	u, err := svc.Signup(r.Context(), body.Email, body.Password, body.DisplayName)
 	if err != nil {
 		writeJSON(w, 400, errMap(err))
 		return
 	}
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{
-		"orgId":   org.ID,
-		"orgSlug": org.Slug,
 		"userId":  u.ID,
 		"email":   u.Email,
 		"status":  u.Status,
@@ -371,34 +368,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OrgID    string `json:"orgId"`
-		OrgSlug  string `json:"orgSlug"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	// Sprint 2.1 dev: accept either orgId or orgSlug. The SPA uses slug because
-	// ULID orgIds are inconvenient to type; the handler resolves slug → id here.
-	orgID := body.OrgID
-	if orgID == "" && body.OrgSlug != "" {
-		resolved, rerr := s.app.AuthService().OrgRepo().FindBySlug(r.Context(), body.OrgSlug)
-		if rerr != nil {
-			writeJSON(w, 401, errMap(rerr))
-			return
-		}
-		if resolved == nil {
-			writeJSON(w, 401, map[string]any{"code": "401", "message": "organization not found"})
-			return
-		}
-		orgID = resolved.ID
-	}
-	if orgID == "" {
-		writeJSON(w, 400, map[string]any{"code": "400", "message": "orgId or orgSlug required"})
-		return
-	}
-	u, err := svc.AuthenticatePassword(r.Context(), orgID, body.Email, body.Password)
+	u, err := svc.AuthenticatePassword(r.Context(), body.Email, body.Password)
 	if err != nil {
 		writeJSON(w, 401, errMap(err))
 		return
@@ -419,7 +395,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"tokenType":    "Bearer",
 		"expiresIn":    900,
 		"user": map[string]any{
-			"userId": u.ID, "orgId": u.OrgID, "email": u.Email,
+			"userId": u.ID, "email": u.Email,
 			"role": u.Role, "emailVerified": u.EmailVerified, "status": u.Status,
 		},
 	}})
@@ -464,7 +440,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"userId": p.UserID, "orgId": p.OrgID, "deviceId": p.DeviceID,
+		"userId": p.UserID, "deviceId": p.DeviceID,
 		"role": p.Role, "email": p.Email,
 	}
 	svc := s.app.AuthService()
@@ -542,16 +518,14 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"ok": true}})
 }
 
-// handleForgotPassword issues a password reset email for the given org+email.
+// handleForgotPassword issues a password reset email for the given email.
 func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, 405, map[string]any{"code": "405"})
 		return
 	}
 	var body struct {
-		OrgID   string `json:"orgId"`
-		OrgSlug string `json:"orgSlug"`
-		Email   string `json:"email"`
+		Email string `json:"email"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -561,20 +535,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]any{"code": "503", "message": "auth service unavailable"})
 		return
 	}
-	orgID := body.OrgID
-	if orgID == "" && body.OrgSlug != "" {
-		resolved, rerr := svc.OrgRepo().FindBySlug(r.Context(), body.OrgSlug)
-		if rerr != nil {
-			writeJSON(w, 401, errMap(rerr))
-			return
-		}
-		orgID = resolved.ID
-	}
-	if orgID == "" {
-		writeJSON(w, 400, map[string]any{"code": "400", "message": "orgSlug or orgId required"})
-		return
-	}
-	if err := svc.RequestPasswordReset(r.Context(), orgID, body.Email); err != nil {
+	if err := svc.RequestPasswordReset(r.Context(), body.Email); err != nil {
 		writeJSON(w, 400, errMap(err))
 		return
 	}
@@ -628,7 +589,6 @@ func (s *Server) authJWT(next http.HandlerFunc) http.HandlerFunc {
 		}
 		p := &authdomain.Principal{
 			UserID:   claims.Sub,
-			OrgID:    claims.Org,
 			DeviceID: claims.DID,
 			Role:     claims.Role,
 			Email:    claims.Email,
@@ -756,7 +716,7 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	if body.Deny {
 		err = svc.Deny(r.Context(), body.UserCode)
 	} else {
-		err = svc.Approve(r.Context(), body.UserCode, p.UserID, p.OrgID)
+		err = svc.Approve(r.Context(), body.UserCode, p.UserID)
 	}
 	if err != nil {
 		status := http.StatusBadRequest

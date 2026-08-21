@@ -79,9 +79,8 @@ type App struct {
 	HostHub *ws.HostHub
 	SSHPool *sshinfra.Pool
 
-	// Multi-tenant account repos (Sprint 1.1)
+	// Account repos (Sprint 1.1)
 	UserRepo    auth.UserRepository
-	OrgRepo     auth.OrgRepository
 	DeviceRepo  auth.DeviceRepository
 	RefreshRepo auth.RefreshTokenRepository
 
@@ -159,25 +158,21 @@ func Build(cfg *config.Config) (*App, error) {
 		cfg.Database.Type = "memory"
 	}
 
-	// multi-tenant account repos (Sprint 1.1)
+	// account repos (Sprint 1.1)
 	var userRepo auth.UserRepository
-	var orgRepo auth.OrgRepository
 	var deviceRepo auth.DeviceRepository
 	var refreshRepo auth.RefreshTokenRepository
 	switch strings.ToLower(cfg.Database.Type) {
 	case "mysql":
 		userRepo = repository.NewMySQLUserRepo(db)
-		orgRepo = repository.NewMySQLOrgRepo(db)
 		deviceRepo = repository.NewMySQLDeviceRepo(db)
 		refreshRepo = repository.NewMySQLRefreshTokenRepo(db)
 	case "sqlite", "sqlite3":
 		userRepo = repository.NewSQLiteUserRepo(db)
-		orgRepo = repository.NewSQLiteOrgRepo(db)
 		deviceRepo = repository.NewSQLiteDeviceRepo(db)
 		refreshRepo = repository.NewSQLiteRefreshTokenRepo(db)
 	default:
 		userRepo = repository.NewMemoryUserRepo()
-		orgRepo = repository.NewMemoryOrgRepo()
 		deviceRepo = repository.NewMemoryDeviceRepo()
 		refreshRepo = repository.NewMemoryRefreshTokenRepo()
 	}
@@ -549,9 +544,9 @@ func Build(cfg *config.Config) (*App, error) {
 	// per-step checkpoint snapshots (crash/restart resume)
 	chat.SetHooks(hooks)
 
-	// multi-tenant auth service (Sprint 1.2): org+owner signup, member invite,
-	// email verification, and credential auth. JWT issuance arrives in Sprint 1.3.
-	chat.SetAuthService(application.NewAuthService(userRepo, orgRepo, nil))
+	// auth service (Sprint 1.2): signup, email verification, and credential
+	// auth. JWT issuance arrives in Sprint 1.3.
+	chat.SetAuthService(application.NewAuthService(userRepo, nil))
 
 	// token service (Sprint 1.3): HS256 access tokens + rotating refresh tokens.
 	chat.SetTokenService(application.NewTokenService(userRepo, refreshRepo, []byte(cfg.JWTSecret), []byte(cfg.JWTSecretPrev)))
@@ -602,7 +597,6 @@ func Build(cfg *config.Config) (*App, error) {
 		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
 		SSHPool: sshPool,
 		UserRepo:    userRepo,
-		OrgRepo:     orgRepo,
 		DeviceRepo:  deviceRepo,
 		RefreshRepo: refreshRepo,
 		KMS:    sealer,

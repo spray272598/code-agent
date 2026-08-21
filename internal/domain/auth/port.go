@@ -6,17 +6,9 @@ import "context"
 type UserRepository interface {
 	Save(ctx context.Context, u *User) error
 	FindByID(ctx context.Context, id string) (*User, error)
-	FindByEmail(ctx context.Context, orgID, email string) (*User, error)
+	FindByEmail(ctx context.Context, email string) (*User, error)
 	FindByVerifyToken(ctx context.Context, token string) (*User, error)
 	FindByResetToken(ctx context.Context, token string) (*User, error)
-	ListByOrg(ctx context.Context, orgID string) ([]*User, error)
-}
-
-// OrgRepository persists organizations (tenants).
-type OrgRepository interface {
-	Save(ctx context.Context, o *Organization) error
-	FindByID(ctx context.Context, id string) (*Organization, error)
-	FindBySlug(ctx context.Context, slug string) (*Organization, error)
 }
 
 // DeviceRepository persists RFC8628 device authorization records.

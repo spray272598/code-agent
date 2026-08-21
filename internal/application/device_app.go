@@ -178,7 +178,7 @@ func (s *DeviceService) Poll(ctx context.Context, deviceCode string) (*PollOutco
 
 // Approve binds an authenticated user (from the browser session) to the pending
 // device identified by user_code.
-func (s *DeviceService) Approve(ctx context.Context, userCode, userID, orgID string) error {
+func (s *DeviceService) Approve(ctx context.Context, userCode, userID string) error {
 	userCode = normalizeUserCode(userCode)
 	if userCode == "" {
 		return ErrDeviceCodeRequired
@@ -200,7 +200,6 @@ func (s *DeviceService) Approve(ctx context.Context, userCode, userID, orgID str
 		return ErrDeviceExpired
 	}
 	d.UserID = userID
-	d.OrgID = orgID
 	d.Status = auth.DeviceApproved
 	d.ApprovedAt = time.Now()
 	return s.devices.Save(ctx, d)

@@ -8,7 +8,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 // Sprint 2.2: password reset request. The backend always answers success to
 // avoid leaking which accounts exist; we show a generic confirmation.
 export default function ForgotPassword() {
-  const [orgSlug, setOrgSlug] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [sent, setSent] = React.useState(false);
@@ -21,7 +20,7 @@ export default function ForgotPassword() {
     try {
       await api<{ ok: boolean }>("/api/v1/auth/forgot-password", {
         method: "POST",
-        body: JSON.stringify({ orgSlug, email }),
+        body: JSON.stringify({ email }),
       }, { auth: false });
       setSent(true);
     } catch (e) {
@@ -51,14 +50,6 @@ export default function ForgotPassword() {
             </div>
           ) : (
             <form onSubmit={onSubmit} className="space-y-3">
-              <div className="space-y-1">
-                <Input
-                  placeholder="组织 slug"
-                  value={orgSlug}
-                  onChange={(e) => setOrgSlug(e.target.value)}
-                  required
-                />
-              </div>
               <div className="space-y-1">
                 <Input
                   type="email"

@@ -9,21 +9,15 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 )
 
-func newTestDeviceStack(t *testing.T) (*DeviceService, *TokenService, string, string) {
+func newTestDeviceStack(t *testing.T) (*DeviceService, *TokenService, string) {
 	t.Helper()
 	ctx := context.Background()
 	users := repository.NewMemoryUserRepo()
-	orgs := repository.NewMemoryOrgRepo()
 	devices := repository.NewMemoryDeviceRepo()
 	refresh := repository.NewMemoryRefreshTokenRepo()
 
-	org := &auth.Organization{ID: "org_01", Name: "Acme", Slug: "acme", CreatedAt: time.Now()}
-	if err := orgs.Save(ctx, org); err != nil {
-		t.Fatal(err)
-	}
 	user := &auth.User{
 		ID:            "usr_01",
-		OrgID:         org.ID,
 		Email:         "a@b.com",
 		DisplayName:   "A",
 		Role:          "owner",
@@ -37,7 +31,7 @@ func newTestDeviceStack(t *testing.T) (*DeviceService, *TokenService, string, st
 	}
 	tok := NewTokenService(users, refresh, []byte("secret-1"), []byte("secret-0"))
 	dev := NewDeviceService(devices, users, tok, "http://localhost:3000/verify", 5*time.Minute, 2*time.Millisecond)
-	return dev, tok, user.ID, org.ID
+	return dev, tok, user.ID
 }
 
 func newThrottledStack(t *testing.T) *DeviceService {
@@ -51,7 +45,7 @@ func newThrottledStack(t *testing.T) *DeviceService {
 
 func TestDeviceFlow(t *testing.T) {
 	ctx := context.Background()
-	dev, tok, userID, orgID := newTestDeviceStack(t)
+	dev, tok, userID := newTestDeviceStack(t)
 
 	res, err := dev.StartAuthorization(ctx, DeviceAuthParams{Scope: "read"})
 	if err != nil {
@@ -71,7 +65,7 @@ func TestDeviceFlow(t *testing.T) {
 	}
 
 	// approve
-	if err := dev.Approve(ctx, res.UserCode, userID, orgID); err != nil {
+	if err := dev.Approve(ctx, res.UserCode, userID); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 

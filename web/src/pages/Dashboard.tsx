@@ -26,7 +26,6 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="text-sm space-y-1">
             <div>userId: <code>{String(me?.userId ?? "—")}</code></div>
-            <div>orgId: <code>{String(me?.orgId ?? "—")}</code></div>
             <div>role: <Badge>{String(me?.role ?? "—")}</Badge></div>
             <div>deviceId: <code className="text-xs">{String(me?.deviceId ?? "—")}</code></div>
           </CardContent>

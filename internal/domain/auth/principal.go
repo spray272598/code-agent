@@ -9,7 +9,6 @@ import (
 // Principal is the authenticated caller extracted from a valid JWT.
 type Principal struct {
 	UserID   string
-	OrgID    string
 	DeviceID string
 	Role     string
 	Email    string
@@ -26,7 +25,7 @@ func WithPrincipal(ctx context.Context, p *Principal) context.Context {
 		return ctx
 	}
 	ctx = context.WithValue(ctx, principalKey{}, p)
-	ctx = tenant.With(ctx, tenant.Tenant{UserID: p.UserID, OrgID: p.OrgID})
+	ctx = tenant.With(ctx, tenant.Tenant{UserID: p.UserID})
 	return ctx
 }
 

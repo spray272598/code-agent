@@ -60,19 +60,19 @@ func NewMySQLUserRepo(db *sql.DB) *MySQLUserRepo { return &MySQLUserRepo{db: db}
 
 var _ auth.UserRepository = (*MySQLUserRepo)(nil)
 
-const userCols = `SELECT id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at FROM users`
+const userCols = `SELECT id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at FROM users`
 
 func (r *MySQLUserRepo) Save(ctx context.Context, u *auth.User) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO users (id,org_id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO users (id,email,password_hash,display_name,role,status,email_verified,verify_token,reset_token,reset_expires_at,quota_tokens,quota_reset_at,created_at,updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON DUPLICATE KEY UPDATE
-  org_id=VALUES(org_id), email=VALUES(email), password_hash=VALUES(password_hash),
+  email=VALUES(email), password_hash=VALUES(password_hash),
   display_name=VALUES(display_name), role=VALUES(role), status=VALUES(status),
   email_verified=VALUES(email_verified), verify_token=VALUES(verify_token),
   reset_token=VALUES(reset_token), reset_expires_at=VALUES(reset_expires_at),
   quota_tokens=VALUES(quota_tokens), quota_reset_at=VALUES(quota_reset_at), updated_at=VALUES(updated_at)`,
-		u.ID, u.OrgID, u.Email, u.PasswordHash, u.DisplayName, u.Role, u.Status,
+		u.ID, u.Email, u.PasswordHash, u.DisplayName, u.Role, u.Status,
 		boolToInt(u.EmailVerified), u.VerifyToken, nullStr(u.ResetToken), nullTime(u.ResetExpiresAt),
 		quotaVal(u.QuotaTokens), nullTime(u.QuotaResetAt),
 		nowOr(u.CreatedAt), time.Now())
@@ -83,8 +83,8 @@ func (r *MySQLUserRepo) FindByID(ctx context.Context, id string) (*auth.User, er
 	return scanUser(r.db.QueryRowContext(ctx, userCols+` WHERE id=?`, id))
 }
 
-func (r *MySQLUserRepo) FindByEmail(ctx context.Context, orgID, email string) (*auth.User, error) {
-	return scanUser(r.db.QueryRowContext(ctx, userCols+` WHERE org_id=? AND email=?`, orgID, email))
+func (r *MySQLUserRepo) FindByEmail(ctx context.Context, email string) (*auth.User, error) {
+	return scanUser(r.db.QueryRowContext(ctx, userCols+` WHERE email=?`, email))
 }
 
 func (r *MySQLUserRepo) FindByVerifyToken(ctx context.Context, token string) (*auth.User, error) {
@@ -95,29 +95,12 @@ func (r *MySQLUserRepo) FindByResetToken(ctx context.Context, token string) (*au
 	return scanUser(r.db.QueryRowContext(ctx, userCols+` WHERE reset_token=? AND status=?`, token, auth.StatusActive))
 }
 
-func (r *MySQLUserRepo) ListByOrg(ctx context.Context, orgID string) ([]*auth.User, error) {
-	rows, err := r.db.QueryContext(ctx, userCols+` WHERE org_id=? ORDER BY created_at ASC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*auth.User
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
-}
-
 func scanUser(s scanner) (*auth.User, error) {
 	var u auth.User
 	var createdAt, updatedAt, quotaResetAt, resetExpiresAt sql.NullTime
 	var quotaTokens sql.NullInt64
 	var emailVerified int
-	if err := s.Scan(&u.ID, &u.OrgID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
+	if err := s.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
 		&emailVerified, &u.VerifyToken, &u.ResetToken, &resetExpiresAt, &quotaTokens, &quotaResetAt, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
@@ -132,44 +115,6 @@ func scanUser(s scanner) (*auth.User, error) {
 	return &u, nil
 }
 
-// ---- Organization (MySQL) ----
-
-type MySQLOrgRepo struct{ db *sql.DB }
-
-func NewMySQLOrgRepo(db *sql.DB) *MySQLOrgRepo { return &MySQLOrgRepo{db: db} }
-
-var _ auth.OrgRepository = (*MySQLOrgRepo)(nil)
-
-const orgCols = `SELECT id,name,slug,plan,owner_id,created_at,updated_at FROM organizations`
-
-func (r *MySQLOrgRepo) Save(ctx context.Context, o *auth.Organization) error {
-	_, err := r.db.ExecContext(ctx, `
-INSERT INTO organizations (id,name,slug,plan,owner_id,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?)
-ON DUPLICATE KEY UPDATE name=VALUES(name), slug=VALUES(slug), plan=VALUES(plan), owner_id=VALUES(owner_id), updated_at=VALUES(updated_at)`,
-		o.ID, o.Name, o.Slug, o.Plan, o.OwnerID, nowOr(o.CreatedAt), time.Now())
-	return err
-}
-
-func (r *MySQLOrgRepo) FindByID(ctx context.Context, id string) (*auth.Organization, error) {
-	return scanOrg(r.db.QueryRowContext(ctx, orgCols+` WHERE id=?`, id))
-}
-
-func (r *MySQLOrgRepo) FindBySlug(ctx context.Context, slug string) (*auth.Organization, error) {
-	return scanOrg(r.db.QueryRowContext(ctx, orgCols+` WHERE slug=?`, slug))
-}
-
-func scanOrg(s scanner) (*auth.Organization, error) {
-	var o auth.Organization
-	var createdAt, updatedAt sql.NullTime
-	if err := s.Scan(&o.ID, &o.Name, &o.Slug, &o.Plan, &o.OwnerID, &createdAt, &updatedAt); err != nil {
-		return nil, err
-	}
-	o.CreatedAt = createdAt.Time
-	o.UpdatedAt = updatedAt.Time
-	return &o, nil
-}
-
 // ---- Device (MySQL) ----
 
 type MySQLDeviceRepo struct{ db *sql.DB }
@@ -178,14 +123,14 @@ func NewMySQLDeviceRepo(db *sql.DB) *MySQLDeviceRepo { return &MySQLDeviceRepo{d
 
 var _ auth.DeviceRepository = (*MySQLDeviceRepo)(nil)
 
-const deviceCols = `SELECT id,user_code,user_id,org_id,status,scope,expires_at,last_poll_at,approved_at,created_at FROM devices`
+const deviceCols = `SELECT id,user_code,user_id,status,scope,expires_at,last_poll_at,approved_at,created_at FROM devices`
 
 func (r *MySQLDeviceRepo) Save(ctx context.Context, d *auth.Device) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO devices (id,user_code,user_id,org_id,status,scope,expires_at,last_poll_at,approved_at,created_at)
-VALUES (?,?,?,?,?,?,?,?,?,?)
+INSERT INTO devices (id,user_code,user_id,status,scope,expires_at,last_poll_at,approved_at,created_at)
+VALUES (?,?,?,?,?,?,?,?,?)
 ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), status=VALUES(status), last_poll_at=VALUES(last_poll_at), approved_at=VALUES(approved_at)`,
-		d.ID, d.UserCode, d.UserID, d.OrgID, d.Status, d.Scope, d.ExpiresAt, nullTime(d.LastPollAt), nullTime(d.ApprovedAt), nowOr(d.CreatedAt))
+		d.ID, d.UserCode, d.UserID, d.Status, d.Scope, d.ExpiresAt, nullTime(d.LastPollAt), nullTime(d.ApprovedAt), nowOr(d.CreatedAt))
 	return err
 }
 
@@ -200,7 +145,7 @@ func (r *MySQLDeviceRepo) FindByUserCode(ctx context.Context, userCode string) (
 func scanDevice(s scanner) (*auth.Device, error) {
 	var d auth.Device
 	var expiresAt, lastPollAt, approvedAt, createdAt sql.NullTime
-	if err := s.Scan(&d.ID, &d.UserCode, &d.UserID, &d.OrgID, &d.Status, &d.Scope,
+	if err := s.Scan(&d.ID, &d.UserCode, &d.UserID, &d.Status, &d.Scope,
 		&expiresAt, &lastPollAt, &approvedAt, &createdAt); err != nil {
 		return nil, err
 	}
@@ -221,15 +166,15 @@ func NewMySQLRefreshTokenRepo(db *sql.DB) *MySQLRefreshTokenRepo {
 
 var _ auth.RefreshTokenRepository = (*MySQLRefreshTokenRepo)(nil)
 
-const refreshCols = `SELECT id,user_id,org_id,device_id,token_hash,scope,expires_at,revoked,created_at,updated_at FROM refresh_tokens`
+const refreshCols = `SELECT id,user_id,device_id,token_hash,scope,expires_at,revoked,created_at,updated_at FROM refresh_tokens`
 
 func (r *MySQLRefreshTokenRepo) Save(ctx context.Context, t *auth.RefreshToken) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO refresh_tokens (id,user_id,org_id,device_id,token_hash,scope,expires_at,revoked,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?)
-ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), org_id=VALUES(org_id), device_id=VALUES(device_id),
+INSERT INTO refresh_tokens (id,user_id,device_id,token_hash,scope,expires_at,revoked,created_at,updated_at)
+VALUES (?,?,?,?,?,?,?,?,?)
+ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), device_id=VALUES(device_id),
   token_hash=VALUES(token_hash), scope=VALUES(scope), expires_at=VALUES(expires_at), revoked=VALUES(revoked), updated_at=VALUES(updated_at)`,
-		t.ID, t.UserID, t.OrgID, t.DeviceID, t.TokenHash, t.Scope, t.ExpiresAt, boolToInt(t.Revoked), nowOr(t.CreatedAt), time.Now())
+		t.ID, t.UserID, t.DeviceID, t.TokenHash, t.Scope, t.ExpiresAt, boolToInt(t.Revoked), nowOr(t.CreatedAt), time.Now())
 	return err
 }
 
@@ -255,7 +200,7 @@ func scanRefresh(s scanner) (*auth.RefreshToken, error) {
 	var t auth.RefreshToken
 	var expiresAt, createdAt, updatedAt sql.NullTime
 	var revoked int
-	if err := s.Scan(&t.ID, &t.UserID, &t.OrgID, &t.DeviceID, &t.TokenHash, &t.Scope,
+	if err := s.Scan(&t.ID, &t.UserID, &t.DeviceID, &t.TokenHash, &t.Scope,
 		&expiresAt, &revoked, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}

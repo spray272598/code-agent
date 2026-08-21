@@ -15,15 +15,15 @@ func TestTenantRoundTrip(t *testing.T) {
 		t.Fatalf("UserID = %q", got)
 	}
 
-	ctx = With(ctx, Tenant{UserID: "usr_01", OrgID: "org_01"})
+	ctx = With(ctx, Tenant{UserID: "usr_01"})
 	got, ok := From(ctx)
 	if !ok {
 		t.Fatalf("expected present")
 	}
-	if got.UserID != "usr_01" || got.OrgID != "org_01" {
+	if got.UserID != "usr_01" {
 		t.Fatalf("got %+v", got)
 	}
-	if UserID(ctx) != "usr_01" || OrgID(ctx) != "org_01" {
+	if UserID(ctx) != "usr_01" {
 		t.Fatalf("helpers mismatch")
 	}
 }

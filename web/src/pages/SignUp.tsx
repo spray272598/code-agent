@@ -7,7 +7,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export default function SignUp() {
   const nav = useNavigate();
-  const [orgName, setOrgName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -21,12 +20,11 @@ export default function SignUp() {
     setErr(null);
     setOk(null);
     try {
-      await api<{ orgId: string; userId: string; email: string; status: string }>(
+      await api<{ userId: string; email: string; status: string }>(
         "/api/v1/auth/signup",
         {
           method: "POST",
           body: JSON.stringify({
-            orgName,
             email,
             displayName: displayName || email.split("@")[0],
             password,
@@ -48,11 +46,10 @@ export default function SignUp() {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>创建账号</CardTitle>
-          <CardDescription>第一个注册的用户自动成为组织所有者（owner）</CardDescription>
+          <CardDescription>用邮箱注册一个账号即可使用</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="space-y-3">
-            <Input placeholder="组织名称" value={orgName} onChange={(e) => setOrgName(e.target.value)} required />
             <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} required />
             <Input placeholder="显示名称（可选）" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
             <Input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} required />

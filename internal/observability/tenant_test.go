@@ -27,12 +27,10 @@ func TestTenantAttrs(t *testing.T) {
 	t.Run("full principal maps to stable keys", func(t *testing.T) {
 		attrs := TenantAttrs(&authdomain.Principal{
 			UserID:   "usr_01",
-			OrgID:    "org_01",
 			DeviceID: "dev_01",
 		})
 		want := map[attribute.Key]string{
 			TenantAttrUserID:   "usr_01",
-			TenantAttrOrgID:    "org_01",
 			TenantAttrDeviceID: "dev_01",
 		}
 		if len(attrs) != len(want) {

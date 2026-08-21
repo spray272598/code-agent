@@ -8,7 +8,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 export default function SignIn() {
   const nav = useNavigate();
   const loc = useLocation() as { state?: { from?: string } };
-  const [orgSlug, setOrgSlug] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -21,7 +20,7 @@ export default function SignIn() {
     try {
       const data = await api<TokenPair & { user: AuthUser }>("/api/v1/auth/login", {
         method: "POST",
-        body: JSON.stringify({ orgSlug, email, password }),
+        body: JSON.stringify({ email, password }),
       }, { auth: false });
       setTokens(data, data.user);
       nav(loc.state?.from ?? "/", { replace: true });
@@ -41,15 +40,6 @@ export default function SignIn() {
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="space-y-3">
-            <div className="space-y-1">
-              <Input
-                placeholder="组织 slug"
-                autoComplete="organization"
-                value={orgSlug}
-                onChange={(e) => setOrgSlug(e.target.value)}
-                required
-              />
-            </div>
             <div className="space-y-1">
               <Input
                 type="email"

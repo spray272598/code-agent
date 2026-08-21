@@ -13,7 +13,6 @@ import (
 // Claims is the JWT payload for platform tokens.
 type Claims struct {
 	Sub   string // user id
-	Org   string // org id (tenant)
 	DID   string // device id (RFC8628)
 	Role  string
 	Email string

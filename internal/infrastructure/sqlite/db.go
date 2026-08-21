@@ -115,19 +115,8 @@ func migrate(db *sql.DB) error {
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )`,
-		`CREATE TABLE IF NOT EXISTS organizations (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL DEFAULT '',
-  slug TEXT NOT NULL DEFAULT '',
-  plan TEXT NOT NULL DEFAULT 'free',
-  owner_id TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-)`,
-		`CREATE INDEX IF NOT EXISTS idx_orgs_slug ON organizations(slug)`,
 		`CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
-  org_id TEXT NOT NULL,
   email TEXT NOT NULL,
   password_hash TEXT NOT NULL DEFAULT '',
   display_name TEXT NOT NULL DEFAULT '',
@@ -142,14 +131,13 @@ func migrate(db *sql.DB) error {
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )`,
-		`CREATE INDEX IF NOT EXISTS idx_users_org_email ON users(org_id, email)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_verify ON users(verify_token)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_reset ON users(reset_token)`,
 		`CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
   user_code TEXT NOT NULL,
   user_id TEXT NOT NULL DEFAULT '',
-  org_id TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
   scope TEXT NOT NULL DEFAULT '',
   expires_at TEXT NOT NULL,
@@ -161,7 +149,6 @@ func migrate(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT '',
-  org_id TEXT NOT NULL DEFAULT '',
   device_id TEXT NOT NULL DEFAULT '',
   token_hash TEXT NOT NULL,
   scope TEXT NOT NULL DEFAULT '',

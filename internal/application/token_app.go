@@ -46,7 +46,6 @@ func (s *TokenService) IssuePair(ctx context.Context, u *auth.User, deviceID str
 	now := time.Now()
 	access, err = auth.Sign(auth.Claims{
 		Sub:   u.ID,
-		Org:   u.OrgID,
 		DID:   deviceID,
 		Role:  u.Role,
 		Email: u.Email,
@@ -62,7 +61,6 @@ func (s *TokenService) IssuePair(ctx context.Context, u *auth.User, deviceID str
 	rt := &auth.RefreshToken{
 		ID:        jid,
 		UserID:    u.ID,
-		OrgID:     u.OrgID,
 		DeviceID:  deviceID,
 		TokenHash: hashToken(rawRefresh),
 		Scope:     "agent",

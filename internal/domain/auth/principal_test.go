@@ -9,9 +9,9 @@ import (
 
 // TestWithPrincipalStampsTenant verifies the Sprint 1.6 bridge: WithPrincipal
 // must also stash a tenant.Tenant so downstream code can read ctx.tenant.
-// UserID / OrgID without importing this package.
+// UserID without importing this package.
 func TestWithPrincipalStampsTenant(t *testing.T) {
-	p := &Principal{UserID: "usr_01", OrgID: "org_01", DeviceID: "dev_01"}
+	p := &Principal{UserID: "usr_01", DeviceID: "dev_01"}
 	ctx := WithPrincipal(context.Background(), p)
 
 	if got := PrincipalFrom(ctx); got != p {
@@ -19,9 +19,6 @@ func TestWithPrincipalStampsTenant(t *testing.T) {
 	}
 	if got := tenant.UserID(ctx); got != "usr_01" {
 		t.Fatalf("tenant.UserID = %q", got)
-	}
-	if got := tenant.OrgID(ctx); got != "org_01" {
-		t.Fatalf("tenant.OrgID = %q", got)
 	}
 }
 
