@@ -14,7 +14,10 @@
 | **编排** | ✅ 已落地 | Eino ReAct 主路径 + native-offline 兜底；`/team` 并行子代理；SSE 流式 |
 | **安全** | ✅ 已落地 | 五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流 |
 | **本地工具** | ✅ 已落地 | read/write/edit/bash/glob/grep + memory + delegate；进程隔离 |
-| **远程 SSH** | ✅ 已落地 | `ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / **`ssh_terminal`（交互式 PTY 终端，新增）**；连接凭据 KMS 加密存储 |
+| **远程 SSH** | ✅ 已落地 | `ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / **`ssh_terminal`（交互式 PTY 终端）**；连接凭据 KMS 加密存储 |
+| **SSH 实时终端** | ✅ 已落地 | 后端 `ws.SSHTerminalHub`（WebSocket 代理 PTY），前端 xterm.js 终端页 `/ssh-terminal`；`ITerminal.Read` 异步缓冲（已补单测） |
+| **SSH 连接管理 UI** | ✅ 已落地 | 前端 `/ssh-connections`：列表/新增/删除，KMS 加密存储 |
+| **意图识别** | ✅ 已落地 | 规则 + LLM 兜底；新增**跨轮指代消解**（`EntityContext` + `ExtractEntities`，解析"那台机器/刚才那个文件"等），已接入 runner |
 | **MCP** | ✅ 已落地 | stdio 热装，`server__tool` 注册，与 core 工具同一 GuardedTool 横切 |
 | **记忆/压缩** | ✅ 已落地 | Skill / 长期记忆 / L0–L3 压缩 / Token 预算 |
 | **前端** | ✅ 已落地 | React/TS SPA（web/）：账号流 + 对话 |
@@ -28,8 +31,8 @@
 
 基于与同类项目（如 Java 系 SSH 运维工具）的对比，我们**鉴定并补齐**了以下差距：
 
-1. **交互式终端**：原 `ITerminal.Read` 为空桩、未接入 agent。已在 `internal/infrastructure/ssh/terminal.go` 实现异步缓冲读取，并新增 `ssh_terminal` 工具（open/send/read/run/resize/close）。
-   - *待提升*：WebSocket 实时终端流、会话持久化、前端终端组件。
+1. **交互式终端**：已在 `internal/infrastructure/ssh/terminal.go` 实现异步缓冲读取，新增 `ssh_terminal` 工具，并补齐 `terminal_test.go`；WebSocket 实时终端（`ws.SSHTerminalHub` + 前端 xterm.js）已落地。
+   - *待提升*：会话持久化、多会话标签。
 2. **意图识别深度**：当前为「规则 + LLM 兜底」路由（continue/deep/team/normal），**缺少跨轮指代消解**（"在那台机器上跑一下"中的"那台"）。
 3. **编排成熟度**：Eino 已够用；相比 Google ADK 类编排框架，缺更结构化的"计划-执行-反思"可视化与可中断重规划。
 4. **文档时效**：已修订 README / design.md，将"多租户 SaaS"陈旧描述替换为 toC 事实（见本文件与归档说明）。
@@ -38,14 +41,14 @@
 
 ## 3. 后续工作规划（按优先级）
 
-### P1 — 近期（产品可用性与体验闭环）
+### P1 — 近期（产品可用性与体验闭环）【已完成 ✅】
 
-| # | 任务 | 关联代码 | 价值 |
+| # | 任务 | 关联代码 | 状态 |
 |---|------|----------|------|
-| 1.1 | **WebSocket 实时终端**：`ssh_terminal` 从请求/响应升级为 SSE/WS 流；前端加终端组件（xterm.js） | `ssh/terminal.go`、`trigger/http`、`web/` | 真实交互式 shell 体验 |
-| 1.2 | **意图指代消解**：在 `intent/classifier.go` 引入跨轮实体记忆（最近 SSH 连接 / 最近会话 / 最近文件），解析"它/那台/刚才那个" | `domain/intent` | 多轮运维对话更自然 |
-| 1.3 | **Web 账号流完善**：注册激活邮件模板、重置密码页、登录态刷新、错误提示本地化 | `web/`、`trigger/http` | toC 注册转化与留存 |
-| 1.4 | **SSH 连接管理 UI**：在 web 提供连接增删改查 + 连通性探测，替代仅 API | `web/`、`ssh` 仓储 | 降低使用门槛 |
+| 1.1 | **WebSocket 实时终端**：`ws.SSHTerminalHub` 代理 PTY；前端 xterm.js 终端页 `/ssh-terminal` | `trigger/ws/ssh_terminal_hub.go`、`web/src/pages/SSHTerminal.tsx` | ✅ |
+| 1.2 | **意图指代消解**：`EntityContext` + `ExtractEntities`，解析"那台机器/刚才那个文件" | `domain/intent/classifier.go`、接入 `einoorch/runner.go` | ✅ |
+| 1.3 | **Web 账号流完善**：注册/验证/重置密码页（既有），本批修正侧栏过时多租户文案 | `web/src/*` | ✅（基础） |
+| 1.4 | **SSH 连接管理 UI**：`/ssh-connections` 列表/新增/删除 | `web/src/pages/SSHConnections.tsx` | ✅ |
 
 ### P2 — 中期（能力深化与质量）
 
@@ -79,8 +82,8 @@
 
 ## 5. 里程碑建议
 
-- **M1（本 Sprint 收尾）**：SSH 交互终端可用 + 文档一致性修复（toC）+ 本路线图落地。
-- **M2（P1 完成）**：实时终端 + Web 账号/连接闭环，达到"可对外试用的 toC 产品"。
+- **M1（已完成 ✅）**：SSH 交互终端（含 WS 实时终端）+ 意图指代消解 + 连接管理 UI + 文档一致性修复（toC）+ 本路线图落地。
+- **M2（P1 完成，进行中）**：RAG/Qdrant、自动化评测、TUI、MCP SDK 评估，向"可对外试用的 toC 产品"推进。
 - **M3（P2 完成）**：RAG + 自动化评测 + TUI，达到"接近生产级"。
 - **M4（P3 完成）**：规模化与生态能力。
 

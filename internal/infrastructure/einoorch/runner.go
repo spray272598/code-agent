@@ -305,10 +305,20 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		}
 	}
 
-	// 意图路由
+	// 意图路由（带跨轮指代消解：从近期消息提取最近实体）
 	var ir intent.Result
 	if r.intentRouter != nil {
-		ir = r.intentRouter.Classify(userInput)
+		var ec *intent.EntityContext
+		if r.messages != nil {
+			if recent, err := r.messages.ListBySession(ctx, session.ID, 12); err == nil {
+				contents := make([]string, 0, len(recent))
+				for _, m := range recent {
+					contents = append(contents, m.Content)
+				}
+				ec = intent.ExtractEntities(contents)
+			}
+		}
+		ir = r.intentRouter.ClassifyWithContext(userInput, ec)
 	} else {
 		ir = intent.Result{Intent: intent.IntentNormal, CleanInput: userInput}
 	}

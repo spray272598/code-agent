@@ -55,7 +55,7 @@ import (
 	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
 	"github.com/spray272598/code-agent/internal/observability"
-	"github.com/spray272598/code-agent/internal/trigger/ws"
+	wshub "github.com/spray272598/code-agent/internal/trigger/ws"
 )
 
 type App struct {
@@ -76,7 +76,8 @@ type App struct {
 	Runs    *checkpoint.RunRegistry
 	Host    host.Executor
 	Bridge  *host.Bridge
-	HostHub *ws.HostHub
+	HostHub *wshub.HostHub
+	SSHTerminalHub *wshub.SSHTerminalHub
 	SSHPool *sshinfra.Pool
 
 	// Account repos (Sprint 1.1)
@@ -216,7 +217,7 @@ func Build(cfg *config.Config) (*App, error) {
 	// API keys hashed in KeyStore — never pass plaintext into long-lived structs
 	keyStore := auth.NewKeyStore(cfg.Security.APIKeys)
 	hostBridge := host.NewBridge()
-	hostHub := ws.NewHostHub(hostBridge, keyStore.Valid)
+	hostHub := wshub.NewHostHub(hostBridge, keyStore.Valid)
 	log.Printf("[bootstrap] api keys configured=%d (hashed, not logged)\n", len(cfg.Security.APIKeys))
 
 	var hostExec host.Executor = &host.ServerExecutor{Root: cfg.Agent.WorkspaceRoot}
@@ -591,12 +592,18 @@ func Build(cfg *config.Config) (*App, error) {
 	log.Printf("[bootstrap] db=%s tools=%d (mcp=%d) redis=%v mock_llm=%v workspace=%s subagent=%v orchestrator=%s\n",
 		cfg.Database.Type, len(reg.List()), mcpN, rdb.Enabled(), cfg.LLM.UseMock, cfg.Agent.WorkspaceRoot, subRunner != nil, orch)
 
+	var sshTermHub *wshub.SSHTerminalHub
+	if sshPool != nil {
+		sshTermHub = wshub.NewSSHTerminalHub(sshinfra.NewTerminal(sshPool), keyStore.Valid)
+	}
+
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,
 		MCP: mcpFactory, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
 		Blobs: blobStore, Index: codeIdx, CKStore: ckStore, Runs: runReg,
 		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
-		SSHPool: sshPool,
+		SSHTerminalHub: sshTermHub,
+		SSHPool:       sshPool,
 		UserRepo:    userRepo,
 		DeviceRepo:  deviceRepo,
 		RefreshRepo: refreshRepo,

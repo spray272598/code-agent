@@ -35,4 +35,6 @@ type Result struct {
 // Router 意图路由接口
 type Router interface {
 	Classify(userInput string) Result
+	// ClassifyWithContext 在 Classify 基础上做跨轮指代消解（ec 为 nil 等价于 Classify）
+	ClassifyWithContext(userInput string, ec *EntityContext) Result
 }

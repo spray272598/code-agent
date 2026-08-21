@@ -18,6 +18,8 @@ import LLMKeys from "@/pages/LLMKeys";
 import Audit from "@/pages/Audit";
 import Agent from "@/pages/Agent";
 import Settings from "@/pages/Settings";
+import SSHTerminal from "@/pages/SSHTerminal";
+import SSHConnections from "@/pages/SSHConnections";
 
 // Bootstrap the auth store from localStorage before rendering. We also
 // bounce to /signin on the global "auth-expired" event fired by the API
@@ -127,6 +129,22 @@ export default function App() {
             element={
               <RequireAuth>
                 <AppShell><Settings /></AppShell>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/ssh-terminal"
+            element={
+              <RequireAuth>
+                <AppShell><SSHTerminal /></AppShell>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/ssh-connections"
+            element={
+              <RequireAuth>
+                <AppShell><SSHConnections /></AppShell>
               </RequireAuth>
             }
           />

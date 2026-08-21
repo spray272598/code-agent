@@ -29,6 +29,7 @@ type Server struct {
 	addr        string
 	srv         *http.Server
 	hostHub     *ws.HostHub
+	sshHub      *ws.SSHTerminalHub
 	bridge      *host.Bridge
 	index       *codeindex.Index
 	corsOrigins []string
@@ -59,6 +60,11 @@ func New(app *application.ChatApp, addr string) *Server {
 func (s *Server) WithHost(hub *ws.HostHub, bridge *host.Bridge) *Server {
 	s.hostHub = hub
 	s.bridge = bridge
+	return s
+}
+
+func (s *Server) WithSSHHub(hub *ws.SSHTerminalHub) *Server {
+	s.sshHub = hub
 	return s
 }
 
@@ -144,6 +150,10 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 		mux.Handle("/ws/host", s.hostHub)
 		log.Printf("[http] host agent ws: /ws/host?token=&deviceId=\n")
 	}
+	if s.sshHub != nil {
+		mux.Handle("/ws/ssh", s.sshHub)
+		log.Printf("[http] ssh terminal ws: /ws/ssh?token=&connection=<name>&cols=&rows=\n")
+	}
 
 	handler := s.corsMiddleware(limitBody(s.maxBody, auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(observability.RequestSpanMiddleware(mux))))))
 	s.srv = &http.Server{
@@ -200,7 +210,7 @@ func auth(app *application.ChatApp, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// public / health / metrics / openapi / host ws (ws auth itself)
 		switch r.URL.Path {
-		case "/health", "/metrics", "/ws/host", "/api/v1/openapi.json", "/docs",
+		case "/health", "/metrics", "/ws/host", "/ws/ssh", "/api/v1/openapi.json", "/docs",
 		"/api/v1/auth/signup", "/api/v1/auth/verify", "/api/v1/auth/login", "/api/v1/auth/refresh",
 		"/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
 		"/api/v1/device/code", "/api/v1/device/token":

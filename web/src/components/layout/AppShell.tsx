@@ -6,6 +6,7 @@ import {
   Cpu,
   LayoutDashboard,
   LogOut,
+  Server,
   Settings,
   ShieldCheck,
   TerminalSquare,
@@ -26,6 +27,8 @@ const NAV = [
   { to: "/audit", icon: Activity, label: "审计日志" },
   { to: "/agent", icon: TerminalSquare, label: "Agent 参数" },
   { to: "/settings", icon: Settings, label: "设置" },
+  { to: "/ssh-terminal", icon: TerminalSquare, label: "SSH 终端" },
+  { to: "/ssh-connections", icon: Server, label: "SSH 连接" },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -43,7 +46,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="hidden md:flex w-56 shrink-0 flex-col border-r bg-card/40">
         <div className="px-6 py-5 border-b">
           <div className="text-lg font-semibold tracking-tight">Code Agent</div>
-          <div className="text-xs text-muted-foreground">控制台 · 多租户</div>
+          <div className="text-xs text-muted-foreground">控制台</div>
         </div>
         <nav className="flex-1 px-3 py-3 space-y-0.5">
           {NAV.map((it) => (
@@ -79,7 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="flex h-14 items-center justify-between border-b px-6">
           <div className="md:hidden font-semibold">Code Agent</div>
           <div className="text-sm text-muted-foreground hidden md:block">
-            {user?.role === "owner" ? "组织所有者" : "成员"} · {user?.email ?? user?.userId}
+            {user?.role === "owner" ? "所有者" : "用户"} · {user?.email ?? user?.userId}
           </div>
           <div className="text-xs text-muted-foreground">Sprint 2.1</div>
         </header>
