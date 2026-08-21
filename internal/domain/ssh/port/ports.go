@@ -33,11 +33,13 @@ type IFileTransfer interface {
 	Mkdir(ctx context.Context, connName, path string) error
 }
 
-// ITerminal PTY终端接口（预留WebSocket）
+// ITerminal PTY终端接口（交互式 shell / WebSocket 终端）
 type ITerminal interface {
 	OpenTerminal(connName string, cols, rows int) (*model.TerminalSession, error)
 	Write(sessionID string, data []byte) error
-	Read(sessionID string) (string, error)
+	// Read 返回缓冲区中累积的 PTY 输出；clear=true 时读取后清空缓冲，
+	// 多次读取之间只返回自上次清空以来的新输出。
+	Read(sessionID string, clear bool) (string, error)
 	Close(sessionID string) error
 	Resize(sessionID string, cols, rows int) error
 }

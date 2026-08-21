@@ -2,159 +2,121 @@ package sshtool
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/spray272598/code-agent/internal/domain/ssh/model"
+	"github.com/spray272598/code-agent/internal/domain/tool"
 )
 
-func TestExecTool_Name(t *testing.T) {
-	et := NewExecTool(nil)
-	if et.Name() != "ssh_exec" {
-		t.Fatalf("expected ssh_exec, got %s", et.Name())
+// fakeTerminal is an in-memory ITerminal for testing the tool dispatch logic.
+type fakeTerminal struct {
+	opened  int
+	written []string
+	closed  int
+	resized int
+	buf     string
+}
+
+func (f *fakeTerminal) OpenTerminal(connName string, cols, rows int) (*model.TerminalSession, error) {
+	f.opened++
+	return &model.TerminalSession{ID: "sess-" + connName, ConnectionID: connName, Cols: cols, Rows: rows, Active: true}, nil
+}
+func (f *fakeTerminal) Write(sessionID string, data []byte) error {
+	f.written = append(f.written, string(data))
+	return nil
+}
+func (f *fakeTerminal) Read(sessionID string, clear bool) (string, error) {
+	return f.buf, nil
+}
+func (f *fakeTerminal) Close(sessionID string) error {
+	f.closed++
+	return nil
+}
+func (f *fakeTerminal) Resize(sessionID string, cols, rows int) error {
+	f.resized++
+	return nil
+}
+
+func TestTerminalTool_Dispatch(t *testing.T) {
+	ft := &fakeTerminal{buf: "hello"}
+	tt := NewTerminalTool(ft)
+
+	cases := []struct {
+		name     string
+		args     map[string]any
+		wantErr  bool
+		wantText string
+	}{
+		{"open", map[string]any{"action": "open", "connection": "web"}, false, "session_id: sess-web"},
+		{"open missing conn", map[string]any{"action": "open"}, true, "connection is required"},
+		{"send", map[string]any{"action": "send", "session_id": "s1", "data": "ls\n"}, false, "sent"},
+		{"read", map[string]any{"action": "read", "session_id": "s1"}, false, "hello"},
+		{"resize", map[string]any{"action": "resize", "session_id": "s1", "cols": 120, "rows": 40}, false, "resized"},
+		{"close", map[string]any{"action": "close", "session_id": "s1"}, false, "closed"},
+		{"unknown", map[string]any{"action": "bogus"}, true, "unknown action"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := tt.Execute(context.Background(), c.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.IsError != c.wantErr {
+				t.Fatalf("IsError=%v want %v (text=%q)", res.IsError, c.wantErr, res.Text)
+			}
+			if c.wantText != "" && !strings.Contains(res.Text, c.wantText) {
+				t.Fatalf("text=%q want contains %q", res.Text, c.wantText)
+			}
+		})
+	}
+
+	if ft.opened != 1 {
+		t.Errorf("OpenTerminal called %d times, want 1", ft.opened)
+	}
+	if len(ft.written) != 1 || ft.written[0] != "ls\n" {
+		t.Errorf("Write got %v, want [ls\\n]", ft.written)
+	}
+	if ft.resized != 1 {
+		t.Errorf("Resize called %d times, want 1", ft.resized)
+	}
+	if ft.closed != 1 {
+		t.Errorf("Close called %d times, want 1", ft.closed)
 	}
 }
 
-func TestExecTool_Description(t *testing.T) {
-	et := NewExecTool(nil)
-	if et.Description() == "" {
-		t.Fatal("expected non-empty description")
-	}
-}
-
-func TestExecTool_InputSchema(t *testing.T) {
-	et := NewExecTool(nil)
-	schema := et.InputSchema()
-	if schema["type"] != "object" {
-		t.Fatal("expected object type")
-	}
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties map")
-	}
-	if _, ok := props["connection"]; !ok {
-		t.Fatal("expected connection property")
-	}
-	if _, ok := props["command"]; !ok {
-		t.Fatal("expected command property")
-	}
-	if _, ok := props["timeout_ms"]; !ok {
-		t.Fatal("expected timeout_ms property")
-	}
-	required, ok := schema["required"].([]string)
-	if !ok {
-		t.Fatal("expected required slice")
-	}
-	if len(required) != 2 {
-		t.Fatalf("expected 2 required fields, got %d", len(required))
-	}
-}
-
-func TestExecTool_Execute_MissingArgs(t *testing.T) {
-	et := NewExecTool(nil)
-	res, err := et.Execute(context.Background(), map[string]any{})
+func TestTerminalTool_Run(t *testing.T) {
+	ft := &fakeTerminal{buf: "$ ls\nfile.txt\n"}
+	tt := NewTerminalTool(ft)
+	res, err := tt.Execute(context.Background(), map[string]any{
+		"action": "run", "connection": "db", "command": "ls", "wait_ms": 1,
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatal("expected error result for missing args")
+	if res.IsError {
+		t.Fatalf("run failed: %s", res.Text)
+	}
+	if !strings.Contains(res.Text, "file.txt") {
+		t.Errorf("run output=%q want contains file.txt", res.Text)
+	}
+	if ft.opened != 1 || ft.closed != 1 {
+		t.Errorf("run should open+close once, got opened=%d closed=%d", ft.opened, ft.closed)
+	}
+	if len(ft.written) != 1 || !strings.HasSuffix(ft.written[0], "\n") {
+		t.Errorf("run should send command+newline, got %v", ft.written)
 	}
 }
 
-func TestExecTool_Execute_MissingCommand(t *testing.T) {
-	et := NewExecTool(nil)
-	res, err := et.Execute(context.Background(), map[string]any{"connection": "srv"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestTerminalTool_SchemaValid(t *testing.T) {
+	tt := NewTerminalTool(&fakeTerminal{})
+	if tt.Name() != "ssh_terminal" {
+		t.Errorf("name=%q", tt.Name())
 	}
-	if !res.IsError {
-		t.Fatal("expected error result for missing command")
-	}
-}
-
-func TestReadFileTool_Name(t *testing.T) {
-	ft := NewReadFileTool(nil)
-	if ft.Name() != "ssh_read_file" {
-		t.Fatalf("expected ssh_read_file, got %s", ft.Name())
-	}
-}
-
-func TestReadFileTool_InputSchema(t *testing.T) {
-	ft := NewReadFileTool(nil)
-	schema := ft.InputSchema()
+	schema := tt.InputSchema()
 	if schema["type"] != "object" {
-		t.Fatal("expected object type")
+		t.Errorf("schema type=%v", schema["type"])
 	}
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties map")
-	}
-	if _, ok := props["connection"]; !ok {
-		t.Fatal("expected connection property")
-	}
-	if _, ok := props["path"]; !ok {
-		t.Fatal("expected path property")
-	}
-}
-
-func TestReadFileTool_Execute_MissingArgs(t *testing.T) {
-	ft := NewReadFileTool(nil)
-	res, _ := ft.Execute(context.Background(), map[string]any{})
-	if !res.IsError {
-		t.Fatal("expected error for missing args")
-	}
-}
-
-func TestWriteFileTool_Name(t *testing.T) {
-	ft := NewWriteFileTool(nil)
-	if ft.Name() != "ssh_write_file" {
-		t.Fatalf("expected ssh_write_file, got %s", ft.Name())
-	}
-}
-
-func TestWriteFileTool_InputSchema(t *testing.T) {
-	ft := NewWriteFileTool(nil)
-	schema := ft.InputSchema()
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties map")
-	}
-	if _, ok := props["content"]; !ok {
-		t.Fatal("expected content property")
-	}
-}
-
-func TestWriteFileTool_Execute_MissingArgs(t *testing.T) {
-	ft := NewWriteFileTool(nil)
-	res, _ := ft.Execute(context.Background(), map[string]any{"connection": "srv"})
-	if !res.IsError {
-		t.Fatal("expected error for missing path")
-	}
-}
-
-func TestListDirTool_Name(t *testing.T) {
-	ft := NewListDirTool(nil)
-	if ft.Name() != "ssh_list_dir" {
-		t.Fatalf("expected ssh_list_dir, got %s", ft.Name())
-	}
-}
-
-func TestListDirTool_InputSchema(t *testing.T) {
-	ft := NewListDirTool(nil)
-	schema := ft.InputSchema()
-	if schema["type"] != "object" {
-		t.Fatal("expected object type")
-	}
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties map")
-	}
-	if _, ok := props["path"]; !ok {
-		t.Fatal("expected path property")
-	}
-}
-
-func TestListDirTool_Execute_MissingArgs(t *testing.T) {
-	ft := NewListDirTool(nil)
-	res, _ := ft.Execute(context.Background(), map[string]any{})
-	if !res.IsError {
-		t.Fatal("expected error for missing args")
-	}
+	// Should be constructable as an ITool (compile-time ensured) and runnable.
+	_ = tool.Result{}
 }

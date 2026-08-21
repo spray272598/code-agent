@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	sshport "github.com/spray272598/code-agent/internal/domain/ssh/port"
@@ -151,10 +152,150 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) (tool.Re
 	return tool.Result{Text: string(b)}, nil
 }
 
+// --- SSH Interactive Terminal Tool ---
+//
+// 暴露交互式 PTY 终端给 agent：支持打开会话、发送原始输入、读取输出、
+// 调整窗口大小、关闭会话，以及一次性 run（开会话→执行命令→读取→关会话）。
+// agent 负责在多轮对话间保存返回的 session_id 以实现持续交互。
+
+type TerminalTool struct {
+	term sshport.ITerminal
+}
+
+func NewTerminalTool(term sshport.ITerminal) *TerminalTool {
+	return &TerminalTool{term: term}
+}
+
+func (t *TerminalTool) Name() string { return "ssh_terminal" }
+func (t *TerminalTool) Description() string {
+	return "Drive an interactive PTY shell on a remote SSH server. " +
+		"Args: action (required: open|send|read|run|resize|close), " +
+		"connection (required for open/run), session_id (required for send/read/resize/close), " +
+		"data (for send), command (for run), wait_ms (for run, default 500), " +
+		"cols, rows (terminal size, default 80x24). " +
+		"open returns a session_id to reuse in follow-up calls."
+}
+
+func (t *TerminalTool) InputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"action":    map[string]any{"type": "string", "description": "open|send|read|run|resize|close"},
+		"connection": map[string]any{"type": "string", "description": "SSH connection name (open/run)"},
+		"session_id": map[string]any{"type": "string", "description": "Terminal session id from open (send/read/resize/close)"},
+		"data":       map[string]any{"type": "string", "description": "Raw input to send (send)"},
+		"command":    map[string]any{"type": "string", "description": "Command to run (run)"},
+		"wait_ms":    map[string]any{"type": "integer", "description": "Wait after command before reading (run)"},
+		"cols":       map[string]any{"type": "integer", "description": "Terminal columns"},
+		"rows":       map[string]any{"type": "integer", "description": "Terminal rows"},
+	}, "required": []string{"action"}}
+}
+
+func parseIntArg(args map[string]any, key string, def int) int {
+	if v, ok := args[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case int:
+			return n
+		case string:
+			if n2, err := strconv.Atoi(n); err == nil {
+				return n2
+			}
+		}
+	}
+	return def
+}
+
+func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
+	action, _ := args["action"].(string)
+	switch action {
+	case "open":
+		connName, _ := args["connection"].(string)
+		if connName == "" {
+			return tool.Result{Text: "connection is required for open", IsError: true}, nil
+		}
+		cols, rows := parseIntArg(args, "cols", 80), parseIntArg(args, "rows", 24)
+		sess, err := t.term.OpenTerminal(connName, cols, rows)
+		if err != nil {
+			return tool.Result{Text: fmt.Sprintf("open terminal error: %v", err), IsError: true}, nil
+		}
+		return tool.Result{Text: fmt.Sprintf("session_id: %s", sess.ID)}, nil
+
+	case "send":
+		sid, _ := args["session_id"].(string)
+		data, _ := args["data"].(string)
+		if sid == "" {
+			return tool.Result{Text: "session_id is required for send", IsError: true}, nil
+		}
+		if err := t.term.Write(sid, []byte(data)); err != nil {
+			return tool.Result{Text: fmt.Sprintf("send error: %v", err), IsError: true}, nil
+		}
+		return tool.Result{Text: "sent"}, nil
+
+	case "read":
+		sid, _ := args["session_id"].(string)
+		if sid == "" {
+			return tool.Result{Text: "session_id is required for read", IsError: true}, nil
+		}
+		out, err := t.term.Read(sid, true)
+		if err != nil {
+			return tool.Result{Text: fmt.Sprintf("read error: %v", err), IsError: true}, nil
+		}
+		return tool.Result{Text: out}, nil
+
+	case "run":
+		connName, _ := args["connection"].(string)
+		command, _ := args["command"].(string)
+		if connName == "" || command == "" {
+			return tool.Result{Text: "connection and command are required for run", IsError: true}, nil
+		}
+		cols, rows := parseIntArg(args, "cols", 80), parseIntArg(args, "rows", 24)
+		waitMs := parseIntArg(args, "wait_ms", 500)
+		sess, err := t.term.OpenTerminal(connName, cols, rows)
+		if err != nil {
+			return tool.Result{Text: fmt.Sprintf("open terminal error: %v", err), IsError: true}, nil
+		}
+		defer t.term.Close(sess.ID)
+		if err := t.term.Write(sess.ID, []byte(command+"\n")); err != nil {
+			return tool.Result{Text: fmt.Sprintf("send error: %v", err), IsError: true}, nil
+		}
+		time.Sleep(time.Duration(waitMs) * time.Millisecond)
+		out, err := t.term.Read(sess.ID, true)
+		if err != nil {
+			return tool.Result{Text: fmt.Sprintf("read error: %v", err), IsError: true}, nil
+		}
+		return tool.Result{Text: out}, nil
+
+	case "resize":
+		sid, _ := args["session_id"].(string)
+		if sid == "" {
+			return tool.Result{Text: "session_id is required for resize", IsError: true}, nil
+		}
+		cols, rows := parseIntArg(args, "cols", 80), parseIntArg(args, "rows", 24)
+		if err := t.term.Resize(sid, cols, rows); err != nil {
+			return tool.Result{Text: fmt.Sprintf("resize error: %v", err), IsError: true}, nil
+		}
+		return tool.Result{Text: "resized"}, nil
+
+	case "close":
+		sid, _ := args["session_id"].(string)
+		if sid == "" {
+			return tool.Result{Text: "session_id is required for close", IsError: true}, nil
+		}
+		if err := t.term.Close(sid); err != nil {
+			return tool.Result{Text: fmt.Sprintf("close error: %v", err), IsError: true}, nil
+		}
+		return tool.Result{Text: "closed"}, nil
+
+	default:
+		return tool.Result{Text: fmt.Sprintf("unknown action: %q (want open|send|read|run|resize|close)", action), IsError: true}, nil
+	}
+}
+
 // RegisterAll 注册所有SSH工具到工具注册表
-func RegisterAll(registry tool.Registry, exec sshport.IExecutor, ft sshport.IFileTransfer) {
+func RegisterAll(registry tool.Registry, exec sshport.IExecutor, ft sshport.IFileTransfer, term sshport.ITerminal) {
 	registry.Register(NewExecTool(exec))
 	registry.Register(NewReadFileTool(ft))
 	registry.Register(NewWriteFileTool(ft))
 	registry.Register(NewListDirTool(ft))
+	registry.Register(NewTerminalTool(term))
 }

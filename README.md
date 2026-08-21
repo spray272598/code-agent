@@ -72,14 +72,25 @@ llm:
 | `/tools` `/mcp` `/help` | 列表与帮助 |
 | `/team …` | Eino 多代理 explore+verify（eino 模式） |
 
+## 账号与鉴权（toC）
+
+面向个人用户（**无企业/组织概念**），数据统一按 `user_id` 隔离：
+
+- 邮箱 + 密码注册 / 登录，密码 bcrypt 哈希；JWT（`access_token` + `refresh_token`）鉴权
+- 邮箱验证（注册激活）、密码重置（邮件链接）
+- 连接管理、记忆、SSH 资源等全部以 `user_id` 为边界，无 `org_id`
+- 详见 [docs/design.md](docs/design.md)；本地一键见 [docs/local-demo.md](docs/local-demo.md)
+
 ## 能力清单
 
+- **账号（toC）**：邮箱 + 密码注册/登录，JWT 鉴权，邮箱验证与密码重置；数据按 `user_id` 隔离（无企业/组织概念）
 - **编排**：Eino ReAct + callbacks→SSE；`/team` 并行子代理；native 自研 Loop 兜底  
 - **安全**：五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流  
-- **工具**：read/write/edit/bash/glob/grep + memory + delegate  
+- **工具（本地 Workspace）**：read/write/edit/bash/glob/grep + memory + delegate  
+- **工具（远程 SSH）**：`ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_terminal`（交互式 PTY 终端）；连接凭据经 KMS 加密存储，仓储支持 SQLite/MySQL  
 - **MCP**：stdio 热装，`server__tool` 注册，**与 core 工具同一 GuardedTool 横切**  
 - **Skill / 记忆 / L0–L3 压缩 / Token 预算**  
-- **SQLite | MySQL | memory**；MinIO；OTLP/Prometheus；host-agent  
+- **存储/可观测**：SQLite | MySQL | memory；MinIO；OTLP/Prometheus；host-agent  
 
 ## 文档
 
@@ -92,6 +103,7 @@ llm:
 | [docs/mcp.md](docs/mcp.md) | MCP 对接 |
 | [docs/interview-guide.md](docs/interview-guide.md) | 秋招话术 |
 | [docs/design.md](docs/design.md) | 总体设计 |
+| [docs/roadmap.md](docs/roadmap.md) | **toC 产品与工程路线图 / 后续工作规划** |
 
 ## 本机一键（Host + Server）
 

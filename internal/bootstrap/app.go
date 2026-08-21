@@ -306,7 +306,8 @@ func Build(cfg *config.Config) (*App, error) {
 		}
 		sshExec := sshinfra.NewExecutor(sshPool)
 		sshFT := sshinfra.NewFileTransfer(sshPool)
-		sshtool.RegisterAll(reg, sshExec, sshFT)
+		sshTerm := sshinfra.NewTerminal(sshPool)
+		sshtool.RegisterAll(reg, sshExec, sshFT, sshTerm)
 		log.Printf("[bootstrap] ssh enabled, tools registered\n")
 	}
 

@@ -343,11 +343,12 @@ event: done           data: {"tokenUsed":...}
 - 展示 tool 调用与 diff 摘要
 - 本地记录最近 sessionId
 
-### 5.3 鉴权（首期）
+### 5.3 鉴权（toC）
 
-- API Key 或 JWT（用户 id）
-- 请求头：`Authorization: Bearer <token>`
-- 后续可接 OAuth
+- 邮箱 + 密码注册/登录，密码 bcrypt 哈希；登录成功签发 JWT（`access_token` 短期 + `refresh_token` 长期）
+- `user_id` 注入上下文，会话/记忆/SSH 连接等资源统一按 `user_id` 隔离——**无企业/组织/租户概念**
+- 请求头：`Authorization: Bearer <access_token>`；过期用 `refresh_token` 换发
+- 后续可接 OAuth / 第三方登录
 
 ### 5.4 工具执行位置（重要决策）
 
@@ -373,7 +374,7 @@ event: done           data: {"tokenUsed":...}
 
 | 表 | 用途 |
 |----|------|
-| `user_account` | 用户与 API Key 哈希 |
+| `users` | 用户表：邮箱、密码（bcrypt 哈希）、邮箱验证状态、刷新令牌；按 `user_id` 隔离（toC，无 org） |
 | `chat_session` | 会话；含 user_id、project_id、title、token_used、status |
 | `chat_message` | 消息；role/content/tool_*/token/priority |
 | `chat_milestone` | 里程碑事件 |
@@ -588,7 +589,11 @@ code-agent/
 | Method | Path | 说明 |
 |--------|------|------|
 | GET | `/health` | 健康 |
-| POST | `/api/v1/auth/token` | 换票（或静态 API Key） |
+| POST | `/api/v1/auth/signup` | 邮箱+密码注册（toC，无 org） |
+| POST | `/api/v1/auth/login` | 登录，返回 access/refresh token |
+| POST | `/api/v1/auth/verify-email` | 邮箱验证（激活链接） |
+| POST | `/api/v1/auth/forgot-password` | 申请密码重置（发邮件） |
+| POST | `/api/v1/auth/reset-password` | 重置密码 |
 | POST | `/api/v1/session` | 创建会话（带 projectId） |
 | GET | `/api/v1/session/{id}` | 会话信息 |
 | POST | `/api/v1/chat/stream` | SSE 对话 |
@@ -630,7 +635,7 @@ code-agent/
 |---|------|----------|------|
 | 1 | 对象存储厂商 | MinIO 本地 + S3 API | 已按此设计 |
 | 2 | 首期工具是否必须操作开发者本机目录 | Phase1 Server workspace | **请确认是否接受** |
-| 3 | 鉴权 | API Key 首期 | 可改 |
+| 3 | 鉴权 | 邮箱+密码 + JWT（toC，无组织概念） | 已落地 |
 | 4 | 默认模型提供商 | 环境变量注入，不绑死 | OK |
 | 5 | 是否保留 Web 调试台 | 二期可选 | OK |
 
