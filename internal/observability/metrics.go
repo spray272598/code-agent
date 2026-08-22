@@ -20,6 +20,7 @@ type CounterRegistry interface {
 	AddBlobOffload(n int64)
 	AddEmbeddingCalls(n int64)
 	AddEmbeddingErrors(n int64)
+	AddQuotaDeny(n int64)
 	ObserveLLM(d time.Duration)
 	ObserveTool(d time.Duration)
 	Snapshot() map[string]any
@@ -39,6 +40,7 @@ type Metrics struct {
 	BlobOffload    atomic.Int64
 	EmbeddingCalls atomic.Int64
 	EmbeddingErrs  atomic.Int64
+	QuotaDeny      atomic.Int64
 
 	LLMLatencySumMs  atomic.Int64
 	LLMLatencyCount  atomic.Int64
@@ -61,6 +63,7 @@ func (m *Metrics) AddCompress(n int64)       { m.CompressTotal.Add(n) }
 func (m *Metrics) AddBlobOffload(n int64)    { m.BlobOffload.Add(n) }
 func (m *Metrics) AddEmbeddingCalls(n int64) { m.EmbeddingCalls.Add(n) }
 func (m *Metrics) AddEmbeddingErrors(n int64) { m.EmbeddingErrs.Add(n) }
+func (m *Metrics) AddQuotaDeny(n int64)       { m.QuotaDeny.Add(n) }
 
 func (m *Metrics) ObserveLLM(d time.Duration) {
 	if m == nil {
@@ -98,6 +101,7 @@ func (m *Metrics) Snapshot() map[string]any {
 		"tokens_total": m.TokensTotal.Load(), "reflect_total": m.ReflectTotal.Load(),
 		"compress_total": m.CompressTotal.Load(), "blob_offload_total": m.BlobOffload.Load(),
 		"embedding_calls": m.EmbeddingCalls.Load(), "embedding_errors": m.EmbeddingErrs.Load(),
+		"quota_deny_total": m.QuotaDeny.Load(),
 		"llm_latency_avg_ms": llmAvg, "llm_latency_count": llmN,
 		"tool_latency_avg_ms": toolAvg, "tool_latency_count": toolN,
 	}

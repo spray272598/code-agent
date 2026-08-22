@@ -66,9 +66,9 @@
 |---|------|------|
 | 3.1 | 多模型路由 + 成本优化（按意图 normal/deep/team 选模型、凭据继承、可用性回退；Token/成本预算追踪，`internal/domain/model`） | ✅ 降本 |
 | 3.2 | 技能市场 / 自定义 Skill 上传（Marketplace 接口 + LocalMarketplace 目录目录化、SearchMarket 搜索含安装态、UploadSkill 自定义上传校验、InstallListing 从市场安装） | ✅ 生态 |
-| 3.3 | 可观测看板（Grafana：QPS/错误率/超时/消耗）、用户级配额与限流 | 运营 |
-| 3.4 | OAuth / 第三方登录（GitHub/Google） | 注册转化 |
-| 3.5 | 计划-执行-反思可视化与可中断重规划（编排增强） | 复杂任务可控性 |
+| 3.3 | 可观测看板（Prometheus `/metrics` + JSON 端点已挂载；`AddQuotaDeny` 配额拒绝指标）+ 用户级每日 Token 配额强制（`checkQuota` + `TokenQuota` 配置 + `WithTokenQuota`） | ✅ 运营 |
+| 3.4 | OAuth / 第三方登录：OAuth2 授权码 + PKCE 协议核心（`auth/oauth.go`：PKCE S256/plain、授权码签发/一次性消费/过期、ExchangeRedeem 用平台 JWT 签发 token），为接 GitHub/Google 打基础 | ✅ 注册转化 |
+| 3.5 | 计划-执行-反思可视化与可中断重规划（编排增强）：`Plan.View()` 结构化进度快照 + `Visualize()` ASCII 树供 UI 渲染；`EventPlanUpdate` 每步增量进度广播；`ControlSignal`（Replan/Pause/Resume/Interrupt）经 `RunRegistry.AttachControl` 跨请求投递；失败连击 `replanFailStreak=3` 自动重规划（`EventReplan`） | ✅ 复杂任务可控性 |
 
 ---
 
@@ -85,8 +85,8 @@
 
 - **M1（已完成 ✅）**：SSH 交互终端（含 WS 实时终端）+ 意图指代消解 + 连接管理 UI + 文档一致性修复（toC）+ 本路线图落地。
 - **M2（已完成 ✅）**：P2 全部收口 —— RAG/Qdrant、自动化评测、TUI 离线终端、MCP SDK 评估，达到"接近生产级"基础，向 toC 产品推进。
-- **M3（进行中）**：进入 P3 起步。3.1 多模型路由 + 成本优化 ✅、3.2 技能市场 / 自定义 Skill 上传 ✅（`Marketplace` 接口 + `LocalMarketplace` + `SearchMarket`/`UploadSkill`/`InstallListing`）。后续推进 3.3–3.5。
-- **M4（P3 完成）**：规模化与生态能力（技能市场、可观测看板、OAuth、计划-执行-反思编排）。
+- **M3（进行中）**：进入 P3 起步。3.1 多模型路由 + 成本优化 ✅、3.2 技能市场 / 自定义 Skill 上传 ✅、3.3 可观测 + 用户级配额 ✅（Prometheus 配额指标 + `checkQuota` 每日 Token 上限）、3.4 OAuth2 授权码 + PKCE 核心 ✅（`auth/oauth.go`，为接 GitHub/Google SSO 打基础）、3.5 计划-执行-反思可视化与可中断重规划 ✅（`Plan.View`/`Visualize`、`EventPlanUpdate`/`EventReplan`、`ControlSignal` 跨请求控制 + 失败自动重规划）。
+- **M4（P3 完成）**：规模化与生态能力（技能市场、可观测看板、OAuth、计划-执行-反思编排）已随 M3 一并收口，P3 全部完成。
 
 ---
 

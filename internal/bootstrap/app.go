@@ -569,6 +569,7 @@ func Build(cfg *config.Config) (*App, error) {
 		Loop: runner, Sessions: sessionRepo, Messages: messageRepo, Tools: reg, Perm: perm,
 		Redis: rdb, TimeoutSec: cfg.Agent.TimeoutSec, Workspace: workspaceRoot,
 		RateEnabled: cfg.RateLimit.Enabled, RatePerMin: cfg.RateLimit.PerMinute,
+		QuotaEnabled: cfg.TokenQuota.Enabled, QuotaPerDay: cfg.TokenQuota.PerUserPerDay,
 	}, chatOpts...)
 	// per-step checkpoint snapshots (crash/restart resume)
 	chat.SetHooks(hooks)

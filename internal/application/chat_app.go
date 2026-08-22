@@ -52,6 +52,8 @@ type ChatApp struct {
 	workspace   string
 	rateEnabled bool
 	ratePerMin  int
+	quotaEnabled bool
+	quotaPerDay  int
 	keys        *auth.KeyStore
 	sshPool     *sshinfra.Pool
 	sshRepo     sshport.IConnectionRepository
@@ -410,6 +412,9 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	if err := a.checkRate(ctx, req.UserID); err != nil {
 		return nil, err
 	}
+	if err := a.checkQuota(ctx, req.UserID); err != nil {
+		return nil, err
+	}
 	unlock, err := a.acquireRunLock(ctx, session.ID)
 	if err != nil {
 		return nil, err
@@ -501,13 +506,19 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 		cancel()
 		return nil, nil, err
 	}
+	if err := a.checkQuota(ctx, req.UserID); err != nil {
+		cancel()
+		return nil, nil, err
+	}
 	unlock, err := a.acquireRunLock(ctx, session.ID)
 	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
+	ctrlCh := make(chan engine.Control, 8)
 	if a.runs != nil {
 		a.runs.Register(session.ID, cancel)
+		a.runs.AttachControl(session.ID, ctrlCh)
 	}
 	a.markRun(session, req, checkpoint.StatusRunning, nil, "")
 	ch := make(chan *engine.Event, 128)
@@ -518,7 +529,7 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 		if a.runs != nil {
 			defer a.runs.Unregister(session.ID, cancel)
 		}
-		res, err := a.loop.Run(ctx, session, req.Message, ch, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
+		res, err := a.loop.Run(ctx, session, req.Message, ch, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact, ControlCh: ctrlCh})
 		if err != nil && res == nil {
 			if ctx.Err() != nil {
 				a.markRun(session, req, checkpoint.StatusCancelled, nil, "cancel")
@@ -579,6 +590,46 @@ func (a *ChatApp) CancelSession(sessionID, reason string) (bool, error) {
 		}
 	}
 	return ok, nil
+}
+
+// SendControl delivers a mid-run instruction (replan / pause / resume /
+// interrupt) to an active session. It is a no-op if the session is not running
+// or the loop was started without a control channel. Returns true if delivered.
+func (a *ChatApp) SendControl(sessionID string, sig engine.ControlSignal, goal string) bool {
+	if a.runs == nil || sessionID == "" {
+		return false
+	}
+	return a.runs.Control(sessionID, sig, goal)
+}
+
+// ReplanSession asks an active session to rebuild its plan from the current
+// goal (or a new goal when newGoal is non-empty). This is the user-driven half
+// of interruptible re-planning; the loop will emit EventReplan + EventPlanUpdate.
+func (a *ChatApp) ReplanSession(sessionID, newGoal string) bool {
+	sig := engine.ControlReplan
+	if strings.TrimSpace(newGoal) != "" {
+		sig = engine.ControlReplanWithGoal
+	}
+	return a.SendControl(sessionID, sig, strings.TrimSpace(newGoal))
+}
+
+// PauseSession asks an active session to pause at the next step boundary and
+// emit a checkpoint, awaiting ResumeControl.
+func (a *ChatApp) PauseSession(sessionID string) bool {
+	return a.SendControl(sessionID, engine.ControlPause, "")
+}
+
+// ResumeControl resumes a paused session (control-level resume; distinct from
+// the checkpoint ResumeSession(ctx, id, message) that replays a saved run).
+func (a *ChatApp) ResumeControl(sessionID string) bool {
+	return a.SendControl(sessionID, engine.ControlResume, "")
+}
+
+// InterruptSession immediately stops an active session without waiting for a
+// step boundary (equivalent to CancelSession).
+func (a *ChatApp) InterruptSession(sessionID, reason string) (bool, error) {
+	a.SendControl(sessionID, engine.ControlInterrupt, "")
+	return a.CancelSession(sessionID, reason)
 }
 
 // GetCheckpoint returns durable snapshot for a session.
@@ -829,6 +880,42 @@ func (a *ChatApp) checkRate(ctx context.Context, userID string) error {
 		return fmt.Errorf("rate limit exceeded")
 	}
 	return nil
+}
+
+// checkQuota enforces the per-user daily token budget (3.3 observability:
+// user-level quota). It reads the running daily usage counter that
+// RecordTokenUsage maintains and rejects once the budget is reached.
+func (a *ChatApp) checkQuota(ctx context.Context, userID string) error {
+	if !a.quotaEnabled || a.redis == nil {
+		return nil
+	}
+	if userID == "" {
+		userID = "anonymous"
+	}
+	used, err := a.redis.Get(ctx, "token:user:"+userID+":"+todayKey())
+	if err != nil || used == "" {
+		return nil // no record yet → not over
+	}
+	var usedTok int
+	fmt.Sscanf(used, "%d", &usedTok)
+	if quotaExceeded(usedTok, a.quotaPerDay) {
+		observability.Current().AddQuotaDeny(1)
+		return fmt.Errorf("daily token quota (%d) exhausted", a.quotaPerDay)
+	}
+	return nil
+}
+
+// quotaExceeded is a pure predicate so it can be unit-tested without Redis.
+func quotaExceeded(used, quota int) bool {
+	if quota <= 0 {
+		return false
+	}
+	return used >= quota
+}
+
+// todayKey returns the current UTC date (YYYY-MM-DD) for per-day counters.
+func todayKey() string {
+	return time.Now().UTC().Format("2006-01-02")
 }
 
 func newID(prefix string) string {

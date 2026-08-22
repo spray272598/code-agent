@@ -62,3 +62,21 @@ func TestListResumableFiltersActive(t *testing.T) {
 		t.Fatalf("expected only orphan resumable, got %#v", list)
 	}
 }
+
+func TestQuotaExceeded(t *testing.T) {
+	// Unlimited when quota<=0.
+	if quotaExceeded(999999, 0) {
+		t.Fatal("quota<=0 must never be exceeded")
+	}
+	// Under limit.
+	if quotaExceeded(100, 200) {
+		t.Fatal("used=100 should be under quota=200")
+	}
+	// At limit is exceeded (prevent the request that would push past).
+	if !quotaExceeded(200, 200) {
+		t.Fatal("used==quota should be exceeded")
+	}
+	if !quotaExceeded(201, 200) {
+		t.Fatal("used>quota should be exceeded")
+	}
+}

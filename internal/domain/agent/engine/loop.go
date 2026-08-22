@@ -177,7 +177,14 @@ type SpecService interface {
 type RunOptions struct {
 	AutoApprove  bool
 	ForceCompact bool
+	// ControlCh delivers mid-run instructions (replan / pause / interrupt).
+	// Optional; when nil the loop runs uninterrupted.
+	ControlCh <-chan Control
 }
+
+// replanFailStreak is the consecutive tool-failure count that triggers an
+// automatic interruptible re-plan.
+const replanFailStreak = 3
 
 func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput string, eventCh chan<- *Event, opts RunOptions) (*Result, error) {
 	ctx, span := telemetry.StartSpan(ctx, "agent.run", map[string]string{
@@ -296,6 +303,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		}
 		if taskPlan != nil {
 			publish(&Event{Type: EventPlan, Content: taskPlan.Goal, Data: taskPlan, Timestamp: now()})
+			publish(&Event{Type: EventPlanUpdate, Content: taskPlan.Goal, Data: taskPlan.View(), Timestamp: now()})
 		}
 	}
 
@@ -342,6 +350,58 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		telemetry.TraceEvent(map[string]any{"event": "compress", "session": session.ID, "level": cr.Level, "saved": cr.Saved})
 	}
 
+	// publishPlanUpdate emits a render-ready plan snapshot when a plan exists.
+	publishPlanUpdate := func(p *plan.Plan, note string) {
+		if p == nil {
+			return
+		}
+		publish(&Event{Type: EventPlanUpdate, Content: note, Data: p.View(), Timestamp: now()})
+	}
+
+	// handleControl processes a single mid-run instruction. Returns true if the
+	// loop must stop (interrupt/pause boundary). Mutates taskPlan via replanCh.
+	replanPending := false
+	var newGoal string
+	handleControl := func(c Control) bool {
+		switch c.Signal {
+		case ControlReplan, ControlReplanWithGoal:
+			if c.Signal == ControlReplanWithGoal {
+				newGoal = strings.TrimSpace(c.Goal)
+			}
+			replanPending = true
+			return false
+		case ControlPause:
+			publish(&Event{Type: EventCheckpoint, SubType: "paused", Content: "paused for input", Data: taskPlan.View(), Timestamp: now()})
+			auditLog("pause", "", "user", "ok", 0)
+			// block until resume/interrupt or ctx cancel
+			for {
+				select {
+				case <-ctx.Done():
+					return true
+				case nc := <-opts.ControlCh:
+					if nc.Signal == ControlResume {
+						publish(&Event{Type: EventResume, Content: "resumed", Timestamp: now()})
+						return false
+					}
+					if nc.Signal == ControlInterrupt {
+						return true
+					}
+					if nc.Signal == ControlReplan || nc.Signal == ControlReplanWithGoal {
+						if nc.Signal == ControlReplanWithGoal {
+							newGoal = strings.TrimSpace(nc.Goal)
+						}
+						replanPending = true
+						return false
+					}
+				}
+			}
+		case ControlInterrupt:
+			return true
+		default:
+			return false
+		}
+	}
+
 	// skill tools: merge depends allowlists
 	var skillForTools *skill.Skill
 	if activeSkill != nil {
@@ -383,6 +443,9 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			telemetry.IncMemoryRead()
 		}
 	}
+	// sysBase is the system prompt without the plan section, so a mid-run
+	// re-plan can rebuild sys cheaply.
+	sysBase := sys
 	if taskPlan != nil {
 		sys += "\n" + taskPlan.StringForPrompt()
 	}
@@ -447,6 +510,37 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		case <-ctx.Done():
 			return &Result{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}, ctx.Err()
 		default:
+		}
+
+		// Non-blocking drain of pending control signals before this step.
+		if opts.ControlCh != nil {
+			for {
+				select {
+				case c := <-opts.ControlCh:
+					if handleControl(c) {
+						publish(&Event{Type: EventCancel, Content: "interrupted", Completed: true, Timestamp: now()})
+						return &Result{SessionID: session.ID, Response: "interrupted", ErrorClass: "cancel"}, ctx.Err()
+					}
+				default:
+					goto contCtrl
+				}
+			}
+		contCtrl:
+		}
+
+		// Apply a queued re-plan (user- or failure-triggered).
+		if replanPending && taskPlan != nil {
+			replanPending = false
+			ref := l.reflect(ctx, "re-planning after stall or user request", taskPlan.Goal)
+			paused := taskPlan
+			taskPlan = paused.Replan(newGoal)
+			newGoal = ""
+			publish(&Event{Type: EventReplan, Content: ref, Data: taskPlan, Timestamp: now()})
+			publishPlanUpdate(taskPlan, "replan")
+			// refresh plan in system prompt for subsequent steps
+			sys = sysBase + "\n" + taskPlan.StringForPrompt()
+			telemetry.IncReflect()
+			auditLog("replan", "", ref, "ok", 0)
 		}
 
 		// Active token budget via TokenManager
@@ -577,6 +671,15 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		streak, _ := l.applyOutcomes(ctx, session, step, outcomes, &messages, auditLog, publish, advance)
 		if streak > toolFailStreak {
 			toolFailStreak = streak
+		}
+		// Emit incremental plan progress for UI rendering.
+		if taskPlan != nil {
+			publishPlanUpdate(taskPlan, "step")
+			// Auto re-plan when tool failures pile up (interruptible: the new
+			// plan is proposed via EventReplan and the loop continues).
+			if streak >= replanFailStreak {
+				replanPending = true
+			}
 		}
 		if needBreak {
 			break

@@ -228,3 +228,118 @@ func (p *Plan) Progress() float64 {
 	}
 	return float64(done) / float64(len(p.Steps)) * 100
 }
+
+// PlanStepView is a single step's renderable snapshot.
+type PlanStepView struct {
+	Index  int    `json:"index"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+	Note   string `json:"note,omitempty"`
+}
+
+// PlanView is a structured, render-ready snapshot of a plan. UI layers can
+// consume it directly to draw progress trees without re-parsing prompt text.
+type PlanView struct {
+	Goal     string         `json:"goal"`
+	Source   string         `json:"source"`
+	SpecRef  string         `json:"spec_ref,omitempty"`
+	Progress float64        `json:"progress"` // 0-100
+	Total    int            `json:"total"`
+	Done     int            `json:"done"`
+	Failed   int            `json:"failed"`
+	Current  int            `json:"current"` // index of first pending/in_progress step, 0 if none
+	Steps    []PlanStepView `json:"steps"`
+}
+
+// View returns a render-ready snapshot of the plan.
+func (p *Plan) View() *PlanView {
+	if p == nil {
+		return nil
+	}
+	done, failed, current := 0, 0, 0
+	steps := make([]PlanStepView, 0, len(p.Steps))
+	for _, s := range p.Steps {
+		switch s.Status {
+		case "done":
+			done++
+		case "failed":
+			failed++
+		}
+		if current == 0 && (s.Status == "pending" || s.Status == "" || s.Status == "in_progress") {
+			current = s.Index
+		}
+		steps = append(steps, PlanStepView{Index: s.Index, Title: s.Title, Status: s.Status, Note: s.Note})
+	}
+	return &PlanView{
+		Goal:     p.Goal,
+		Source:   p.Source,
+		SpecRef:  p.SpecRef,
+		Progress: p.Progress(),
+		Total:    len(p.Steps),
+		Done:     done,
+		Failed:   failed,
+		Current:  current,
+		Steps:    steps,
+	}
+}
+
+// Visualize renders an ASCII tree of the plan for terminals / logs.
+func (p *Plan) Visualize() string {
+	if p == nil || len(p.Steps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Plan: ")
+	b.WriteString(p.Goal)
+	if p.SpecRef != "" {
+		b.WriteString(fmt.Sprintf(" (from %s)", p.SpecRef))
+	}
+	b.WriteString(fmt.Sprintf("  [%.0f%%]\n", p.Progress()))
+	for i, s := range p.Steps {
+		branch := "├─"
+		if i == len(p.Steps)-1 {
+			branch = "└─"
+		}
+		marker := "[ ]"
+		switch s.Status {
+		case "done":
+			marker = "[x]"
+		case "in_progress":
+			marker = "[→]"
+		case "blocked":
+			marker = "[!]"
+		case "failed":
+			marker = "[✗]"
+		}
+		b.WriteString(fmt.Sprintf("%s %s %d. %s", branch, marker, s.Index, s.Title))
+		if s.Note != "" {
+			b.WriteString("  (" + s.Note + ")")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// Replan rebuilds a fresh rule-driven plan from a (possibly revised) goal.
+// It preserves the original Goal field unless a new goal is provided (empty
+// string keeps the current goal). Used by interruptible re-planning when the
+// agent gets stuck or the user requests a re-plan mid-run.
+func (p *Plan) Replan(newGoal string) *Plan {
+	if p == nil {
+		return nil
+	}
+	goal := p.Goal
+	if strings.TrimSpace(newGoal) != "" {
+		goal = strings.TrimSpace(newGoal)
+	}
+	np := BuildRulePlan(goal)
+	if np == nil {
+		// single-step goal: keep a minimal one-step plan
+		np = &Plan{Goal: goal, Source: "replan"}
+	}
+	np.Source = "replan"
+	if p.SpecRef != "" {
+		np.SpecRef = p.SpecRef
+	}
+	return np
+}

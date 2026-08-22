@@ -11,6 +11,8 @@ const (
 	EventToolResult EventType = "tool_result"
 	EventPermission EventType = "permission"
 	EventPlan       EventType = "plan"
+	EventPlanUpdate EventType = "plan_update" // incremental plan progress (data: *plan.PlanView)
+	EventReplan     EventType = "replan"      // plan rebuilt mid-run (data: *plan.Plan)
 	EventCompress   EventType = "compress"
 	EventAnswer     EventType = "answer"
 	EventError      EventType = "error"
@@ -51,4 +53,30 @@ type Result struct {
 	NeedPermission bool
 	Pending        any
 	ErrorClass     string
+}
+
+// ControlSignal is a mid-run instruction sent to the engine loop from the
+// caller (e.g. user interrupt, request to re-plan, or resume after pause).
+type ControlSignal int
+
+const (
+	// ControlNone is the zero value (no-op).
+	ControlNone ControlSignal = iota
+	// ControlReplan asks the loop to rebuild the plan from the current goal.
+	ControlReplan
+	// ControlReplanWithGoal asks the loop to rebuild the plan with a new goal.
+	ControlReplanWithGoal
+	// ControlPause asks the loop to stop at the next step boundary and emit a
+	// checkpoint, awaiting resume.
+	ControlPause
+	// ControlResume resumes a paused loop.
+	ControlResume
+	// ControlInterrupt stops the loop immediately (equivalent to ctx cancel).
+	ControlInterrupt
+)
+
+// Control is a single instruction delivered over a control channel.
+type Control struct {
+	Signal ControlSignal
+	Goal   string // used by ControlReplanWithGoal
 }

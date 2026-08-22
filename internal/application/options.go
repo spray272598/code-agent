@@ -131,6 +131,8 @@ type CoreDeps struct {
 	RateEnabled bool
 	RatePerMin  int
 	APIKeys     []string // hashed at construct; prefer WithKeyStore for pre-hashed
+	QuotaEnabled bool     // per-user daily token quota (3.3)
+	QuotaPerDay  int      // tokens allowed per user per day (0 = unlimited)
 }
 
 // New builds ChatApp from required deps + optional Option list.
@@ -143,6 +145,7 @@ func New(core CoreDeps, opts ...Option) *ChatApp {
 		tools: core.Tools, perm: core.Perm, redis: core.Redis,
 		timeoutSec: core.TimeoutSec, workspace: core.Workspace,
 		rateEnabled: core.RateEnabled, ratePerMin: core.RatePerMin,
+		quotaEnabled: core.QuotaEnabled && core.QuotaPerDay > 0, quotaPerDay: core.QuotaPerDay,
 		keys:  auth.NewKeyStore(core.APIKeys),
 		slash: slash.NewRegistry(),
 	}
@@ -173,4 +176,13 @@ func NewChatApp(
 		Perm: perm, Redis: redis, TimeoutSec: timeoutSec, Workspace: workspace,
 		RateEnabled: rateEnabled, RatePerMin: ratePerMin, APIKeys: apiKeys,
 	})
+}
+
+// WithTokenQuota enables the per-user daily token budget (3.3 observability:
+// user-level quota). perDay <= 0 disables regardless of enabled.
+func WithTokenQuota(enabled bool, perDay int) Option {
+	return func(a *ChatApp) {
+		a.quotaEnabled = enabled && perDay > 0
+		a.quotaPerDay = perDay
+	}
 }

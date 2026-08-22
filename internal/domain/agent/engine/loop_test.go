@@ -239,3 +239,173 @@ func (n *namedTool) InputSchema() map[string]any { return map[string]any{} }
 func (n *namedTool) Execute(context.Context, map[string]any) (tool.Result, error) {
 	return n.fn(), nil
 }
+
+// --- 3.5: plan visualization + interruptible re-planning ---
+
+type failNTimesTool struct {
+	mu    sync.Mutex
+	fails int
+}
+
+func (f *failNTimesTool) Name() string        { return "fail" }
+func (f *failNTimesTool) Description() string { return "fails the first N times" }
+func (f *failNTimesTool) InputSchema() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (f *failNTimesTool) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fails > 0 {
+		f.fails--
+		return tool.Result{Text: "boom", IsError: true}, nil
+	}
+	return tool.Result{Text: "ok"}, nil
+}
+
+func TestLoopPlanAutoReplanOnStall(t *testing.T) {
+	ft := &failNTimesTool{fails: 3}
+	reg := tool.NewRegistry()
+	reg.Register(ft)
+	perm := security.NewGuard("./workspace", true, true)
+	llm := &scriptedLLM{queue: []string{
+		`Thought: explore
+Action: {"name":"fail","args":{}}`,
+		`Thought: retry
+Action: {"name":"fail","args":{}}`,
+		`Thought: retry2
+Action: {"name":"fail","args":{}}`,
+		`Thought: recovered
+Final Answer: survived replan`,
+	}}
+	loop := NewLoop(llm, reg, newMemSessionRepo(), &memMsgRepo{}, perm, 8, 8000)
+	// message triggers a multi-step plan
+	sess := sessmodel.NewSession("s5", "u1", "p1", "t", "")
+	ch := make(chan *Event, 128)
+	go func() {
+		for range ch {
+		}
+	}()
+	res, err := loop.Run(context.Background(), sess, "先探索然后修改文件并且验证", ch, RunOptions{AutoApprove: true})
+	close(ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Response, "survived replan") {
+		t.Fatalf("response=%q", res.Response)
+	}
+}
+
+func TestLoopPlanEmitVisualization(t *testing.T) {
+	llm := &scriptedLLM{queue: []string{
+		`Thought: explore
+Action: {"name":"echo","args":{"text":"x"}}`,
+		`Thought: done
+Final Answer: ok`,
+	}}
+	loop, _ := setupLoop(t, llm, false)
+	sess := sessmodel.NewSession("s6", "u1", "p1", "t", "")
+	var events []*Event
+	ch := make(chan *Event, 128)
+	done := make(chan struct{})
+	go func() {
+		for e := range ch {
+			events = append(events, e)
+		}
+		close(done)
+	}()
+	_, err := loop.Run(context.Background(), sess, "先探索然后修改文件并且验证", ch, RunOptions{AutoApprove: true})
+	close(ch)
+	<-done
+	if err != nil {
+		t.Fatal(err)
+	}
+	var planUpdates, planEvents int
+	for _, e := range events {
+		switch e.Type {
+		case EventPlanUpdate:
+			planUpdates++
+			if e.Data == nil {
+				t.Fatalf("plan_update missing data")
+			}
+		case EventPlan:
+			planEvents++
+		}
+	}
+	if planEvents == 0 {
+		t.Fatal("expected at least one EventPlan")
+	}
+	if planUpdates == 0 {
+		t.Fatalf("expected plan update events for visualization, got %d", planUpdates)
+	}
+}
+
+// gatedLLM blocks on its first Generate until gate is closed, so a control
+// signal can be deterministically queued before any step executes.
+type gatedLLM struct {
+	mu    sync.Mutex
+	queue []string
+	calls int
+	gate  chan struct{}
+}
+
+func (s *gatedLLM) Generate(ctx context.Context, req *port.ChatRequest) (*port.ChatResponse, error) {
+	s.mu.Lock()
+	s.calls++
+	first := s.calls == 1
+	s.mu.Unlock()
+	if first {
+		<-s.gate // wait until the test has sent its control signal
+	}
+	s.mu.Lock()
+	if len(s.queue) == 0 {
+		s.mu.Unlock()
+		return &port.ChatResponse{Content: "Final Answer: fallback"}, nil
+	}
+	c := s.queue[0]
+	s.queue = s.queue[1:]
+	s.mu.Unlock()
+	return &port.ChatResponse{Content: c, TotalTokens: 10}, nil
+}
+
+func (s *gatedLLM) GenerateStream(ctx context.Context, req *port.ChatRequest, onDelta func(delta port.StreamDelta)) (*port.ChatResponse, error) {
+	return s.Generate(ctx, req)
+}
+
+func TestLoopPlanUserReplan(t *testing.T) {
+	llm := &gatedLLM{gate: make(chan struct{})}
+	llm.queue = []string{
+		`Thought: step1
+Action: {"name":"echo","args":{"text":"x"}}`,
+		`Thought: after replan
+Final Answer: replanned`,
+	}
+	loop, _ := setupLoop(t, llm, false)
+	sess := sessmodel.NewSession("s7", "u1", "p1", "t", "")
+	ctrlCh := make(chan Control, 4)
+	ch := make(chan *Event, 128)
+	var gotReplan bool
+	done := make(chan struct{})
+	go func() {
+		for e := range ch {
+			if e.Type == EventReplan {
+				gotReplan = true
+			}
+		}
+		close(done)
+	}()
+	runDone := make(chan struct{})
+	go func() {
+		loop.Run(context.Background(), sess, "先探索然后修改文件并且验证", ch, RunOptions{AutoApprove: true, ControlCh: ctrlCh})
+		close(runDone)
+	}()
+	// queue the control signal, then unblock the first LLM call so the loop
+	// proceeds with the signal already buffered for the step-2 drain.
+	ctrlCh <- Control{Signal: ControlReplanWithGoal, Goal: "新目标：重构整个模块并且运行测试"}
+	close(llm.gate)
+	<-runDone
+	close(ch)
+	<-done
+	if !gotReplan {
+		t.Fatal("expected EventReplan after user control signal")
+	}
+}

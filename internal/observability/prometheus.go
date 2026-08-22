@@ -36,6 +36,7 @@ func WritePrometheus(w http.ResponseWriter, r *http.Request) {
 	line("code_agent_reflect_total", "Reflect invocations", "counter", m["reflect_total"])
 	line("code_agent_compress_total", "Context compressions", "counter", m["compress_total"])
 	line("code_agent_blob_offload_total", "Large tool results offloaded", "counter", m["blob_offload_total"])
+	line("code_agent_quota_deny_total", "Token-quota denials (user daily limit)", "counter", m["quota_deny_total"])
 	line("code_agent_llm_latency_avg_ms", "Average LLM latency ms", "gauge", m["llm_latency_avg_ms"])
 	line("code_agent_tool_latency_avg_ms", "Average tool latency ms", "gauge", m["tool_latency_avg_ms"])
 	line("code_agent_llm_calls_total", "LLM generate calls", "counter", m["llm_latency_count"])
