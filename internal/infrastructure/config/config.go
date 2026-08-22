@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/spray272598/code-agent/internal/domain/model"
 )
 
 type Config struct {
@@ -116,6 +118,60 @@ type LLMConfig struct {
 	EmbeddingAPIBase string `yaml:"embedding_api_base"`
 	// EmbeddingEnabled is derived: true when EmbeddingModel != "" && APIKey != "".
 	EmbeddingEnabled bool `yaml:"-"`
+	// Routes enables M3/3.1 multi-model routing: map intent type to a
+	// specific model endpoint. Empty → single-model (default route from above).
+	Routes []ModelRouteConfig `yaml:"routes"`
+}
+
+// ModelRouteConfig is the YAML/Env representation of a model route.
+type ModelRouteConfig struct {
+	MatchIntent string  `yaml:"match_intent"` // normal | deep | team | default
+	Provider    string  `yaml:"provider"`
+	Model       string  `yaml:"model"`
+	APIBase     string  `yaml:"api_base"`
+	APIKey      string  `yaml:"api_key"`
+	CostPer1kIn  float64 `yaml:"cost_per_1k_in"`
+	CostPer1kOut float64 `yaml:"cost_per_1k_out"`
+}
+
+// ToRoutes converts the LLM config into a model.Router. When no explicit
+// routes are configured, a single default route is synthesized from the main
+// LLM fields — preserving the historical single-model behavior.
+func (l LLMConfig) ToRoutes() *model.Router {
+	if len(l.Routes) == 0 {
+		r := model.NewRouter([]model.ModelRoute{{
+			MatchIntent:  "default",
+			Provider:     l.Provider,
+			Model:        l.Model,
+			APIBase:      l.APIBase,
+			APIKey:       l.APIKey,
+			CostPer1kIn:  0,
+			CostPer1kOut: 0,
+		}})
+		return r
+	}
+	routes := make([]model.ModelRoute, 0, len(l.Routes))
+	for _, rc := range l.Routes {
+		// Inherit missing credentials from the main LLM block so a route can
+		// override only the model while reusing the shared key/base.
+		apiKey, apiBase := rc.APIKey, rc.APIBase
+		if apiKey == "" {
+			apiKey = l.APIKey
+		}
+		if apiBase == "" {
+			apiBase = l.APIBase
+		}
+		routes = append(routes, model.ModelRoute{
+			MatchIntent:  rc.MatchIntent,
+			Provider:     rc.Provider,
+			Model:        rc.Model,
+			APIBase:      apiBase,
+			APIKey:       apiKey,
+			CostPer1kIn:  rc.CostPer1kIn,
+			CostPer1kOut: rc.CostPer1kOut,
+		})
+	}
+	return model.NewRouter(routes)
 }
 
 type DatabaseConfig struct {
@@ -188,8 +244,9 @@ type MCPConfig struct {
 }
 
 type SkillsConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Dir     string `yaml:"dir"`
+	Enabled   bool   `yaml:"enabled"`
+	Dir       string `yaml:"dir"`       // installed/local skills root
+	MarketDir string `yaml:"market_dir"` // marketplace catalog root (browse-only)
 }
 
 type HooksConfig struct {
@@ -264,7 +321,7 @@ func Default() *Config {
 			MaxBodyBytes: 2 << 20,
 		},
 		MCP:      MCPConfig{Enabled: true},
-		Skills:   SkillsConfig{Enabled: true, Dir: "./skills"},
+		Skills:   SkillsConfig{Enabled: true, Dir: "./skills", MarketDir: "./skills/market"},
 		Hooks:    HooksConfig{Enabled: true, Dir: "./hooks"},
 		Commands: CommandsConfig{Dir: "./commands"},
 		Logging:  LoggingConfig{Level: "info"},

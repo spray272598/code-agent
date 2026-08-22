@@ -366,7 +366,8 @@ func Build(cfg *config.Config) (*App, error) {
 	var skillSvc *skill.Service
 	if cfg.Skills.Enabled {
 		skillSvc = skill.NewService(cfg.Skills.Dir)
-		log.Printf("[bootstrap] skills=%d dir=%s\n", len(skillSvc.List()), skillSvc.RootDir())
+		skillSvc.SetMarketplace(skill.NewLocalMarketplace(cfg.Skills.MarketDir))
+		log.Printf("[bootstrap] skills=%d dir=%s market=%s\n", len(skillSvc.List()), skillSvc.RootDir(), cfg.Skills.MarketDir)
 	}
 
 	// spec-driven development: load spec.md/tasks.md/checklist.md/CLAUDE.md from workspace root
@@ -512,6 +513,7 @@ func Build(cfg *config.Config) (*App, error) {
 			TokenBudget:        cfg.Agent.TokenBudget,
 			GraphResume:        cfg.EinoGraphResumeEnabled(),
 			GraphCheckPointDir: cfg.Agent.EinoCheckPointDir,
+			Router:             cfg.LLM.ToRoutes(),
 		}, reg, perm, sessionRepo, messageRepo)
 		er.SetHooks(hooks)
 		er.SetAudit(auditRepo)

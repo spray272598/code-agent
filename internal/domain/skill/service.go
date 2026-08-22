@@ -22,6 +22,8 @@ type Service struct {
 	embed   port.IEmbeddingPort
 	// emb is a lazy cache of skill vectors (skillID -> embedding).
 	emb map[string][]float32
+	// market is the catalog source for the skills marketplace (3.2).
+	market Marketplace
 }
 
 func NewService(rootDir string) *Service {
@@ -430,6 +432,15 @@ func parseSkillDir(dir string) (*Skill, error) {
 	}
 	if v := meta["description"]; v != "" {
 		sk.Description = v
+	}
+	if v := meta["author"]; v != "" {
+		sk.Author = v
+	}
+	if v := meta["version"]; v != "" {
+		sk.Version = v
+	}
+	if v := meta["tags"]; v != "" {
+		sk.Tags = splitCSV(v)
 	}
 	if v := meta["triggers"]; v != "" {
 		sk.Triggers = splitCSV(v)

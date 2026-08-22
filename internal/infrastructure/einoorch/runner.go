@@ -23,6 +23,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/intent"
+	"github.com/spray272598/code-agent/internal/domain/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
@@ -48,6 +49,9 @@ type Config struct {
 	GraphResume bool
 	// GraphCheckPointDir is the durable store dir (empty → memory store when GraphResume).
 	GraphCheckPointDir string
+	// Router enables M3/3.1 multi-model routing: when non-nil, the model
+	// endpoint is selected per intent before each model call.
+	Router *model.Router
 }
 
 // Runner uses CloudWeGo Eino ReAct; security/business cross-cuts stay in domain tools.
@@ -323,6 +327,9 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		ir = intent.Result{Intent: intent.IntentNormal, CleanInput: userInput}
 	}
 	publish(&engine.Event{Type: engine.EventThought, SubType: "intent", Content: "intent: " + ir.Intent.String() + " (source: " + ir.Source + ")", Timestamp: nowMs()})
+
+	// M3/3.1: per-intent model routing (before any model init).
+	r.applyRoute(ir.Intent.String())
 
 	if r.Multi != nil && ir.Intent == intent.IntentDeep {
 		return r.Multi.RunDeep(ctx, session, ir.CleanInput, publish, opts)
@@ -749,6 +756,25 @@ func (r *Runner) persistAssistant(ctx context.Context, session *sessmodel.Sessio
 	am.TokenCount = common.EstimateTokens(text)
 	if err := r.messages.Save(ctx, am); err != nil {
 		observability.LogError("save assistant message", err)
+	}
+}
+
+// applyRoute selects the model endpoint for the given intent and updates the
+// active config so subsequent newChatModel calls use it. No-op when no Router
+// is configured (single-model behavior preserved).
+func (r *Runner) applyRoute(intent string) {
+	if r.cfg.Router == nil {
+		return
+	}
+	route := r.cfg.Router.Select(intent)
+	if route.Model != "" {
+		r.cfg.Model = route.Model
+	}
+	if route.APIBase != "" {
+		r.cfg.APIBase = route.APIBase
+	}
+	if route.APIKey != "" {
+		r.cfg.APIKey = route.APIKey
 	}
 }
 

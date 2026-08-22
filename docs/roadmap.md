@@ -64,8 +64,8 @@
 
 | # | 任务 | 价值 |
 |---|------|------|
-| 3.1 | 多模型路由 + 成本优化（按任务选模型） | 降本 |
-| 3.2 | 技能市场 / 自定义 Skill 上传 | 生态 |
+| 3.1 | 多模型路由 + 成本优化（按意图 normal/deep/team 选模型、凭据继承、可用性回退；Token/成本预算追踪，`internal/domain/model`） | ✅ 降本 |
+| 3.2 | 技能市场 / 自定义 Skill 上传（Marketplace 接口 + LocalMarketplace 目录目录化、SearchMarket 搜索含安装态、UploadSkill 自定义上传校验、InstallListing 从市场安装） | ✅ 生态 |
 | 3.3 | 可观测看板（Grafana：QPS/错误率/超时/消耗）、用户级配额与限流 | 运营 |
 | 3.4 | OAuth / 第三方登录（GitHub/Google） | 注册转化 |
 | 3.5 | 计划-执行-反思可视化与可中断重规划（编排增强） | 复杂任务可控性 |
@@ -84,9 +84,9 @@
 ## 5. 里程碑建议
 
 - **M1（已完成 ✅）**：SSH 交互终端（含 WS 实时终端）+ 意图指代消解 + 连接管理 UI + 文档一致性修复（toC）+ 本路线图落地。
-- **M2（进行中）**：RAG/Qdrant ✅ 已落地（MemIndex 默认 + Qdrant 可配）；自动化评测 ✅ 已落地（数据驱动回归 + `run_eval.ps1`）；TUI ✅ 已落地（`cmd/tui` 离线终端 + KMS 加密凭据）；MCP SDK 评估 ✅ 已落地（`mcp-go` 适配 spike + `docs/mcp-sdk-eval.md`，结论：当前不替换，触发条件未达）。M2 全部收口，向"可对外试用的 toC 产品"推进。
-- **M3（P2 完成）**：RAG + 自动化评测 + TUI，达到"接近生产级"。
-- **M4（P3 完成）**：规模化与生态能力。
+- **M2（已完成 ✅）**：P2 全部收口 —— RAG/Qdrant、自动化评测、TUI 离线终端、MCP SDK 评估，达到"接近生产级"基础，向 toC 产品推进。
+- **M3（进行中）**：进入 P3 起步。3.1 多模型路由 + 成本优化 ✅、3.2 技能市场 / 自定义 Skill 上传 ✅（`Marketplace` 接口 + `LocalMarketplace` + `SearchMarket`/`UploadSkill`/`InstallListing`）。后续推进 3.3–3.5。
+- **M4（P3 完成）**：规模化与生态能力（技能市场、可观测看板、OAuth、计划-执行-反思编排）。
 
 ---
 
