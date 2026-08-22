@@ -51,3 +51,9 @@ web/dist/
 
 # MinIO / local data
 /data/
+
+# TS build cache
+*.tsbuildinfo
+
+# root build artifacts (go build ./cmd/...)
+/host-agent

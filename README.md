@@ -23,6 +23,37 @@ CLI ──SSE──► Server(trigger)
                          └─ GuardedTool → domain tools + MCP
 ```
 
+## 目录结构（DDD 分层）
+
+代码位于 `internal/`，按领域驱动设计严格分层，依赖方向自上而下（外层依赖内层，领域层不依赖任何外层）：
+
+```
+cmd/                      # 入口层：server / cli / host-agent 进程引导
+internal/
+  domain/                 # 领域层（核心业务，无外部依赖）
+    agent/                #   engine(主循环/控制) · plan(可视化/重规划) · events
+    contextx/             #   上下文压缩 Compressor / Summarizer
+    memory/               #   长期记忆（向量召回 + 固化）
+    security/             #   Guard 五层权限 · sandbox 三档（readonly/workspace/strict）
+    subagent/             #   子代理编排 · 窗口隔离回写
+    session/              #   会话模型与持久化仓储
+    tool/                 #   领域工具（coding/workspace/ssh/mcp…）
+    intent/ · model/ · deepagent/ · checkpoint/ · audit/
+  application/            # 应用层：用例编排（ChatApp / RunBackground / Options）
+  infrastructure/         # 基础设施层：外部适配器
+    einoorch/             #   Eino 编排 Runner（异步压缩、子代理注入）
+    config/ · llm/ · mcp/ · redis/ · mysql/ · sqlite/ · kms/ · vector/ · ssh/
+  trigger/                # 触发层：HTTP(SSE) · MCP · ACP 适配
+  bootstrap/              # 组合根：装配各层依赖、注入配置
+web/                      # 前端（Vite + React，独立构建，产物 web/dist/ 不入库）
+docs/                     # 设计/架构/边界/路线图等文档
+configs/                  # 运行时配置（config.yaml）
+scripts/                  # 本地一键 / 评测 / 压测（PowerShell）
+commands/ hooks/ skills/ teams/ deploy/   # 提示词 / 钩子 / 技能 / 团队编排 / 部署清单
+```
+
+> 运行时产物（二进制、/bin、/tmp、/data、/secrets、/workspace、/reports、web/dist、*.tsbuildinfo）均已由 `.gitignore` 排除，不入库。
+
 ## 快速开始
 
 ```powershell
@@ -84,13 +115,15 @@ llm:
 ## 能力清单
 
 - **账号（toC）**：邮箱 + 密码注册/登录，JWT 鉴权，邮箱验证与密码重置；数据按 `user_id` 隔离（无企业/组织概念）
-- **编排**：Eino ReAct + callbacks→SSE；`/team` 并行子代理；native 自研 Loop 兜底  
-- **安全**：五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流  
-- **工具（本地 Workspace）**：read/write/edit/bash/glob/grep + memory + delegate  
-- **工具（远程 SSH）**：`ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_terminal`（交互式 PTY 终端）；连接凭据经 KMS 加密存储，仓储支持 SQLite/MySQL  
-- **MCP**：stdio 热装，`server__tool` 注册，**与 core 工具同一 GuardedTool 横切**  
-- **Skill / 记忆 / L0–L3 压缩 / Token 预算**  
-- **存储/可观测**：SQLite | MySQL | memory；MinIO；OTLP/Prometheus；host-agent  
+- **编排**：Eino ReAct + callbacks→SSE；`/team` 并行子代理；native 自研 Loop 兜底；**计划-执行-反思**可视化 + 可中断重规划（3.5）
+- **安全**：五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流；**sandbox 三档**（readonly / workspace / strict，5.1）
+- **工具（本地 Workspace）**：read/write/edit/bash/glob/grep + `apply_patch`（结构化 diff）+ `lint`/`codecov` + `memory` + `delegate`（5.2）
+- **工具（远程 SSH）**：`ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_terminal`（交互式 PTY 终端）；连接凭据经 KMS 加密存储，仓储支持 SQLite/MySQL
+- **MCP**：stdio 热装，`server__tool` 注册，**与 core 工具同一 GuardedTool 横切**
+- **上下文管理（5.7）**：异步压缩（阈值可配 `compact_threshold_ratio`）+ 长任务跨段记忆固化 + PlanMode 探索期上下文隔离 + 子代理窗口隔离回写
+- **生态对接**：ACP 协议适配层（IDE 驱动，5.4）；用量监控面板 `/api/v1/usage`（5.3）；Plan 只读探索期状态机（5.5）；Headless 后台长任务（5.6）
+- **Skill / 记忆 / L0–L3 压缩 / Token 预算**
+- **存储/可观测**：SQLite | MySQL | memory；MinIO；OTLP/Prometheus；host-agent 
 
 ## 文档
 
