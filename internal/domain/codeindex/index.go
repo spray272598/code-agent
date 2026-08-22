@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/vector"
 )
 
 var (
@@ -60,6 +63,11 @@ type Index struct {
 	// semantic search (optional): file summary vectors
 	embed   port.IEmbeddingPort
 	fileEmb map[string][]float32
+	// chunk-level dense retrieval (optional, RAG). When vecIdx is set,
+	// BuildEmbeddings also indexes code chunks into it (collection vecColl),
+	// and SearchSemanticChunks queries them for precise code snippets.
+	vecIdx  vector.IVectorIndex
+	vecColl string
 }
 
 func New(root string) *Index {
@@ -77,6 +85,25 @@ func New(root string) *Index {
 
 // SetEmbedder enables optional semantic search over file summaries.
 func (idx *Index) SetEmbedder(e port.IEmbeddingPort) { idx.embed = e }
+
+// SetVectorIndex enables chunk-level semantic retrieval backed by an
+// IVectorIndex (e.g. MemIndex / Qdrant). coll namespaces the points; subsequent
+// BuildEmbeddings populate it and SearchSemanticChunks query it. Safe to call
+// with a nil index or empty collection (no-op).
+func (idx *Index) SetVectorIndex(v vector.IVectorIndex, coll string) {
+	if v != nil && coll != "" {
+		idx.vecIdx = v
+		idx.vecColl = coll
+	}
+}
+
+// ChunkHit is a ranked chunk-level search result returned by SearchSemanticChunks.
+type ChunkHit struct {
+	Path       string  `json:"path"`
+	ChunkIndex int     `json:"chunk_index"`
+	Score      float64 `json:"score"`
+	Snippet    string  `json:"snippet"`
+}
 
 func (idx *Index) Root() string {
 	if idx == nil {
@@ -261,7 +288,141 @@ func (idx *Index) BuildEmbeddings(ctx context.Context, maxFiles int) int {
 	idx.mu.Lock()
 	idx.fileEmb = emb
 	idx.mu.Unlock()
+
+	// Sprint 2.1: chunk-level dense indexing for RAG retrieval. Degrades
+	// silently if the vector backend is unavailable or embedding fails.
+	if idx.vecIdx != nil && idx.embed != nil {
+		if dim := idx.embed.Dims(); dim > 0 {
+			idx.indexChunks(ctx, paths, dim)
+		}
+	}
 	return len(emb)
+}
+
+// indexChunks splits each indexed file into chunks, embeds them, and upserts the
+// vectors into the configured IVectorIndex collection. Errors are ignored so a
+// failing remote backend never breaks the build.
+func (idx *Index) indexChunks(ctx context.Context, paths []string, dim int) {
+	if err := idx.vecIdx.Ensure(ctx, idx.vecColl, dim); err != nil {
+		return
+	}
+	type pendingChunk struct {
+		id      string
+		snippet string
+		payload map[string]any
+	}
+	var all []pendingChunk
+	for _, p := range paths {
+		full, err := os.ReadFile(filepath.Join(idx.root, filepath.FromSlash(p)))
+		if err != nil {
+			continue
+		}
+		for _, c := range chunkContent(string(full)) {
+			all = append(all, pendingChunk{
+				id:      p + "#" + strconv.Itoa(c.Index),
+				snippet: snippetOf(c.Text, 300),
+				payload: map[string]any{
+					"rel_path":    p,
+					"chunk_index": c.Index,
+					"line_start":  c.LineStart,
+				},
+			})
+		}
+	}
+	const batch = 32
+	for i := 0; i < len(all); i += batch {
+		end := i + batch
+		if end > len(all) {
+			end = len(all)
+		}
+		group := all[i:end]
+		texts := make([]string, len(group))
+		for j, g := range group {
+			texts[j] = g.snippet
+		}
+		vecs, eerr := idx.embed.Embed(ctx, texts)
+		if eerr != nil || len(vecs) != len(group) {
+			continue
+		}
+		points := make([]vector.Point, len(group))
+		for j, g := range group {
+			payload := g.payload
+			payload["snippet"] = g.snippet
+			points[j] = vector.Point{ID: g.id, Vector: vecs[j], Payload: payload}
+		}
+		_ = idx.vecIdx.Upsert(ctx, idx.vecColl, points)
+	}
+}
+
+// chunkContent splits source text into ~chunkTargetRunes windows (no overlap
+// for simplicity) and records the 1-based starting line of each chunk.
+func chunkContent(content string) []codeChunk {
+	lines := strings.Split(content, "\n")
+	var chunks []codeChunk
+	var buf strings.Builder
+	lineStart := 1
+	runeCount := 0
+	flush := func() {
+		if buf.Len() == 0 {
+			return
+		}
+		chunks = append(chunks, codeChunk{Index: len(chunks), LineStart: lineStart, Text: buf.String()})
+		buf.Reset()
+		runeCount = 0
+	}
+	for i, ln := range lines {
+		if buf.Len() > 0 {
+			buf.WriteByte('\n')
+			runeCount++
+		}
+		buf.WriteString(ln)
+		runeCount += utf8.RuneCountInString(ln)
+		if runeCount >= chunkTargetRunes {
+			flush()
+			lineStart = i + 2
+		}
+	}
+	flush()
+	return chunks
+}
+
+type codeChunk struct {
+	Index     int
+	LineStart int
+	Text      string
+}
+
+// SearchSemanticChunks returns the top-k code chunks most similar to query using
+// the dense vector index (when configured). Returns nil when embedding or the
+// vector index is unavailable, or no hits are found.
+func (idx *Index) SearchSemanticChunks(ctx context.Context, query string, k int) []ChunkHit {
+	if idx == nil || idx.embed == nil || idx.vecIdx == nil || query == "" {
+		return nil
+	}
+	if k <= 0 {
+		k = 8
+	}
+	qvecs, err := idx.embed.Embed(ctx, []string{query})
+	if err != nil || len(qvecs) != 1 || len(qvecs[0]) == 0 {
+		return nil
+	}
+	hits, err := idx.vecIdx.Search(ctx, idx.vecColl, qvecs[0], k, nil)
+	if err != nil || len(hits) == 0 {
+		return nil
+	}
+	out := make([]ChunkHit, 0, len(hits))
+	for _, h := range hits {
+		rel, _ := h.Payload["rel_path"].(string)
+		ci, _ := h.Payload["chunk_index"].(float64)
+		snip, _ := h.Payload["snippet"].(string)
+		out = append(out, ChunkHit{
+			Path:       rel,
+			ChunkIndex: int(ci),
+			Score:      float64(h.Score),
+			Snippet:    snip,
+		})
+	}
+	return out
 }
 
 // fileSummary builds a compact textual summary of a file for embedding.
@@ -429,3 +590,15 @@ func looksBinary(b []byte) bool {
 }
 
 func nowMs() int64 { return time.Now().UnixMilli() }
+
+// snippetOf truncates s to at most n runes, appending an ellipsis when cut.
+func snippetOf(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// chunkTargetRunes is the approximate target size of a code chunk window.
+const chunkTargetRunes = 1200

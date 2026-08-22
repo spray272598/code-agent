@@ -53,10 +53,19 @@ func (t *SearchTool) Execute(_ context.Context, args map[string]any) (tool.Resul
 	}
 	hits := t.Idx.Search(q, k)
 	if len(hits) == 0 {
-		// semantic fallback: natural-language query with no literal token hits
+		// semantic fallback: natural-language query with no literal token hits.
+		// Prefer chunk-level RAG hits (precise code snippets) when available.
+		if chunks := t.Idx.SearchSemanticChunks(context.Background(), q, k); len(chunks) > 0 {
+			var b strings.Builder
+			b.WriteString(fmt.Sprintf("code_search %q → %d semantic chunk hit(s) (indexed files=%d)\n", q, len(chunks), t.Idx.Stats().Files))
+			for i, c := range chunks {
+				b.WriteString(fmt.Sprintf("%d. %s#L%d score=%.2f\n   %s\n", i+1, c.Path, c.ChunkIndex, c.Score, c.Snippet))
+			}
+			return tool.Result{Text: b.String()}, nil
+		}
 		if sem := t.Idx.SearchSemantic(context.Background(), q, k); len(sem) > 0 {
 			var b strings.Builder
-			b.WriteString(fmt.Sprintf("code_search %q → %d semantic hits (files=%d)\n", q, len(sem), t.Idx.Stats().Files))
+			b.WriteString(fmt.Sprintf("code_search %q → %d semantic file hit(s) (indexed files=%d)\n", q, len(sem), t.Idx.Stats().Files))
 			for i, h := range sem {
 				b.WriteString(fmt.Sprintf("%d. %s score=%.2f\n   %s\n", i+1, h.Path, h.Score, h.Snippet))
 			}

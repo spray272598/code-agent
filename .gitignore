@@ -25,6 +25,10 @@ configs/config.local.yaml
 .env
 .env.*
 
+# Local secrets & runtime artifacts
+/secrets/
+/tmp/
+
 # IDE
 .idea/
 .vscode/

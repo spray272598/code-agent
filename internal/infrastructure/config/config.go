@@ -30,6 +30,10 @@ type Config struct {
 	Host       HostConfig       `yaml:"host"`
 	OTLP       OTLPConfig       `yaml:"otlp"`
 	SSH        SSHConfig        `yaml:"ssh"`
+	// Vector selects the dense-vector backend for memory search + code RAG.
+	// provider: "mem" (default, in-process) | "qdrant" (remote). Qdrant is only
+	// used when embedding is also enabled (LLM.EmbeddingEnabled).
+	Vector VectorConfig `yaml:"vector"`
 	// JWTSecret signs platform access/refresh tokens (HS256). Rotate by moving the
 	// current value to JWTSecretPrev and setting a new JWTSecret; tokens signed with
 	// either secret remain valid during the overlap window.
@@ -55,6 +59,25 @@ type AuthConfig struct {
 // SSHConfig SSH remote operations toggle.
 type SSHConfig struct {
 	Enabled bool `yaml:"enabled"`
+}
+
+// VectorConfig selects the dense-vector backend for memory search and code RAG.
+// provider: "mem" (default, in-process) | "qdrant" (remote). Qdrant is only
+// used when embedding is also enabled (LLM.EmbeddingEnabled); otherwise the
+// in-process MemIndex is always used regardless of this setting.
+type VectorConfig struct {
+	// Provider is "mem" or "qdrant".
+	Provider string `yaml:"provider"`
+	// QdrantURL is the Qdrant root, e.g. http://localhost:6333.
+	QdrantURL string `yaml:"qdrant_url"`
+	// QdrantAPIKey is the api-key header value; empty for unsecured instances.
+	QdrantAPIKey string `yaml:"qdrant_api_key"`
+	// Collection is the base collection name (default "codeagent"). Memory uses
+	// the "memories" collection; code RAG uses "code".
+	Collection string `yaml:"collection"`
+	// Dimension is an optional explicit embedding dimension. 0 means derive
+	// from the configured embedder.
+	Dimension int `yaml:"dimension"`
 }
 
 type ServerConfig struct {
@@ -248,6 +271,7 @@ func Default() *Config {
 		Teams:    TeamsConfig{Enabled: true, File: "./teams/default.yaml"},
 		SubAgent: SubAgentConfig{Enabled: true, MaxConcurrent: 3, DefaultSteps: 8},
 		Host: HostConfig{Mode: "server", PreferHost: false},
+		Vector: VectorConfig{Provider: "mem", Collection: "codeagent"},
 		OTLP: OTLPConfig{Enabled: false, Endpoint: "localhost:4318", Insecure: true, Service: "code-agent"},
 		Auth: AuthConfig{
 			VerificationURI:       "http://localhost:3000/devices/verify",
@@ -348,6 +372,23 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MINIO_ENDPOINT"); v != "" {
 		cfg.Storage.Endpoint = v
+	}
+	if v := os.Getenv("VECTOR_PROVIDER"); v != "" {
+		cfg.Vector.Provider = v
+	}
+	if v := os.Getenv("QDRANT_URL"); v != "" {
+		cfg.Vector.QdrantURL = v
+	}
+	if v := os.Getenv("QDRANT_API_KEY"); v != "" {
+		cfg.Vector.QdrantAPIKey = v
+	}
+	if v := os.Getenv("QDRANT_COLLECTION"); v != "" {
+		cfg.Vector.Collection = v
+	}
+	if v := os.Getenv("VECTOR_DIMENSION"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Vector.Dimension = n
+		}
 	}
 	// empty key → mock for local dev
 	if cfg.LLM.APIKey == "" {

@@ -42,6 +42,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
 	"github.com/spray272598/code-agent/internal/domain/worktree"
+	vectordomain "github.com/spray272598/code-agent/internal/domain/vector"
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
 	"github.com/spray272598/code-agent/internal/infrastructure/einoorch"
 	"github.com/spray272598/code-agent/internal/infrastructure/llm"
@@ -51,6 +52,7 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 	vectorinfra "github.com/spray272598/code-agent/internal/infrastructure/vector"
+	"github.com/spray272598/code-agent/internal/infrastructure/vector/qdrant"
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
@@ -378,6 +380,10 @@ func Build(cfg *config.Config) (*App, error) {
 	memSvc.SetExtractor(memory.NewLLMExtractor(llmPort))
 	// embedding (shared by memory search, skill matching, code index)
 	var embedder port.IEmbeddingPort
+	// vecIdx backs the dense-vector layer (memory search + code RAG). MemIndex is
+	// the safe in-process default; provider "qdrant" plugs the same
+	// IVectorIndex interface into a remote Qdrant instance for persistence/scale.
+	var vecIdx vectordomain.IVectorIndex = vectorinfra.NewMemIndex()
 	if cfg.LLM.EmbeddingEnabled {
 		embedder = llm.NewOpenAIEmbedding(cfg.LLM.APIKey, cfg.LLM.EmbeddingAPIBase, cfg.LLM.EmbeddingModel)
 		memSvc.SetEmbedder(embedder)
@@ -386,8 +392,30 @@ func Build(cfg *config.Config) (*App, error) {
 		if n := memSvc.Backfill(context.Background(), 500); n > 0 {
 			log.Printf("[bootstrap] memory embedding backfilled %d item(s)\n", n)
 		}
-		// async code-index semantic vectors (non-blocking startup)
+		// Sprint 2.1: select the dense-vector backend. Default MemIndex keeps the
+		// process self-contained; provider "qdrant" switches the shared interface
+		// to a remote Qdrant instance (collections "memories" + "code").
+		if cfg.Vector.Provider == "qdrant" {
+			dim := cfg.Vector.Dimension
+			if dim <= 0 {
+				dim = embedder.Dims()
+			}
+			q, qerr := qdrant.New(cfg.Vector.QdrantURL, cfg.Vector.QdrantAPIKey, dim, 10*time.Second)
+			if qerr != nil {
+				log.Printf("[bootstrap] qdrant init failed: %v (fallback MemIndex)\n", qerr)
+			} else if eerr := q.Ensure(context.Background(), cfg.Vector.Collection, dim); eerr != nil {
+				log.Printf("[bootstrap] qdrant ensure failed: %v (fallback MemIndex)\n", eerr)
+			} else {
+				vecIdx = q
+				// memory uses the "memories" collection; ensure it up front.
+				_ = vecIdx.Ensure(context.Background(), "memories", dim)
+				log.Printf("[bootstrap] vector backend=qdrant collection=%s dim=%d\n", cfg.Vector.Collection, dim)
+			}
+		}
+		// wire both memory and code-index to the chosen backend.
 		codeIdx.SetEmbedder(embedder)
+		codeIdx.SetVectorIndex(vecIdx, "code")
+		// async code-index semantic vectors + chunk-level RAG index (non-blocking startup)
 		go func() {
 			if n := codeIdx.BuildEmbeddings(context.Background(), 300); n > 0 {
 				log.Printf("[bootstrap] code index embedded %d file(s)\n", n)
@@ -397,11 +425,8 @@ func Build(cfg *config.Config) (*App, error) {
 		log.Printf("[bootstrap] embedding disabled (set llm.embedding_model to enable)\n")
 	}
 
-	// Sprint 1.10/1.11: wire the in-process dense-vector backend. Qdrant (or
-	// other remote backends) plug into the same IVectorIndex when the network
-	// registry is available; the MemIndex is the safe default that always
-	// works and exercises the abstraction.
-	vecIdx := vectorinfra.NewMemIndex()
+	// Sprint 1.10/1.11: wire the in-process (or remote) dense-vector backend to
+	// memory search. vecIdx is MemIndex by default and Qdrant when configured.
 	memSvc.SetVectorIndex(vecIdx, "memories")
 	if cfg.LLM.EmbeddingEnabled {
 		if n := memSvc.BackfillVector(context.Background(), 500); n > 0 {

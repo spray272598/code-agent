@@ -1,0 +1,119 @@
+# Intent routing + coreference regression fixtures.
+# Each case asserts the rule-based classifier's deterministic behaviour so that
+# routing changes (prefixes, keywords, coref patterns) cannot silently regress.
+#
+# Fields:
+#   name     : unique case name (shown on failure)
+#   input    : raw user input
+#   intent   : expected intent (normal|deep|team|continue)
+#   clean    : expected CleanInput after prefix stripping (optional; omit to skip)
+#   source   : expected Source prefix (optional; e.g. "prefix", "keyword", "default")
+#   ec       : EntityContext used for coreference resolution (optional)
+#     ssh    : LastSSHConnection
+#     file   : LastFile
+#     dir    : LastDir
+#     session: LastSessionID
+#   resolved : expected CleanInput AFTER coreference resolution (optional)
+
+prefix:
+  - name: deep-slash
+    input: "/deep add login page"
+    intent: deep
+    clean: "add login page"
+    source: prefix
+  - name: deep-keyword-agent
+    input: "deep agent: refactor the auth module"
+    intent: deep
+    clean: "refactor the auth module"
+  - name: deep-mode
+    input: "mode:deep implement websocket gateway"
+    intent: deep
+    clean: "implement websocket gateway"
+  - name: team-slash
+    input: "/team analyze the architecture"
+    intent: team
+    clean: "analyze the architecture"
+    source: prefix
+  - name: team-parallel
+    input: "/parallel explore the codebase"
+    intent: team
+    clean: "explore the codebase"
+  - name: team-mode-phrase
+    input: "use team mode to split the work"
+    intent: team
+    clean: "use team mode to split the work"
+
+continue:
+  - name: continue-cn
+    input: "继续"
+    intent: continue
+    source: keyword
+  - name: continue-en
+    input: "continue"
+    intent: continue
+  - name: continue-exec
+    input: "继续执行"
+    intent: continue
+  - name: continue-yes
+    input: "yes"
+    intent: continue
+  - name: continue-ok
+    input: "ok"
+    intent: continue
+
+normal:
+  - name: normal-greeting
+    input: "hello"
+    intent: normal
+    source: default
+  - name: normal-simple-task
+    input: "帮我写一个求和函数"
+    intent: normal
+  - name: normal-question
+    input: "这个项目的入口在哪"
+    intent: normal
+  - name: normal-deep-word-but-no-prefix
+    input: "这是个很深的 bug，帮我看看"
+    intent: normal
+
+coreference:
+  - name: coref-ssh-machine
+    input: "在那台机器上重启服务"
+    intent: normal
+    ec:
+      ssh: "web-prod-01"
+    resolved: "在web-prod-01上重启服务"
+  - name: coref-file
+    input: "把刚才那个文件改一下"
+    intent: normal
+    ec:
+      file: "internal/bootstrap/app.go"
+    resolved: "把internal/bootstrap/app.go改一下"
+  - name: coref-dir
+    input: "在刚才那个目录里加个测试"
+    intent: normal
+    ec:
+      dir: "internal/domain/intent"
+    resolved: "在internal/domain/intent里加个测试"
+  - name: coref-session
+    input: "把那个会话的日志导出来"
+    intent: normal
+    ec:
+      session: "sess-9f3a"
+    resolved: "把sess-9f3a的日志导出来"
+  - name: coref-no-entity-no-resolve
+    input: "在那台机器上重启服务"
+    intent: normal
+    resolved: "在那台机器上重启服务"
+
+llm_fallback:
+  # When no rule matches and an LLM is wired, long-tail natural language that
+  # semantically implies parallel/team work should be classified via the LLM.
+  - name: llm-team-longtail
+    input: "帮我并行调研几个方案再汇总"
+    intent: team
+    source: llm
+  - name: llm-deep-longtail
+    input: "这是个跨多个模块的复杂重构，需要分步规划"
+    intent: deep
+    source: llm

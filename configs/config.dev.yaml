@@ -1,0 +1,98 @@
+# Sprint 2.1 dev override: use the offline mock LLM so the backend boots
+# without an external API key. Switch back to eino by setting LLM_API_KEY +
+# llm.use_mock=false in your shell.
+server:
+  host: "127.0.0.1"
+  port: 8080
+  mode: "debug"
+
+jwt_secret: "change-me-dev-secret-please-rotate-32+chars!!"
+
+auth:
+  verification_uri: "http://localhost:5173/device/approve"
+  device_code_ttl_sec: 600
+  device_poll_interval_sec: 5
+  user_code_len: 8
+
+agent:
+  name: "Code-Agent"
+  max_steps: 10
+  timeout_sec: 60
+  token_budget: 16000
+  workspace_root: "./workspace"
+  orchestrator: "eino"
+  eino_stream: true
+
+llm:
+  provider: "openai_compatible"
+  model: "deepseek-ai/DeepSeek-V3"
+  api_key: ""
+  api_base: "https://api.siliconflow.cn/v1"
+  use_mock: true          # ← Sprint 2.1 dev: no external LLM calls
+
+database:
+  type: "memory"           # no MySQL needed
+  auto_migrate: true
+  schema_path: "scripts/sql/01_schema.sql"
+
+redis:
+  enabled: false
+  host: "127.0.0.1"
+  port: 6379
+
+rate_limit:
+  enabled: false          # dev: don't 429 the SPA during smoke test
+  per_minute: 1000
+
+token_quota:
+  enabled: false          # dev: skip daily token cap
+  per_user_per_day: 1000000
+
+storage:
+  enabled: false          # dev: no MinIO/S3
+  local_fallback_dir: "./data/objects"
+
+host:
+  mode: "server"
+  prefer_host: false
+  endpoint: "ws://127.0.0.1:8080/ws/host"
+
+otlp:
+  enabled: false
+  endpoint: "localhost:4318"
+  insecure: true
+  service: "code-agent"
+
+security:
+  api_keys:
+    - "dev-key"
+  path_sandbox: true
+  default_confirm_write: true
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+
+mcp:
+  enabled: false          # dev: skip MCP demo to avoid stdio noise
+
+skills:
+  enabled: false          # dev: minimal
+
+hooks:
+  enabled: false
+
+commands:
+  dir: "./commands"
+
+teams:
+  enabled: false
+
+subagent:
+  enabled: false
+  max_concurrent: 1
+  default_steps: 4
+
+logging:
+  level: "info"

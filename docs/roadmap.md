@@ -19,6 +19,7 @@
 | **SSH 连接管理 UI** | ✅ 已落地 | 前端 `/ssh-connections`：列表/新增/删除，KMS 加密存储 |
 | **意图识别** | ✅ 已落地 | 规则 + LLM 兜底；新增**跨轮指代消解**（`EntityContext` + `ExtractEntities`，解析"那台机器/刚才那个文件"等），已接入 runner |
 | **MCP** | ✅ 已落地 | stdio 热装，`server__tool` 注册，与 core 工具同一 GuardedTool 横切 |
+| **代码 RAG（向量检索）** | ✅ 已落地 | `code_search` 关键词 + 文件级语义 + **分块级 RAG**（chunk 向量索引）；向量后端默认 `MemIndex`，可切 Qdrant（`vector.provider=qdrant`） |
 | **记忆/压缩** | ✅ 已落地 | Skill / 长期记忆 / L0–L3 压缩 / Token 预算 |
 | **前端** | ✅ 已落地 | React/TS SPA（web/）：账号流 + 对话 |
 | **可观测/存储** | ✅ 已落地 | OTLP/Prometheus、MinIO、host-agent |
@@ -54,8 +55,8 @@
 
 | # | 任务 | 关联代码 | 价值 |
 |---|------|----------|------|
-| 2.1 | **代码 RAG / Qdrant**：仓库向量索引 + 检索增强生成，提升跨文件理解 | 新增 `retriever` + Qdrant 适配 | 大仓库问答质量 |
-| 2.2 | **自动化评测体系**：固化 eval 数据集 + 评分脚本（pass_rate/延迟/成本），纳入 CI | `scripts/eval_*`、新增 eval 框架 | 回归防护、量化迭代 |
+| 2.1 | **代码 RAG / Qdrant**：仓库向量索引 + 检索增强生成，提升跨文件理解 | `internal/infrastructure/vector/qdrant`（Qdrant 适配，`IVectorIndex`）、`codeindex` 分块级 `SearchSemanticChunks` + `SetVectorIndex`、配置 `vector.provider=qdrant` | ✅ |
+| 2.2 | **自动化评测体系**：意图路由 / 指代消解回归用例 + 评估脚本，防回归 | `scripts/eval/fixtures.yaml`（数据驱动数据集）+ `internal/domain/intent/regression_test.go`（路由/LLM 兜底/指代消解断言）+ `scripts/eval/run_eval.ps1`（build+vet+回归一站式，CI 友好） | ✅ |
 | 2.3 | **TUI 终端**：本地终端界面（参考已规划 TUI），凭据本地加密、跨设备撤销 | `cmd/`、新增 TUI 包 | 离线/本机场景 |
 | 2.4 | **MCP SDK 评估**：在 `IMCPClient` 接口下评估 `mark3labs/mcp-go` 等 SDK（触发：接 >20 个 server 或需 resources/prompts/sampling） | `domain/tool`（MCP） | 降低长尾维护成本 |
 
@@ -83,7 +84,7 @@
 ## 5. 里程碑建议
 
 - **M1（已完成 ✅）**：SSH 交互终端（含 WS 实时终端）+ 意图指代消解 + 连接管理 UI + 文档一致性修复（toC）+ 本路线图落地。
-- **M2（P1 完成，进行中）**：RAG/Qdrant、自动化评测、TUI、MCP SDK 评估，向"可对外试用的 toC 产品"推进。
+- **M2（进行中）**：RAG/Qdrant ✅ 已落地（MemIndex 默认 + Qdrant 可配）；自动化评测 ✅ 已落地（数据驱动回归 + `run_eval.ps1`）；剩余 TUI、MCP SDK 评估，向"可对外试用的 toC 产品"推进。
 - **M3（P2 完成）**：RAG + 自动化评测 + TUI，达到"接近生产级"。
 - **M4（P3 完成）**：规模化与生态能力。
 
