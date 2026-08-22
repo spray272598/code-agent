@@ -99,7 +99,16 @@
 | 5.5 | Plan 只读探索期状态机 | ✅ | `ControlPlanExplore`/`ControlPlanImplement`：探索期 `Guard` 切只读、实现期恢复可写；`/plan`、`/plan-implement` 命令 + HTTP 端点 |
 | 5.6 | Headless / 后台长任务 | ✅ | `ChatApp.RunBackground` + `POST /api/v1/chat/background`：脱离 HTTP 连接存活，配合 3.5 的 Pause/Resume/Control |
 
-**上下文管理**：Grok Build 采用代理侧 + 用户侧双压缩（agent-side compaction 收紧历史、user-side 按需召回）。我们已有 `compress`（双级 summarize）与 `memory` 向量召回；下一步提升方向：① 自动压缩阈值与异步压缩；② 长任务跨段记忆固化（checkpoint 携带摘要）；③ 按子代理隔离上下文窗口。详见本对话末段说明。
+## M5.7（上下文管理提升）
+
+| # | 能力 | 状态 | 关键产出 |
+|---|------|------|----------|
+| 5.7.1 | 异步压缩 + 可配置阈值 | ✅ | `Compressor.CompactThresholdRatio`（默认 0.8）+ `Pressure`/`ShouldPreCompact`；einoorch `loadAndCompress` 达阈值时后台 `backgroundSummarize` 异步 summarize 并落库，主响应走同步快速压缩不再被 LLM 阻塞；配置 `agent.compact_threshold_ratio` |
+| 5.7.2 | 长任务跨段记忆固化 | ✅ | `ChatApp.RunBackground` 事件循环中，每收到 `EventCompress`/`EventDone` 把当前会话滚动摘要 `summaryRepo.Get` → `memSvc.Save`（scope=project, category=task_progress）；新段启动时经 `memory.FormatForPrompt` 自动召回，避免反复压缩丢信息 |
+| 5.7.3 | PlanMode 上下文隔离 | ✅ | `engine.Loop` 新增 `planExplore` 标志：`ControlPlanExplore` 时置 true 并清空加载历史（仅系统提示），`ControlPlanImplement` 时置 false 恢复全量加载；与 5.5 的 Guard 只读/可写联动，探索期不累积实现上下文 |
+| 5.7.4 | 子代理窗口隔离（可选） | ✅ | `subagent.Runner.SummarizeResult` 回调（loop `SetSubRunner` 注入 `Compressor.Summarizer`）；`Result.Summary` + `FormatResults` 优先回写摘要、标注原文已省略；长任务下子代理结果不再膨胀主窗口 |
+
+**上下文管理**：Grok Build 采用代理侧 + 用户侧双压缩（agent-side compaction 收紧历史、user-side 按需召回）。我们已有 `compress`（双级 summarize）与 `memory` 向量召回；M5.7 补齐了①异步压缩阈值、②长任务跨段记忆固化、③PlanMode 上下文隔离、④子代理窗口隔离。
 
 ---
 

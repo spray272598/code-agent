@@ -45,6 +45,10 @@ type Result struct {
 	Role     string `json:"role"`
 	Status   string `json:"status"` // ok|error
 	Output   string `json:"output"`
+	// Summary is the window-isolated distillation of Output (M5.7-4). When set,
+	// the parent context receives Summary instead of the full Output, so long
+	// subagent transcripts never balloon the main window.
+	Summary  string `json:"summary,omitempty"`
 	Steps    int    `json:"steps"`
 	Tokens   int    `json:"tokens"`
 	WorkDir  string `json:"workDir,omitempty"`
@@ -69,6 +73,10 @@ type Runner struct {
 	OnProgress    ProgressFunc
 	// forbid nested delegate
 	DenyTools map[string]bool
+	// SummarizeResult optionally distills a subagent's full transcript into a
+	// short window-friendly summary before it is written back into the parent
+	// context (M5.7-4). When nil, the raw Output is used (legacy behaviour).
+	SummarizeResult func(ctx context.Context, role, output string) (summary string, err error)
 }
 
 // WorktreePort isolation (implemented in worktree package).
@@ -167,6 +175,13 @@ func (r *Runner) RunOne(ctx context.Context, spec Spec) Result {
 	res := Result{
 		ID: spec.ID, Role: spec.Role, Output: output, Steps: steps, Tokens: tokens,
 		WorkDir: workDir, Duration: time.Since(start).Milliseconds(), Status: "ok",
+	}
+	// Window isolation (M5.7-4): distill the transcript into a short summary so
+	// the parent context never ingests the full subagent output verbatim.
+	if r.SummarizeResult != nil && output != "" {
+		if s, serr := r.SummarizeResult(ctx, spec.Role, output); serr == nil && s != "" {
+			res.Summary = s
+		}
 	}
 	if err != nil {
 		res.Status = "error"
@@ -377,8 +392,16 @@ func FormatResults(results []Result) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("SubAgent results (%d):\n", len(results)))
 	for _, r := range results {
-		b.WriteString(fmt.Sprintf("\n### [%s] role=%s status=%s steps=%d %dms\n%s\n",
-			r.ID, r.Role, r.Status, r.Steps, r.Duration, r.Output))
+		body := r.Output
+		isolated := ""
+		if r.Summary != "" {
+			// Window-isolated: parent receives only the distilled summary; the
+			// full transcript is intentionally omitted to keep the main context lean.
+			body = r.Summary
+			isolated = " [window-isolated: summary only, full output omitted]"
+		}
+		b.WriteString(fmt.Sprintf("\n### [%s] role=%s status=%s steps=%d %dms%s\n%s\n",
+			r.ID, r.Role, r.Status, r.Steps, r.Duration, isolated, body))
 	}
 	return b.String()
 }

@@ -105,6 +105,9 @@ type AgentConfig struct {
 	EinoGraphResume *bool `yaml:"eino_graph_resume"`
 	// EinoCheckPointDir durable graph checkpoint dir (default ./data/eino-checkpoints)
 	EinoCheckPointDir string `yaml:"eino_checkpoint_dir"`
+	// CompactThresholdRatio warns/predictively pre-compacts at this window
+	// occupancy ratio (0,1]. Default 0.8 → background summarize at 80% of budget.
+	CompactThresholdRatio float64 `yaml:"compact_threshold_ratio"`
 }
 
 type LLMConfig struct {
@@ -304,6 +307,7 @@ func Default() *Config {
 			// Primary: CloudWeGo Eino ReAct. Falls back to native when mock/no API key.
 			Orchestrator: "eino",
 			EinoStream:   false,
+			CompactThresholdRatio: 0.8,
 		},
 		LLM: LLMConfig{UseMock: true, Model: "deepseek-ai/DeepSeek-V3"},
 		Database: DatabaseConfig{

@@ -516,6 +516,7 @@ func Build(cfg *config.Config) (*App, error) {
 			APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
 			MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
 			TokenBudget:        cfg.Agent.TokenBudget,
+			CompactThresholdRatio: cfg.Agent.CompactThresholdRatio,
 			GraphResume:        cfg.EinoGraphResumeEnabled(),
 			GraphCheckPointDir: cfg.Agent.EinoCheckPointDir,
 			Router:             cfg.LLM.ToRoutes(),
@@ -560,6 +561,7 @@ func Build(cfg *config.Config) (*App, error) {
 		application.WithAudit(auditRepo),
 		application.WithKeyStore(keyStore),
 		application.WithCheckpoint(ckStore, runReg),
+		application.WithSummaryRepo(summaryRepo),
 	)
 	if blobStore != nil {
 		chatOpts = append(chatOpts, application.WithBlobStore(blobStore))

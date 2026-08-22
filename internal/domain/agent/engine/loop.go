@@ -95,7 +95,25 @@ func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
 }
 func (l *Loop) SetAudit(a audit.Repository)                  { l.audit = a }
 func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository) { l.summaries = s }
-func (l *Loop) SetSubRunner(r *subagent.Runner)              { l.subRunner = r }
+func (l *Loop) SetSubRunner(r *subagent.Runner) {
+	l.subRunner = r
+	// Wire window isolation (M5.7-4): subagent results are distilled into a
+	// short summary before being written back into the parent context, so long
+	// subagent transcripts never balloon the main window.
+	if r != nil && l.compressor != nil && l.compressor.Summarizer != nil {
+		sum := l.compressor.Summarizer
+		r.SummarizeResult = func(ctx context.Context, role, output string) (string, error) {
+			// Explore/verify roles rarely need the full transcript; summarize
+			// aggressively. General role keeps a bit more detail.
+			roleHint := "Distill this subagent result into a concise summary for the parent agent: key findings, files touched, decisions, and any errors. No raw tool output."
+			if strings.EqualFold(role, "general") {
+				roleHint = "Summarize this subagent result for the parent agent: what was accomplished, files changed, remaining issues. Keep concrete paths/decisions, drop raw logs."
+			}
+			maps := []map[string]any{{"role": "user", "content": roleHint + "\n\n---\n" + output}}
+			return sum.Summarize(ctx, "", maps)
+		}
+	}
+}
 func (l *Loop) SetBlobStore(s blob.Store, threshold int) {
 	l.blobs = s
 	if threshold <= 0 {
@@ -259,6 +277,11 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	}
 	continuing := isContinue(userInput)
 
+	// planExplore gates PlanMode context isolation (M5.7-3): while true the loop
+	// keeps the working window free of implementation context. Toggled by the
+	// ControlPlanExplore / ControlPlanImplement signals below.
+	planExplore := false
+
 	if l.hooks != nil {
 		l.hooks.Emit(ctx, hook.Event{Point: hook.SessionStart, SessionID: session.ID})
 	}
@@ -317,6 +340,17 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 	history, fullLoad, histErr := l.histLoader.Load(ctx, session.ID, opts.ForceCompact, session.MessageCount)
 	if histErr != nil {
 		telemetry.Warnf("history load: %v", histErr)
+	}
+	// PlanMode context isolation (M5.7-3): during the read-only explore phase we
+	// deliberately do NOT accumulate implementation context. The agent should
+	// read files/explore (via the guard's read-only tier) but its findings are
+	// NOT folded into the working window until we enter the implement phase.
+	// This keeps the explore window lean and avoids polluting the plan with
+	// exploratory noise. The guard mode is set by the same control signal.
+	if planExplore {
+		history = nil
+		fullLoad = false
+		telemetry.TraceEvent(map[string]any{"event": "plan_explore_isolate", "session": session.ID})
 	}
 	priorSummary := ""
 	if l.summaries != nil {
@@ -402,6 +436,8 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			if l.perm != nil {
 				l.perm.SetMode(security.ModeReadonly)
 			}
+			// isolate context: stop accumulating implementation history
+			planExplore = true
 			publish(&Event{Type: EventCheckpoint, SubType: "plan_explore", Content: "plan explore phase (read-only)", Data: taskPlan.View(), Timestamp: now()})
 			auditLog("plan", "", "explore", "ok", 0)
 			return false
@@ -410,6 +446,10 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			if l.perm != nil {
 				l.perm.SetMode(security.ModeWorkspace)
 			}
+			// re-load implementation context: clear isolation so the next round
+			// loads the full working window (files read during explore are still
+			// available via their own tool calls; we just stop hiding history).
+			planExplore = false
 			publish(&Event{Type: EventCheckpoint, SubType: "plan_implement", Content: "plan implement phase (writable)", Data: taskPlan.View(), Timestamp: now()})
 			auditLog("plan", "", "implement", "ok", 0)
 			return false

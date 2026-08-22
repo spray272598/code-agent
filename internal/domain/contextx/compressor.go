@@ -12,14 +12,33 @@ type Compressor struct {
 	TokenBudget   int
 	MessageBudget int
 	KeepRecent    int
-	Summarizer    *Summarizer
+	// CompactThresholdRatio is the window-occupancy ratio that triggers a
+	// warning/predictive pre-compact. Default 0.8 → warn at 80% of TokenBudget.
+	CompactThresholdRatio float64
+	Summarizer            *Summarizer
 }
+
+// DefaultCompactThresholdRatio warns at 80% of the token budget.
+const DefaultCompactThresholdRatio = 0.8
 
 func NewCompressor(tokenBudget int) *Compressor {
 	if tokenBudget <= 0 {
 		tokenBudget = 16000
 	}
-	return &Compressor{TokenBudget: tokenBudget, MessageBudget: 50, KeepRecent: 8}
+	return &Compressor{
+		TokenBudget:           tokenBudget,
+		MessageBudget:         50,
+		KeepRecent:            8,
+		CompactThresholdRatio: DefaultCompactThresholdRatio,
+	}
+}
+
+// SetCompactThresholdRatio overrides the predictive pre-compact ratio.
+// Clamped into (0,1]. Values outside are ignored (keeps the default).
+func (c *Compressor) SetCompactThresholdRatio(ratio float64) {
+	if ratio > 0 && ratio <= 1 {
+		c.CompactThresholdRatio = ratio
+	}
 }
 
 func (c *Compressor) SetSummarizer(s *Summarizer) { c.Summarizer = s }
@@ -29,6 +48,23 @@ func (c *Compressor) Needs(history []map[string]any) bool {
 		return true
 	}
 	return estimateHistory(history) > c.TokenBudget*4/5
+}
+
+// Pressure reports the current window occupancy ratio in [0,1+].
+// >= CompactThresholdRatio means a predictive pre-compact is advised.
+func (c *Compressor) Pressure(history []map[string]any) float64 {
+	est := estimateHistory(history)
+	if c.TokenBudget <= 0 {
+		return 0
+	}
+	return float64(est) / float64(c.TokenBudget)
+}
+
+// ShouldPreCompact returns true when the window is at/above the configured
+// compact threshold ratio but still below the hard budget (so a background
+// summarize can run without blocking the response).
+func (c *Compressor) ShouldPreCompact(history []map[string]any) bool {
+	return c.Pressure(history) >= c.CompactThresholdRatio
 }
 
 // CompressResult includes optional summary for persistence.

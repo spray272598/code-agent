@@ -26,6 +26,10 @@ agent:
   # In-graph HITL: CheckPointStore + ResumeWithData (falls back to app-level resume)
   eino_graph_resume: true
   eino_checkpoint_dir: "./data/eino-checkpoints"
+  # Predictive pre-compact: when the conversation window reaches this fraction
+  # of token_budget, a background LLM summary is scheduled (async, non-blocking).
+  # Range (0,1]; default 0.8 → summarize at 80% of budget.
+  compact_threshold_ratio: 0.8
 
 llm:
   provider: "openai_compatible"

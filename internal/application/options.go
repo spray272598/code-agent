@@ -70,6 +70,12 @@ func WithMemory(s *memory.Service) Option {
 	return func(a *ChatApp) { a.memSvc = s }
 }
 
+// WithSummaryRepo injects the rolling session-summary repository, enabling
+// long-task cross-segment memory solidification (RunBackground checkpoints).
+func WithSummaryRepo(r sessrepo.ISummaryRepository) Option {
+	return func(a *ChatApp) { a.summaryRepo = r }
+}
+
 // WithAudit injects audit repository.
 func WithAudit(r audit.Repository) Option {
 	return func(a *ChatApp) { a.auditRepo = r }

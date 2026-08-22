@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,9 @@ type Config struct {
 	// Router enables M3/3.1 multi-model routing: when non-nil, the model
 	// endpoint is selected per intent before each model call.
 	Router *model.Router
+	// CompactThresholdRatio triggers a background predictive summarize at this
+	// window occupancy ratio (0,1]. Default 0.8.
+	CompactThresholdRatio float64
 }
 
 // Runner uses CloudWeGo Eino ReAct; security/business cross-cuts stay in domain tools.
@@ -101,6 +105,9 @@ func NewRunner(
 		cfg.GraphCheckPointDir = DefaultGraphCheckpoint
 	}
 	comp := contextx.NewCompressor(cfg.TokenBudget / 2)
+	if cfg.CompactThresholdRatio > 0 {
+		comp.SetCompactThresholdRatio(cfg.CompactThresholdRatio)
+	}
 	r := &Runner{
 		cfg: cfg, tools: tools, perm: perm,
 		sessions: sessions, messages: messages,
@@ -532,6 +539,16 @@ func (r *Runner) loadAndCompress(ctx context.Context, session *sessmodel.Session
 				observability.LogError("get session summary", gerr)
 			}
 		}
+		// Async predictive compaction: when we are at/above the configured
+		// threshold ratio but NOT forced and not yet over the hard budget,
+		// run the LLM summary in a background goroutine and continue with the
+		// fast deterministic L0–L2 compression so the response is not blocked.
+		// The summary produced offline is saved and picked up on the next turn.
+		if !forceCompact && r.compressor.ShouldPreCompact(full) && r.compressor.Summarizer != nil && len(full) > 16 {
+			r.backgroundSummarize(ctx, session, full, prior)
+			observability.Current().AddCompress(1)
+			note = "background summarize scheduled (window >= threshold)"
+		}
 		useSum := forceCompact || len(full) > 16
 		cr := r.compressor.CompressLevels(ctx, full, prior, useSum)
 		full = cr.History
@@ -560,6 +577,37 @@ func (r *Runner) loadAndCompress(ctx context.Context, session *sessmodel.Session
 	}
 	built = append(built, schema.UserMessage(userInput))
 	return built, note
+}
+
+// backgroundSummarize runs the LLM-based middle summary off the critical path.
+// It reuses the existing Compressor.Summarizer and persists the resulting
+// summary to the summary repository so the next turn picks it up. Failures are
+// logged but never propagated — this is a best-effort latency optimization.
+func (r *Runner) backgroundSummarize(ctx context.Context, session *sessmodel.Session, full []map[string]any, prior string) {
+	if r.compressor == nil || r.compressor.Summarizer == nil {
+		return
+	}
+	// capture only what we need; the parent ctx may be cancelled when the
+	// response returns, so use a detached context with a bounded timeout.
+	bctx := context.WithoutCancel(ctx)
+	go func() {
+		b, cancel := context.WithTimeout(bctx, 90*time.Second)
+		defer cancel()
+		s, err := r.compressor.Summarizer.Summarize(b, prior, full)
+		if err != nil {
+			observability.LogError("background summarize", err)
+			return
+		}
+		if s == "" {
+			return
+		}
+		if r.summaries != nil {
+			if err := r.summaries.Save(b, session.ID, s, common.EstimateTokens(s)); err != nil {
+				observability.LogError("save background summary", err)
+			}
+		}
+		log.Printf("[info] async-summarize session=%s tokens~%d\n", session.ID, common.EstimateTokens(s))
+	}()
 }
 
 // tryGraphResume re-enters the Eino graph at the interrupted tool node after HITL approve.

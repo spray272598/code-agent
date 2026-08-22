@@ -47,6 +47,7 @@ type ChatApp struct {
 	blobs       blob.Store
 	ckStore     checkpoint.Store
 	runs        *checkpoint.RunRegistry
+	summaryRepo sessrepo.ISummaryRepository
 	hooks       *hook.Bus
 	timeoutSec  int
 	workspace   string
@@ -611,6 +612,25 @@ func (a *ChatApp) RunBackground(ctx context.Context, req ChatRequest, onEvent fu
 		ch := make(chan *engine.Event, 128)
 		go func() {
 			for ev := range ch {
+				// Long-task cross-segment memory solidification: every time a
+				// rolling summary is produced (EventCompress) or the run ends
+				// (EventDone), capture the current session summary into the
+				// long-term memory store. New segments auto-recall it via
+				// memory.FormatForPrompt, so repeated compaction never loses
+				// the "what's already been done" context. See plan item M5.7-2.
+				if a.summaryRepo != nil && a.memSvc != nil &&
+					(ev.Type == engine.EventCompress || ev.Type == engine.EventDone) {
+					if s, gerr := a.summaryRepo.Get(ctx, session.ID); gerr == nil && s != "" {
+						_ = a.memSvc.Save(ctx, &memport.MemoryItem{
+							UserID:    session.UserID,
+							ProjectID: session.ProjectID,
+							Scope:     memport.ScopeProject,
+							Content:   s,
+							Category:  "task_progress",
+							Importance: 60,
+						})
+					}
+				}
 				if onEvent != nil {
 					onEvent(ev)
 				}
