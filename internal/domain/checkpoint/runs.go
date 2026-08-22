@@ -95,6 +95,20 @@ func (r *RunRegistry) IsRunning(sessionID string) bool {
 	return ok
 }
 
+// ActiveIDs returns the session IDs that currently have an active run.
+func (r *RunRegistry) ActiveIDs() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	ids := make([]string, 0, len(r.runs))
+	for id := range r.runs {
+		ids = append(ids, id)
+	}
+	r.mu.Unlock()
+	return ids
+}
+
 // ControlCh returns the control channel for an active session, or nil.
 func (r *RunRegistry) ControlCh(sessionID string) chan engine.Control {
 	if r == nil || sessionID == "" {

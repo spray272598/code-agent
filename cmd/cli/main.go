@@ -16,7 +16,7 @@ import (
 var slashCmds = []string{
 	"/help", "/quit", "/exit", "/continue", "/tools", "/skills", "/mcp",
 	"/clear", "/compact", "/pending", "/approve", "/reject", "/memory", "/metrics",
-	"/status", "/team", "/deep", "/cost",
+	"/status", "/team", "/deep", "/cost", "/plan", "/plan-implement",
 }
 
 func main() {
@@ -180,6 +180,30 @@ Complete: type /pre?  e.g. /ap? → /approve`)
 		}
 		if line == "/status" {
 			printStatus(*base, *apiKey, sessionID)
+			continue
+		}
+		if line == "/plan" {
+			if sessionID == "" {
+				fmt.Println("start a session first (send a message)")
+				continue
+			}
+			if _, err := postJSON(*base+"/api/v1/session/plan/explore", *apiKey, map[string]any{"sessionId": sessionID}); err != nil {
+				fmt.Println("err:", err)
+			} else {
+				fmt.Println("[plan] explore phase: read-only, mutating tools blocked")
+			}
+			continue
+		}
+		if line == "/plan-implement" {
+			if sessionID == "" {
+				fmt.Println("no active session")
+				continue
+			}
+			if _, err := postJSON(*base+"/api/v1/session/plan/implement", *apiKey, map[string]any{"sessionId": sessionID}); err != nil {
+				fmt.Println("err:", err)
+			} else {
+				fmt.Println("[plan] implement phase: writable")
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "/team ") || line == "/team" {
@@ -392,9 +416,18 @@ func printStatus(base, key, sessionID string) {
 	} else {
 		fmt.Println("health err:", err)
 	}
-	if body, err := getJSON(base+"/api/v1/metrics", key); err == nil {
-		pretty, _ := json.MarshalIndent(body["data"], "", "  ")
-		fmt.Println("metrics:", string(pretty))
+	// usage panel (3.5): token/quota/cost breakdown
+	usageURL := base + "/api/v1/usage"
+	if sessionID != "" {
+		usageURL += "?session=" + sessionID
+	}
+	if body, err := getJSON(usageURL, key); err == nil {
+		if d, ok := body["data"].(map[string]any); ok {
+			pretty, _ := json.MarshalIndent(d, "", "  ")
+			fmt.Println("usage:", string(pretty))
+		}
+	} else {
+		fmt.Println("usage err:", err)
 	}
 	if sessionID != "" {
 		if body, err := getJSON(base+"/api/v1/permission/pending?sessionId="+sessionID, key); err == nil {

@@ -73,6 +73,12 @@ const (
 	ControlResume
 	// ControlInterrupt stops the loop immediately (equivalent to ctx cancel).
 	ControlInterrupt
+	// ControlPlanExplore enters the plan explore (read-only) phase: the guard
+	// switches to readonly so the agent may inspect but not mutate.
+	ControlPlanExplore
+	// ControlPlanImplement exits the plan phase into the implement (writable)
+	// phase: the guard returns to the configured workspace/strict tier.
+	ControlPlanImplement
 )
 
 // Control is a single instruction delivered over a control channel.

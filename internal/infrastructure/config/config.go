@@ -230,6 +230,9 @@ type SecurityConfig struct {
 	APIKeys             []string `yaml:"api_keys"`
 	PathSandbox         bool     `yaml:"path_sandbox"`
 	DefaultConfirmWrite bool     `yaml:"default_confirm_write"`
+	// SandboxMode selects the enforcement tier: "workspace" (default),
+	// "readonly", or "strict". Mirrors Grok Build's kernel-enforced sandbox.
+	SandboxMode         string `yaml:"sandbox_mode"`
 	// CORSOrigins allowlist; empty = same-origin only (no ACAO). Use ["*"] only for local demos.
 	CORSOrigins []string `yaml:"cors_origins"`
 	// MaxBodyBytes request body limit (default 2MiB)

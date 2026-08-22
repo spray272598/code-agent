@@ -88,6 +88,19 @@
 - **M3（进行中）**：进入 P3 起步。3.1 多模型路由 + 成本优化 ✅、3.2 技能市场 / 自定义 Skill 上传 ✅、3.3 可观测 + 用户级配额 ✅（Prometheus 配额指标 + `checkQuota` 每日 Token 上限）、3.4 OAuth2 授权码 + PKCE 核心 ✅（`auth/oauth.go`，为接 GitHub/Google SSO 打基础）、3.5 计划-执行-反思可视化与可中断重规划 ✅（`Plan.View`/`Visualize`、`EventPlanUpdate`/`EventReplan`、`ControlSignal` 跨请求控制 + 失败自动重规划）。
 - **M4（P3 完成）**：规模化与生态能力（技能市场、可观测看板、OAuth、计划-执行-反思编排）已随 M3 一并收口，P3 全部完成。
 
+## M5（对标 Grok Build 的能力补齐）
+
+| # | 能力 | 状态 | 关键产出 |
+|---|------|------|----------|
+| 5.1 | 内核级沙箱三档（只读/workspace/strict） | ✅ | `security.Guard.Mode` + `SandboxMode`；配置 `security.sandbox_mode`；strict 阻断网络出口、readonly 拒绝变更类工具；Windows 退化为路径守护 + 降权 |
+| 5.2 | 工具集扩容 | ✅ | 新增 `apply_patch`（统一 diff 结构化编辑）、`lint`、`codecov`、`web_search`（可插拔 `WebSearcher`，默认 DuckDuckGo）；`batch`/`glob`/`grep` 已具备 |
+| 5.3 | 用量监控面板 | ✅ | `ChatApp.UsageSnapshot` + `/status` 命令增强 + `GET /api/v1/usage`（token/配额/成本/活跃运行） |
+| 5.4 | ACP 协议适配层 | ✅ | `trigger/http/acp.go`：`/acp/sessions`、`/prompt`、`/cancel`、`/control`、`/status` 复用现有会话/控制 API |
+| 5.5 | Plan 只读探索期状态机 | ✅ | `ControlPlanExplore`/`ControlPlanImplement`：探索期 `Guard` 切只读、实现期恢复可写；`/plan`、`/plan-implement` 命令 + HTTP 端点 |
+| 5.6 | Headless / 后台长任务 | ✅ | `ChatApp.RunBackground` + `POST /api/v1/chat/background`：脱离 HTTP 连接存活，配合 3.5 的 Pause/Resume/Control |
+
+**上下文管理**：Grok Build 采用代理侧 + 用户侧双压缩（agent-side compaction 收紧历史、user-side 按需召回）。我们已有 `compress`（双级 summarize）与 `memory` 向量召回；下一步提升方向：① 自动压缩阈值与异步压缩；② 长任务跨段记忆固化（checkpoint 携带摘要）；③ 按子代理隔离上下文窗口。详见本对话末段说明。
+
 ---
 
 > 历史多租户规划见 [`docs/saas-roadmap.md`](docs/saas-roadmap.md)（已归档，不适用）。

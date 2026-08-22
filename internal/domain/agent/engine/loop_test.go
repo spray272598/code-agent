@@ -409,3 +409,48 @@ Final Answer: replanned`,
 		t.Fatal("expected EventReplan after user control signal")
 	}
 }
+
+func TestLoopPlanModeExploreCheckpoint(t *testing.T) {
+	llm := &scriptedLLM{queue: []string{
+		`Thought: explore
+Action: {"name":"read_file","args":{"path":"a.txt"}}`,
+		`Thought: done
+Final Answer: ok`,
+	}}
+	loop, _ := setupLoop(t, llm, false)
+	sess := sessmodel.NewSession("s8", "u1", "p1", "t", "")
+	ctrlCh := make(chan Control, 4)
+	ch := make(chan *Event, 128)
+	var gotExplore, gotImplement bool
+	done := make(chan struct{})
+	go func() {
+		for e := range ch {
+			if e.Type == EventCheckpoint {
+				if e.SubType == "plan_explore" {
+					gotExplore = true
+				}
+				if e.SubType == "plan_implement" {
+					gotImplement = true
+				}
+			}
+		}
+		close(done)
+	}()
+	runDone := make(chan struct{})
+	go func() {
+		loop.Run(context.Background(), sess, "先探索然后修改文件并且验证", ch, RunOptions{AutoApprove: true, ControlCh: ctrlCh})
+		close(runDone)
+	}()
+	// enter explore phase then immediately exit to implement
+	ctrlCh <- Control{Signal: ControlPlanExplore}
+	ctrlCh <- Control{Signal: ControlPlanImplement}
+	<-runDone
+	close(ch)
+	<-done
+	if !gotExplore {
+		t.Fatal("expected plan_explore checkpoint")
+	}
+	if !gotImplement {
+		t.Fatal("expected plan_implement checkpoint")
+	}
+}

@@ -397,6 +397,22 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			}
 		case ControlInterrupt:
 			return true
+		case ControlPlanExplore:
+			// enter read-only explore phase: guard denies mutating tools
+			if l.perm != nil {
+				l.perm.SetMode(security.ModeReadonly)
+			}
+			publish(&Event{Type: EventCheckpoint, SubType: "plan_explore", Content: "plan explore phase (read-only)", Data: taskPlan.View(), Timestamp: now()})
+			auditLog("plan", "", "explore", "ok", 0)
+			return false
+		case ControlPlanImplement:
+			// exit plan phase into implement phase: restore writable tier
+			if l.perm != nil {
+				l.perm.SetMode(security.ModeWorkspace)
+			}
+			publish(&Event{Type: EventCheckpoint, SubType: "plan_implement", Content: "plan implement phase (writable)", Data: taskPlan.View(), Timestamp: now()})
+			auditLog("plan", "", "implement", "ok", 0)
+			return false
 		default:
 			return false
 		}

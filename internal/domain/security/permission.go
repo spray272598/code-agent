@@ -64,6 +64,47 @@ type Guard struct {
 	writeTools map[string]bool
 	// MCP/unknown tools: confirm by default
 	mcpConfirm bool
+	// mode enforces the sandbox tier: ModeWorkspace (default, path sandbox),
+	// ModeReadonly (all mutating tools denied), ModeStrict (path sandbox + bash
+	// execution confined to workspace, network writes blocked). Mirrors the
+	// Landlock/Seatbelt tiers Grok Build enforces at the kernel level; on
+	// Windows we degrade gracefully to in-process path guarding.
+	mode SandboxMode
+}
+
+// SandboxMode selects the enforcement tier applied to tool execution.
+type SandboxMode int
+
+const (
+	// ModeWorkspace is the default tier: path sandbox on, writes allowed.
+	ModeWorkspace SandboxMode = iota
+	// ModeReadonly denies every mutating tool (write_file/edit_file/bash/...).
+	ModeReadonly
+	// ModeStrict confines bash to the workspace and blocks network egress.
+	ModeStrict
+)
+
+func (m SandboxMode) String() string {
+	switch m {
+	case ModeReadonly:
+		return "readonly"
+	case ModeStrict:
+		return "strict"
+	default:
+		return "workspace"
+	}
+}
+
+// ParseSandboxMode maps a config string to a SandboxMode.
+func ParseSandboxMode(s string) SandboxMode {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "readonly", "read-only", "ro":
+		return ModeReadonly
+	case "strict":
+		return ModeStrict
+	default:
+		return ModeWorkspace
+	}
 }
 
 type rule struct {
@@ -73,6 +114,11 @@ type rule struct {
 }
 
 func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
+	return NewGuardMode(workspace, pathSandbox, confirmWrite, ModeWorkspace)
+}
+
+// NewGuardMode builds a Guard with an explicit sandbox tier.
+func NewGuardMode(workspace string, pathSandbox, confirmWrite bool, mode SandboxMode) *Guard {
 	g := &Guard{
 		sessionAllow: make(map[string]map[string]bool),
 		pending:      make(map[string]*PendingConfirm),
@@ -84,6 +130,7 @@ func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
 		pathSandbox:  pathSandbox,
 		confirmWrite: confirmWrite,
 		mcpConfirm:   true,
+		mode:         mode,
 		readTools: map[string]bool{
 			"read_file": true, "glob": true, "grep": true, "memory_search": true,
 			"code_search": true, "code_index": true,
@@ -94,6 +141,21 @@ func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
 	}
 	g.initRules()
 	return g
+}
+
+// Mode returns the active sandbox tier.
+func (g *Guard) Mode() SandboxMode { return g.mode }
+
+// SetMode switches the sandbox tier at runtime. Transitioning into readonly is
+// the mechanism behind PlanMode's explore phase; exiting back to workspace
+// (or strict) resumes the implement phase.
+func (g *Guard) SetMode(m SandboxMode) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.mode = m
+	g.mu.Unlock()
 }
 
 func (g *Guard) initRules() {
@@ -169,6 +231,36 @@ func matchAny(rules []rule, variants []string) *rule {
 	return nil
 }
 
+// isMutating reports whether a tool can change the filesystem or process state.
+func (g *Guard) isMutating(tool string) bool {
+	base := toolBaseName(tool)
+	if g.writeTools[tool] || g.writeTools[base] {
+		return true
+	}
+	switch base {
+	case "bash", "run_command", "write_file", "edit_file", "memory_save",
+		"apply_patch", "patch", "delete_file":
+		return true
+	}
+	return false
+}
+
+// networkEgressRules returns deny rules matching outbound network commands,
+// used by the strict sandbox tier to block egress.
+func (g *Guard) networkEgressRules() []rule {
+	return []rule{
+		{id: "curl", reason: "network egress", patterns: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)\bcurl\b`), regexp.MustCompile(`(?i)\bwget\b`),
+		}},
+		{id: "ssh", reason: "remote shell", patterns: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)\bssh\s`), regexp.MustCompile(`(?i)\bscp\b`),
+		}},
+		{id: "nc", reason: "netcat", patterns: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)\bnc\b`), regexp.MustCompile(`(?i)\bncat\b`),
+		}},
+	}
+}
+
 func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	summary := tool + ": " + fmt.Sprint(args)
 	tool = strings.TrimSpace(tool)
@@ -197,6 +289,21 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	if r := matchAny(g.denyRules, variants); r != nil {
 		g.incDeny(sessionID)
 		return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
+	}
+
+	// Sandbox tier (mirrors kernel-enforced Landlock/Seatbelt modes).
+	// ModeReadonly: every mutating tool is denied outright.
+	if g.mode == ModeReadonly && g.isMutating(tool) {
+		return Decision{Action: ActionDeny, Layer: "L1", RuleID: "readonly", Reason: "read-only sandbox: mutating tool denied", Tool: tool, Summary: summary}
+	}
+	// ModeStrict: bash execution confined to the workspace and network egress blocked.
+	if g.mode == ModeStrict {
+		base := toolBaseName(tool)
+		if tool == "bash" || base == "bash" || tool == "run_command" {
+			if r := matchAny(g.networkEgressRules(), variants); r != nil {
+				return Decision{Action: ActionDeny, Layer: "L1", RuleID: "strict_egress", Reason: "strict sandbox: network egress blocked", Tool: tool, Summary: summary}
+			}
+		}
 	}
 
 	// L2 path sandbox (also normalize path tricks / URL / Unicode)

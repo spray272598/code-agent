@@ -564,6 +564,80 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 	return ch, session, nil
 }
 
+// RunBackground starts a long-running agent task detached from the HTTP
+// connection (headless mode). It returns immediately with the session ID; the
+// loop runs in a goroutine and can be controlled via SendControl / CancelSession.
+// Results and checkpoints are persisted like a normal run, so the caller can
+// poll session status later.
+func (a *ChatApp) RunBackground(ctx context.Context, req ChatRequest, onEvent func(*engine.Event)) (string, error) {
+	if a.loop == nil {
+		return "", fmt.Errorf("agent not configured")
+	}
+	forceCompact := false
+	if _, handled, fc := a.trySlash(&req); !handled {
+		forceCompact = fc
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	session, err := a.resolveSession(req)
+	if err != nil {
+		cancel()
+		return "", err
+	}
+	if err := a.checkRate(ctx, req.UserID); err != nil {
+		cancel()
+		return "", err
+	}
+	if err := a.checkQuota(ctx, req.UserID); err != nil {
+		cancel()
+		return "", err
+	}
+	unlock, err := a.acquireRunLock(ctx, session.ID)
+	if err != nil {
+		cancel()
+		return "", err
+	}
+	ctrlCh := make(chan engine.Control, 8)
+	if a.runs != nil {
+		a.runs.Register(session.ID, cancel)
+		a.runs.AttachControl(session.ID, ctrlCh)
+	}
+	a.markRun(session, req, checkpoint.StatusRunning, nil, "")
+	go func() {
+		defer cancel()
+		defer unlock()
+		if a.runs != nil {
+			defer a.runs.Unregister(session.ID, cancel)
+		}
+		ch := make(chan *engine.Event, 128)
+		go func() {
+			for ev := range ch {
+				if onEvent != nil {
+					onEvent(ev)
+				}
+			}
+		}()
+		res, err := a.loop.Run(ctx, session, req.Message, ch, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact, ControlCh: ctrlCh})
+		close(ch)
+		if err != nil && res == nil {
+			if ctx.Err() != nil {
+				a.markRun(session, req, checkpoint.StatusCancelled, nil, "cancel")
+			} else {
+				a.markRun(session, req, checkpoint.StatusFailed, nil, "error")
+			}
+		}
+		if res != nil {
+			a.persistResultCheckpoint(session, req, res, ctx.Err())
+		}
+		if res != nil && a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
+			day := time.Now().Format("20060102")
+			if _, err := a.redis.IncrBy(ctx, fmt.Sprintf("token:user:%s:%s", session.UserID, day), int64(res.TokenUsed), 48*time.Hour); err != nil {
+				observability.Warnf("token incr: %v", err)
+			}
+		}
+	}()
+	return session.ID, nil
+}
+
 // CancelSession interrupts an in-process run and writes a cancelled checkpoint.
 func (a *ChatApp) CancelSession(sessionID, reason string) (bool, error) {
 	if sessionID == "" {
@@ -630,6 +704,18 @@ func (a *ChatApp) ResumeControl(sessionID string) bool {
 func (a *ChatApp) InterruptSession(sessionID, reason string) (bool, error) {
 	a.SendControl(sessionID, engine.ControlInterrupt, "")
 	return a.CancelSession(sessionID, reason)
+}
+
+// EnterPlanMode switches an active session into the read-only plan explore
+// phase (3.5 PlanMode state machine). The engine's guard denies mutating tools
+// until ExitPlanMode is called.
+func (a *ChatApp) EnterPlanMode(sessionID string) bool {
+	return a.SendControl(sessionID, engine.ControlPlanExplore, "")
+}
+
+// ExitPlanMode leaves the plan phase and resumes the writable implement phase.
+func (a *ChatApp) ExitPlanMode(sessionID string) bool {
+	return a.SendControl(sessionID, engine.ControlPlanImplement, "")
 }
 
 // GetCheckpoint returns durable snapshot for a session.

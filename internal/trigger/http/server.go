@@ -14,6 +14,7 @@ import (
 
 	"github.com/spray272598/code-agent/internal/api/dto"
 	"github.com/spray272598/code-agent/internal/application"
+	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	authdomain "github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/codeindex"
 	"github.com/spray272598/code-agent/internal/domain/host"
@@ -97,6 +98,9 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/session/list", s.handleSessionList)
 	mux.HandleFunc("/api/v1/chat", s.handleChat)
 	mux.HandleFunc("/api/v1/chat/stream", s.handleChatStream)
+	mux.HandleFunc("/api/v1/chat/background", s.handleChatBackground)
+	// ACP (Agent Client Protocol) compatible surface for IDEs
+	s.MountACP(mux)
 	mux.HandleFunc("/api/v1/tools", s.handleTools)
 	mux.HandleFunc("/api/v1/permission/pending", s.handlePermPending)
 	mux.HandleFunc("/api/v1/permission/approve", s.handlePermApprove)
@@ -114,6 +118,9 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/v1/audit", s.authJWT(s.handleAudit))
 	mux.HandleFunc("/api/v1/blobs", s.handleBlobGet)
+	mux.HandleFunc("/api/v1/usage", s.handleUsage)
+	mux.HandleFunc("/api/v1/session/plan/explore", s.handlePlanExplore)
+	mux.HandleFunc("/api/v1/session/plan/implement", s.handlePlanImplement)
 	mux.HandleFunc("/api/v1/host/devices", s.handleHostDevices)
 	mux.HandleFunc("/api/v1/session/cancel", s.handleSessionCancel)
 	mux.HandleFunc("/api/v1/session/checkpoint", s.handleSessionCheckpoint)
@@ -862,6 +869,28 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleChatBackground starts a detached (headless) run and returns the session
+// ID immediately. The agent loop runs in the background; poll /chat or /usage
+// to observe progress, and use SendControl/CancelSession to steer it.
+func (s *Server) handleChatBackground(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "405", "method not allowed")
+		return
+	}
+	var edge dto.ChatRequest
+	if !decodeJSON(w, r, &edge) {
+		return
+	}
+	sessionID, err := s.app.RunBackground(r.Context(), dto.ToAppChat(edge), func(ev *engine.Event) {
+		_ = ev // background mode does not push to a client by default
+	})
+	if err != nil {
+		writeErr(w, 400, "400", err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"sessionId": sessionID, "mode": "background"})
+}
+
 func (s *Server) handlePermPending(w http.ResponseWriter, r *http.Request) {
 	sid := r.URL.Query().Get("sessionId")
 	g := s.app.Permission()
@@ -1232,6 +1261,69 @@ func (s *Server) handleBlobGet(w http.ResponseWriter, r *http.Request) {
 		"key": key, "size": len(data),
 		"preview": truncateStr(string(data), 500),
 	}})
+}
+
+// handleUsage returns the current resource-consumption snapshot (3.5 usage
+// panel). Accepts optional ?user= and ?session= query params.
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, "405", "GET only")
+		return
+	}
+	userID := r.URL.Query().Get("user")
+	sessionID := r.URL.Query().Get("session")
+	if userID == "" {
+		userID = "default"
+	}
+	u := s.app.UsageSnapshot(r.Context(), userID, sessionID)
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": u})
+}
+
+// handlePlanExplore switches an active session into the read-only plan explore
+// phase (3.5 PlanMode state machine).
+func (s *Server) handlePlanExplore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "405", "POST only")
+		return
+	}
+	var body struct {
+		SessionID string `json:"sessionId"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.SessionID == "" {
+		body.SessionID = r.URL.Query().Get("sessionId")
+	}
+	if body.SessionID == "" {
+		writeErr(w, 400, "400", "sessionId required")
+		return
+	}
+	ok := s.app.EnterPlanMode(body.SessionID)
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"explore": ok}})
+}
+
+// handlePlanImplement exits the plan phase into the writable implement phase.
+func (s *Server) handlePlanImplement(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "405", "POST only")
+		return
+	}
+	var body struct {
+		SessionID string `json:"sessionId"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.SessionID == "" {
+		body.SessionID = r.URL.Query().Get("sessionId")
+	}
+	if body.SessionID == "" {
+		writeErr(w, 400, "400", "sessionId required")
+		return
+	}
+	ok := s.app.ExitPlanMode(body.SessionID)
+	writeJSON(w, 200, map[string]any{"code": "0000", "data": map[string]any{"implement": ok}})
 }
 
 func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {

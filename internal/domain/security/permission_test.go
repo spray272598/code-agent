@@ -2,6 +2,63 @@ package security
 
 import "testing"
 
+func TestSandboxModeReadonly(t *testing.T) {
+	g := NewGuardMode("./workspace", true, true, ModeReadonly)
+	d := g.Check("s1", "write_file", map[string]any{"path": "a.txt", "content": "x"})
+	if d.Action != ActionDeny {
+		t.Fatalf("readonly: want deny write, got %s", d.Action)
+	}
+	d2 := g.Check("s1", "bash", map[string]any{"command": "echo hi"})
+	if d2.Action != ActionDeny {
+		t.Fatalf("readonly: want deny bash, got %s", d2.Action)
+	}
+	// read tools still allowed
+	if r := g.Check("s1", "read_file", map[string]any{"path": "a.txt"}); r.Action != ActionAllow {
+		t.Fatalf("readonly: read should allow, got %s", r.Action)
+	}
+	// runtime switch back to workspace re-enables writes
+	g.SetMode(ModeWorkspace)
+	if r := g.Check("s1", "write_file", map[string]any{"path": "a.txt", "content": "x"}); r.Action != ActionConfirm {
+		t.Fatalf("after SetMode: want confirm, got %s", r.Action)
+	}
+}
+
+func TestSandboxModeStrict(t *testing.T) {
+	g := NewGuardMode("./workspace", true, true, ModeStrict)
+	// mutating write tool still confirmable (path sandbox handles location)
+	if r := g.Check("s1", "write_file", map[string]any{"path": "a.txt"}); r.Action != ActionConfirm {
+		t.Fatalf("strict: write should confirm, got %s", r.Action)
+	}
+	// network egress blocked
+	if r := g.Check("s1", "bash", map[string]any{"command": "curl https://evil"}); r.Action != ActionDeny {
+		t.Fatalf("strict: egress should deny, got %s", r.Action)
+	}
+	if r := g.Check("s1", "bash", map[string]any{"command": "ssh host"}); r.Action != ActionDeny {
+		t.Fatalf("strict: ssh should deny, got %s", r.Action)
+	}
+}
+
+func TestParseSandboxMode(t *testing.T) {
+	if ParseSandboxMode("readonly") != ModeReadonly {
+		t.Fatal("readonly parse")
+	}
+	if ParseSandboxMode("read-only") != ModeReadonly {
+		t.Fatal("read-only parse")
+	}
+	if ParseSandboxMode("ro") != ModeReadonly {
+		t.Fatal("ro parse")
+	}
+	if ParseSandboxMode("STRICT") != ModeStrict {
+		t.Fatal("strict parse")
+	}
+	if ParseSandboxMode("") != ModeWorkspace {
+		t.Fatal("empty -> workspace")
+	}
+	if ModeReadonly.String() != "readonly" || ModeStrict.String() != "strict" || ModeWorkspace.String() != "workspace" {
+		t.Fatal("mode string")
+	}
+}
+
 func TestPathSandbox(t *testing.T) {
 	g := NewGuard("./workspace", true, true)
 	d := g.Check("s1", "read_file", map[string]any{"path": "../secret"})

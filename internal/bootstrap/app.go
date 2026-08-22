@@ -242,7 +242,7 @@ func Build(cfg *config.Config) (*App, error) {
 	}
 
 	ws := coding.NewWorkspace(workspaceRoot)
-	perm := security.NewGuard(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite)
+	perm := security.NewGuardMode(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite, security.ParseSandboxMode(cfg.Security.SandboxMode))
 	reg := tool.NewRegistry()
 	// local coding tools
 	localRead := coding.NewReadFile(ws)
@@ -272,6 +272,11 @@ func Build(cfg *config.Config) (*App, error) {
 		reg.Register(localGlob)
 		reg.Register(localGrep)
 	}
+	// expanded tool set (apply_patch / lint / codecov / web_search)
+	reg.Register(coding.NewApplyPatch(ws))
+	reg.Register(coding.NewLint(ws))
+	reg.Register(coding.NewCodecov(ws))
+	reg.Register(coding.NewWebSearch(ws, nil))
 	reg.Register(coding.NewSwitchWorkspace(ws, perm))
 	reg.Register(coding.NewMemorySave(memCtx))
 	reg.Register(coding.NewMemorySearch(memCtx))
