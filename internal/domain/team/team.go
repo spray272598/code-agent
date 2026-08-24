@@ -1,26 +1,28 @@
 package team
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/subagent"
 	"gopkg.in/yaml.v3"
 )
 
-// Collaboration modes (Claude Code / multi-agent patterns).
 const (
-	ModeParallel = "parallel" // independent roles run together (default)
-	ModeReview   = "review"   // explore → verify critiques output
-	ModeDebate   = "debate"   // two roles argue, general merges
-	ModeMerge    = "merge"    // collect outputs then merge-only step
+	ModeParallel = "parallel"
+	ModeReview   = "review"
+	ModeDebate   = "debate"
+	ModeMerge    = "merge"
 )
 
-// Config maps role names to tool allowlists (thin Agent Teams).
+var ValidModes = []string{ModeParallel, ModeReview, ModeDebate, ModeMerge}
+
 type Config struct {
 	Name  string                `yaml:"name"`
-	Mode  string                `yaml:"mode"` // parallel|review|debate|merge
+	Mode  string                `yaml:"mode"`
 	Roles map[string]RoleConfig `yaml:"roles"`
 }
 
@@ -30,7 +32,6 @@ type RoleConfig struct {
 	MaxSteps    int      `yaml:"max_steps"`
 }
 
-// LoadYAML file; on failure returns nil.
 func LoadYAML(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -43,7 +44,6 @@ func LoadYAML(path string) (*Config, error) {
 	return &c, nil
 }
 
-// ApplyToRunner merges team roles into subagent runner.
 func ApplyToRunner(r *subagent.Runner, c *Config) {
 	if r == nil || c == nil || len(c.Roles) == 0 {
 		return
@@ -54,13 +54,12 @@ func ApplyToRunner(r *subagent.Runner, c *Config) {
 	for name, rc := range c.Roles {
 		key := strings.ToLower(name)
 		r.Roles[key] = subagent.RoleConfig{
-			Tools: append([]string{}, rc.Tools...),
+			Tools:   append([]string{}, rc.Tools...),
 			MaxSteps: rc.MaxSteps,
 		}
 	}
 }
 
-// ListRoles for slash/help.
 func ListRoles(c *Config) string {
 	if c == nil || len(c.Roles) == 0 {
 		return "default roles: explore, verify, general"
@@ -85,7 +84,6 @@ func ListRoles(c *Config) string {
 	return b.String()
 }
 
-// ExpandCollaboration turns a user goal + mode into ordered/parallel subagent specs.
 func ExpandCollaboration(mode, goal string) []subagent.Spec {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
@@ -110,7 +108,7 @@ func ExpandCollaboration(mode, goal string) []subagent.Spec {
 			{ID: "merge-verify", Role: "verify", Prompt: "Collect verification notes for: " + goal},
 			{ID: "merge-final", Role: "general", Prompt: "Merge all prior worker notes into a single plan for: " + goal},
 		}
-	default: // parallel
+	default:
 		return []subagent.Spec{
 			{ID: "p-explore", Role: "explore", Prompt: goal, Isolation: "worktree"},
 			{ID: "p-verify", Role: "verify", Prompt: "Verify aspects of: " + goal, Isolation: "process"},
@@ -118,7 +116,6 @@ func ExpandCollaboration(mode, goal string) []subagent.Spec {
 	}
 }
 
-// FormatResults combines multi-agent outputs for parent Observation.
 func FormatResults(mode string, results []subagent.Result) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("## Team mode=%s (%d agents)\n", mode, len(results)))
@@ -126,4 +123,56 @@ func FormatResults(mode string, results []subagent.Result) string {
 		b.WriteString(fmt.Sprintf("### [%s] role=%s status=%s\n%s\n\n", r.ID, r.Role, r.Status, r.Output))
 	}
 	return b.String()
+}
+
+// NewEngine creates a collaboration engine from a team config.
+func NewEngine(cfg *Config, runner *subagent.Runner, llm port.ILLMPort) *Engine {
+	return &Engine{cfg: cfg, runner: runner, llm: llm}
+}
+
+// Engine is the entry point for team-based collaboration.
+type Engine struct {
+	cfg    *Config
+	runner *subagent.Runner
+	llm    port.ILLMPort
+}
+
+// Run starts a collaboration workflow using the team config's mode.
+func (e *Engine) Run(ctx context.Context, goal string) (*CollaborationState, error) {
+	mode := ModeParallel
+	if e.cfg != nil && e.cfg.Mode != "" {
+		mode = strings.ToLower(e.cfg.Mode)
+	}
+	collab := NewCollaboration(mode, goal, e.runner, e.llm)
+	return collab.Run(ctx)
+}
+
+// CreateCollaboration creates a Collaboration for manual orchestration.
+func (e *Engine) CreateCollaboration(goal string) *Collaboration {
+	mode := ModeParallel
+	if e.cfg != nil && e.cfg.Mode != "" {
+		mode = strings.ToLower(e.cfg.Mode)
+	}
+	return NewCollaboration(mode, goal, e.runner, e.llm)
+}
+
+// ModeDescriptions returns human-readable descriptions of each mode.
+func ModeDescriptions() map[string]string {
+	return map[string]string{
+		ModeParallel: "Parallel: multiple agents work simultaneously, results are merged",
+		ModeReview:   "Review: explore → verify → feedback → fix loop with up to 2 rounds",
+		ModeDebate:   "Debate: two agents argue different approaches, third synthesizes",
+		ModeMerge:    "Merge: workers collect facts, then a synthesizer merges into one answer",
+	}
+}
+
+// ValidateMode checks if a mode string is valid.
+func ValidateMode(mode string) bool {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	for _, m := range ValidModes {
+		if mode == m {
+			return true
+		}
+	}
+	return false
 }

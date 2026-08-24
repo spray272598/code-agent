@@ -7,17 +7,15 @@ import (
 	"time"
 )
 
-// PendingCall waits for a host tool_result.
 type PendingCall struct {
 	Ch chan Envelope
 }
 
-// Bridge routes tool calls to a connected host agent over WebSocket.
 type Bridge struct {
 	mu       sync.RWMutex
-	sessions map[string]*HostSession // deviceId -> session
-	// default device when only one connected
-	pending map[string]*PendingCall // callId -> pending
+	sessions map[string]*HostSession
+	pending  map[string]*PendingCall
+	hbMgr    *HeartbeatManager
 }
 
 type HostSession struct {
@@ -32,6 +30,31 @@ func NewBridge() *Bridge {
 		sessions: map[string]*HostSession{},
 		pending:  map[string]*PendingCall{},
 	}
+}
+
+func NewBridgeWithHeartbeat(cfg HeartbeatConfig) *Bridge {
+	b := &Bridge{
+		sessions: map[string]*HostSession{},
+		pending:  map[string]*PendingCall{},
+	}
+	b.hbMgr = NewHeartbeatManager(b, cfg)
+	return b
+}
+
+func (b *Bridge) StartHeartbeat(ctx context.Context) {
+	if b.hbMgr != nil {
+		b.hbMgr.Start(ctx)
+	}
+}
+
+func (b *Bridge) StopHeartbeat() {
+	if b.hbMgr != nil {
+		b.hbMgr.Stop()
+	}
+}
+
+func (b *Bridge) HeartbeatManager() *HeartbeatManager {
+	return b.hbMgr
 }
 
 func (b *Bridge) Register(s *HostSession) {
@@ -66,13 +89,38 @@ func (b *Bridge) ListDevices() []map[string]any {
 	return out
 }
 
+// ListSessions returns a copy of all host sessions.
+func (b *Bridge) ListSessions() []*HostSession {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]*HostSession, 0, len(b.sessions))
+	for _, s := range b.sessions {
+		cp := *s
+		out = append(out, &cp)
+	}
+	return out
+}
+
 func (b *Bridge) OnlineCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return len(b.sessions)
 }
 
-// ResolveResult delivers host tool_result to waiter.
+// OnlineCountHealthy returns the count of sessions that are currently healthy.
+func (b *Bridge) OnlineCountHealthy() int {
+	if b.hbMgr == nil {
+		return b.OnlineCount()
+	}
+	count := 0
+	for _, s := range b.sessions {
+		if b.hbMgr.IsHealthy(s.DeviceID) {
+			count++
+		}
+	}
+	return count
+}
+
 func (b *Bridge) ResolveResult(env Envelope) {
 	b.mu.Lock()
 	p := b.pending[env.CallID]
@@ -88,7 +136,6 @@ func (b *Bridge) ResolveResult(env Envelope) {
 	}
 }
 
-// Call sends tool_call to a host and waits for tool_result.
 func (b *Bridge) Call(ctx context.Context, deviceID, callID, name string, args map[string]any, timeout time.Duration) (string, error) {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -132,11 +179,25 @@ func (b *Bridge) Call(ctx context.Context, deviceID, callID, name string, args m
 	}
 }
 
+// CallWithDegradation calls a tool with graceful degradation on health failure.
+func (b *Bridge) CallWithDegradation(
+	ctx context.Context,
+	deviceID, callID, name string,
+	args map[string]any,
+	timeout time.Duration,
+	strategy GracefulDegradationStrategy,
+	localFallback func(context.Context, map[string]any) (string, error),
+) (string, error) {
+	if b.hbMgr != nil {
+		return b.hbMgr.GracefulCall(ctx, deviceID, callID, name, args, timeout, strategy, localFallback)
+	}
+	return b.Call(ctx, deviceID, callID, name, args, timeout)
+}
+
 func (b *Bridge) pickSession(deviceID string) *HostSession {
 	if deviceID != "" {
 		return b.sessions[deviceID]
 	}
-	// first available
 	for _, s := range b.sessions {
 		return s
 	}
