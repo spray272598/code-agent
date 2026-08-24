@@ -3,11 +3,25 @@ package contextx
 import (
 	"context"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
+	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
 // Compressor multi-level history reduction (walicode-inspired L0–L3).
+//
+// L0: Per-message long-content reduction with 4-level priority chain:
+//
+//	1. Semantic summary (LLM)  → SummarizeSingle() if Summarizer available
+//	2. Segment-based sharding  → ShardLongText() preserves key paragraphs
+//	3. Blob offload            → write to object store, return pointer
+//	4. Head-tail truncation    → TruncateRunesKeepTail() as ultimate fallback
+//
+// L1: Priority-based middle message retention
+// L2: Aggressive budget enforcement
+// L3: LLM-based session summary
 type Compressor struct {
 	TokenBudget   int
 	MessageBudget int
@@ -16,6 +30,14 @@ type Compressor struct {
 	// warning/predictive pre-compact. Default 0.8 → warn at 80% of TokenBudget.
 	CompactThresholdRatio float64
 	Summarizer            *Summarizer
+	BlobStore             blob.Store
+	SessionID             string
+	UserID                string
+	// LongContentThresholdRunes overrides the default long-content threshold.
+	// Default: common.CompressLongContentMaxRunes (2000).
+	LongContentThresholdRunes int
+	// MaxSummaryRunes caps the L0 semantic summary output. Default 400.
+	MaxSummaryRunes int
 }
 
 // DefaultCompactThresholdRatio warns at 80% of the token budget.
@@ -26,10 +48,12 @@ func NewCompressor(tokenBudget int) *Compressor {
 		tokenBudget = 16000
 	}
 	return &Compressor{
-		TokenBudget:           tokenBudget,
-		MessageBudget:         50,
-		KeepRecent:            8,
-		CompactThresholdRatio: DefaultCompactThresholdRatio,
+		TokenBudget:               tokenBudget,
+		MessageBudget:             50,
+		KeepRecent:                8,
+		CompactThresholdRatio:     DefaultCompactThresholdRatio,
+		LongContentThresholdRunes: common.CompressLongContentMaxRunes,
+		MaxSummaryRunes:           400,
 	}
 }
 
@@ -42,6 +66,16 @@ func (c *Compressor) SetCompactThresholdRatio(ratio float64) {
 }
 
 func (c *Compressor) SetSummarizer(s *Summarizer) { c.Summarizer = s }
+func (c *Compressor) SetBlobStore(s blob.Store)   { c.BlobStore = s }
+func (c *Compressor) SetSessionID(id string)      { c.SessionID = id }
+func (c *Compressor) SetUserID(id string)         { c.UserID = id }
+
+// SetLongContentThreshold overrides the L0 long-content detection threshold.
+func (c *Compressor) SetLongContentThreshold(runes int) {
+	if runes > 500 {
+		c.LongContentThresholdRunes = runes
+	}
+}
 
 func (c *Compressor) Needs(history []map[string]any) bool {
 	if len(history) > c.MessageBudget {
@@ -88,15 +122,15 @@ func (c *Compressor) CompressLevels(ctx context.Context, history []map[string]an
 	}
 	before := estimateHistory(history)
 
-	// L0: truncate long contents.
-	// Use head-tail truncation so the trailing part (often the tool result's
-	// conclusion/error) is kept instead of being silently dropped — a pure
-	// head-only truncation risks losing exactly the most useful tail.
+	// L0: reduce long contents with 4-level priority chain.
 	trimmed := make([]map[string]any, len(history))
 	for i, m := range history {
 		cp := copyMap(m)
-		if content, ok := cp["content"].(string); ok && len([]rune(content)) > common.CompressLongContentMaxRunes {
-			cp["content"] = common.TruncateRunesKeepTail(content, common.CompressLongContentMaxRunes)
+		if content, ok := cp["content"].(string); ok {
+			runeLen := utf8.RuneCountInString(content)
+			if runeLen > c.LongContentThresholdRunes {
+				cp["content"] = c.processLongMessage(ctx, content, m)
+			}
 		}
 		trimmed[i] = cp
 	}
@@ -172,6 +206,80 @@ func (c *Compressor) CompressLevels(ctx context.Context, history []map[string]an
 	}
 }
 
+// processLongMessage applies the 4-level priority chain to reduce a single
+// long message's content. Returns the reduced content.
+//
+// Priority:
+//  1. LLM semantic summary (if Summarizer available)
+//  2. Segment-based sharding (always available, no LLM needed)
+//  3. Blob offload (if BlobStore available)
+//  4. Head-tail truncation (ultimate fallback)
+func (c *Compressor) processLongMessage(ctx context.Context, content string, meta map[string]any) string {
+	maxRunes := c.LongContentThresholdRunes
+	if maxRunes <= 0 {
+		maxRunes = common.CompressLongContentMaxRunes
+	}
+
+	// Level 1: Semantic summary via LLM
+	if c.Summarizer != nil {
+		if summary, err := c.Summarizer.SummarizeSingle(ctx, content, c.MaxSummaryRunes); err == nil && summary != "" {
+			return summary
+		}
+		// LLM failed or returned empty → fall through to next level
+		// Use rule-based summary as deterministic fallback
+		if ruleSummary := RuleSummarizeSingle(content, c.MaxSummaryRunes); ruleSummary != "" {
+			return ruleSummary
+		}
+	}
+
+	// Level 2: Segment-based sharding (logical paragraph preservation)
+	shardCfg := DefaultShardConfig()
+	shardCfg.MaxRunes = maxRunes
+	shardCfg.MaxSegments = 6
+	if sharded := ShardLongText(content, shardCfg); sharded != content && hasShardMarkers(sharded) {
+		return sharded
+	}
+
+	// Level 3: Blob offload (object store pointer)
+	if c.BlobStore != nil {
+		role, _ := meta["role"].(string)
+		toolName, _ := meta["toolName"].(string)
+		offloadKey := fmt.Sprintf("sessions/%s/history/%s-%s",
+			safeStr(c.SessionID), safeStr(role), safeStr(toolName))
+		if err := c.BlobStore.Put(ctx, offloadKey, []byte(content), "text/plain; charset=utf-8"); err == nil {
+			preview := common.TruncateRunes(content, maxRunes/2)
+			return preview + fmt.Sprintf(
+				"\n\n[OFFLOADED: full content at object_key=%s; use storage API to fetch]",
+				offloadKey)
+		}
+	}
+
+	// Level 4: Ultimate fallback — head-tail truncation
+	return common.TruncateRunesKeepTail(content, maxRunes)
+}
+
+func hasShardMarkers(s string) bool {
+	if strings.Contains(s, "[SHARDED:") {
+		return true
+	}
+	// truncateToBudget (used for single-segment fallback) also adds
+	// "segments omitted" but does NOT preserve multiple segments.
+	// Real sharding preserves head/tail segments separated by \n\n.
+	return strings.Contains(s, "segments omitted") && strings.Contains(s, "\n\n")
+}
+
+func safeStr(s string) string {
+	if s == "" {
+		return "_"
+	}
+	for i := 0; i < len(s); i++ {
+		if (s[i] < 'a' || s[i] > 'z') && (s[i] < 'A' || s[i] > 'Z') && (s[i] < '0' || s[i] > '9') && s[i] != '-' && s[i] != '_' {
+			return "_"
+		}
+	}
+	return s
+}
+
 func pickLevel(cur, next string) string {
 	order := map[string]int{"": 0, "none": 0, "L0": 1, "L1": 2, "L2": 3, "L3": 4}
 	if order[next] >= order[cur] {
@@ -228,5 +336,4 @@ func containsFold(s, sub string) bool {
 	return false
 }
 
-// Debug helper
 var _ = fmt.Sprintf

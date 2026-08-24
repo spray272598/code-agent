@@ -60,6 +60,147 @@ No tool JSON. Max ~250 words.`,
 	return out, nil
 }
 
+// SummarizeSingle produces a concise semantic summary for a single long message.
+// Used by L0 compression instead of raw truncation. Returns the summary plus
+// an "[SUMMARIZED]" marker so the LLM knows it's a compressed representation.
+func (s *Summarizer) SummarizeSingle(ctx context.Context, content string, maxRunes int) (string, error) {
+	if s == nil || s.LLM == nil {
+		return "", fmt.Errorf("summarizer not configured")
+	}
+	if maxRunes <= 0 {
+		maxRunes = 400
+	}
+
+	resp, err := s.LLM.Generate(ctx, &port.ChatRequest{
+		SystemPrompt: `You summarize a single long message for context compression.
+Produce a concise summary (~3-5 sentences) preserving: key information, decisions, errors, file paths, and conclusions.
+Focus on facts, not style. No markdown.`,
+		Messages: []port.ChatMessage{{Role: "user", Content: content}},
+		Temperature: 0.1,
+		MaxTokens:   150,
+	})
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		return "", err
+	}
+
+	out := strings.TrimSpace(resp.Content)
+	// Truncate if still too long
+	if len([]rune(out)) > maxRunes {
+		out = common.TruncateRunesKeepTail(out, maxRunes)
+	}
+	return "[SUMMARIZED] " + out, nil
+}
+
+// RuleSummarizeSingle is a deterministic fallback when LLM is unavailable.
+// Extracts key sentences by looking for signal words.
+func RuleSummarizeSingle(content string, maxRunes int) string {
+	if maxRunes <= 0 {
+		maxRunes = 400
+	}
+
+	sentences := splitSentences(content)
+	if len(sentences) <= 3 {
+		return content
+	}
+
+	// Score sentences: those with signal words or code markers
+	scores := make([]int, len(sentences))
+	for i, s := range sentences {
+		scores[i] = scoreSentence(s)
+	}
+
+	// Select top-scoring sentences + first + last
+	selected := map[int]bool{}
+	selected[0] = true
+	selected[len(sentences)-1] = true
+
+	// Take top 3 by score
+	type idxScore struct{ idx, score int }
+	var ranked []idxScore
+	for i := 1; i < len(sentences)-1; i++ {
+		ranked = append(ranked, idxScore{i, scores[i]})
+	}
+	for i := 0; i < len(ranked)-1; i++ {
+		for j := i + 1; j < len(ranked); j++ {
+			if ranked[j].score > ranked[i].score {
+				ranked[i], ranked[j] = ranked[j], ranked[i]
+			}
+		}
+	}
+	for i := 0; i < 3 && i < len(ranked); i++ {
+		selected[ranked[i].idx] = true
+	}
+
+	var b strings.Builder
+	for i, s := range sentences {
+		if selected[i] {
+			if b.Len() > 0 {
+				b.WriteString(" ")
+			}
+			b.WriteString(s)
+		}
+	}
+
+	result := b.String()
+	if len([]rune(result)) > maxRunes {
+		result = common.TruncateRunesKeepTail(result, maxRunes)
+	}
+	return "[RULE_SUMMARY] " + result
+}
+
+func splitSentences(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+
+	var sentences []string
+	var current strings.Builder
+
+	runes := []rune(text)
+	for i := 0; i < len(runes); i++ {
+		current.WriteRune(runes[i])
+		if runes[i] == '.' || runes[i] == '!' || runes[i] == '?' ||
+			runes[i] == '\n' && i+1 < len(runes) && runes[i+1] == '\n' {
+			s := strings.TrimSpace(current.String())
+			if s != "" {
+				sentences = append(sentences, s)
+			}
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		s := strings.TrimSpace(current.String())
+		if s != "" {
+			sentences = append(sentences, s)
+		}
+	}
+	if len(sentences) == 0 {
+		return []string{text}
+	}
+	return sentences
+}
+
+func scoreSentence(s string) int {
+	score := 0
+	lower := strings.ToLower(s)
+	signals := []string{"error", "failed", "success", "result", "结论", "结果", "失败", "成功", "错误",
+		"package ", "func ", "type ", "import ", "const ", "var ",
+		"DENIED", "CONFIRM", "completed", "approved", "=", "return", "nil"}
+	for _, sig := range signals {
+		if strings.Contains(lower, strings.ToLower(sig)) {
+			score += 3
+		}
+	}
+	if len(s) > 100 {
+		score++
+	}
+	if len(s) > 200 {
+		score++
+	}
+	return score
+}
+
 func ruleSummary(prior string, middle []map[string]any) string {
 	var parts []string
 	if prior != "" {
