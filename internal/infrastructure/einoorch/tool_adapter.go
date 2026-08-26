@@ -170,12 +170,17 @@ func (t *GuardedTool) execCross(ctx context.Context, name string, args map[strin
 		text = res.Text
 	}
 
-	// cache successful read-only
+	if t.Guard != nil && t.Guard.Sanitizer() != nil {
+		sanitizer := t.Guard.Sanitizer()
+		if sanitizer.HasAnyMatch(text) {
+			text = sanitizer.RedactAll(text)
+		}
+	}
+
 	if decision == "ok" && cross != nil && cross.Cache != nil {
 		cross.Cache.Put(name, args, text)
 	}
 
-	// PostToolUse
 	if cross != nil && cross.Hooks != nil {
 		cross.Hooks.Emit(ctx, hook.Event{
 			Point: hook.PostToolUse, SessionID: sessionID, Tool: name, Args: args, Result: text,

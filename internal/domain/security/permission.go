@@ -45,7 +45,8 @@ type AwaitingResume struct {
 	Ready     bool
 }
 
-// Guard implements 5-layer defense with command normalization.
+// Guard implements 5-layer defense with command normalization, extended with
+// Glob-based deny rules, secret sanitization, audit logging, and network policy.
 type Guard struct {
 	mu           sync.RWMutex
 	sessionAllow map[string]map[string]bool
@@ -54,22 +55,22 @@ type Guard struct {
 	denyStreak   map[string]int
 	circuitLimit int
 	workspace    string
-	sessionWS    map[string]string // sessionID → override workspace
+	sessionWS    map[string]string
 	pathSandbox  bool
 	confirmWrite bool
 	denyRules    []rule
 	confirmRules []rule
-	// tools that are always allow / confirm / deny by name class
-	readTools  map[string]bool
-	writeTools map[string]bool
-	// MCP/unknown tools: confirm by default
-	mcpConfirm bool
-	// mode enforces the sandbox tier: ModeWorkspace (default, path sandbox),
-	// ModeReadonly (all mutating tools denied), ModeStrict (path sandbox + bash
-	// execution confined to workspace, network writes blocked). Mirrors the
-	// Landlock/Seatbelt tiers Grok Build enforces at the kernel level; on
-	// Windows we degrade gracefully to in-process path guarding.
-	mode SandboxMode
+	readTools    map[string]bool
+	writeTools   map[string]bool
+	mcpConfirm   bool
+	mode         SandboxMode
+	// Extended security components
+	denyEngine    *DenyEngine
+	sanitizer     *Sanitizer
+	audit         *AuditLogger
+	netEnforcer   *NetworkEnforcer
+	sandboxMgr    *SandboxManager
+	configLoader  *ConfigLoader
 }
 
 // SandboxMode selects the enforcement tier applied to tool execution.
@@ -117,7 +118,8 @@ func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
 	return NewGuardMode(workspace, pathSandbox, confirmWrite, ModeWorkspace)
 }
 
-// NewGuardMode builds a Guard with an explicit sandbox tier.
+// NewGuardMode builds a Guard with an explicit sandbox tier and all extended
+// security components (deny engine, sanitizer, audit, network policy, sandbox mgr).
 func NewGuardMode(workspace string, pathSandbox, confirmWrite bool, mode SandboxMode) *Guard {
 	g := &Guard{
 		sessionAllow: make(map[string]map[string]bool),
@@ -140,8 +142,31 @@ func NewGuardMode(workspace string, pathSandbox, confirmWrite bool, mode Sandbox
 		},
 	}
 	g.initRules()
+	g.initExtendedSecurity(workspace)
 	return g
 }
+
+func (g *Guard) initExtendedSecurity(workspace string) {
+	g.sanitizer = DefaultSanitizer()
+	g.audit = DefaultAuditLogger()
+	g.netEnforcer = NewNetworkEnforcer(DefaultNetworkPolicy())
+	g.configLoader = NewConfigLoader(workspace)
+	if denyCfg, err := g.configLoader.Load(); err == nil {
+		if engine, err := NewDenyEngine(denyCfg.Deny); err == nil {
+			g.denyEngine = engine
+		}
+	} else if engine, err := DefaultDenyEngine(); err == nil {
+		g.denyEngine = engine
+	}
+	g.sandboxMgr = NewSandboxManager(workspace, g.configLoader, g.audit)
+}
+
+func (g *Guard) DenyEngine() *DenyEngine        { return g.denyEngine }
+func (g *Guard) Sanitizer() *Sanitizer          { return g.sanitizer }
+func (g *Guard) Audit() *AuditLogger            { return g.audit }
+func (g *Guard) NetworkEnforcer() *NetworkEnforcer { return g.netEnforcer }
+func (g *Guard) SandboxManager() *SandboxManager  { return g.sandboxMgr }
+func (g *Guard) ConfigLoader() *ConfigLoader     { return g.configLoader }
 
 // Mode returns the active sandbox tier.
 func (g *Guard) Mode() SandboxMode { return g.mode }
@@ -271,15 +296,18 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	if g.sessionAllow[sessionID] != nil {
 		if g.sessionAllow[sessionID]["*"] {
 			g.mu.RUnlock()
+			g.auditAllow(CategoryTool, tool, "session approved", sessionID)
 			return Decision{Action: ActionAllow, Layer: "L4", Tool: tool, Summary: summary, Reason: "session approve all"}
 		}
 		if g.sessionAllow[sessionID][sig(tool, args)] {
 			g.mu.RUnlock()
+			g.auditAllow(CategoryTool, tool, "session approved specific", sessionID)
 			return Decision{Action: ActionAllow, Layer: "L4", Tool: tool, Summary: summary}
 		}
 	}
 	g.mu.RUnlock()
 	if streak >= g.circuitLimit {
+		g.auditDeny(CategoryTool, "circuit_breaker", tool, "too many denials", sessionID)
 		return Decision{Action: ActionDeny, Layer: "L5", RuleID: "circuit", Reason: "too many denials", Tool: tool, Summary: summary}
 	}
 
@@ -288,82 +316,155 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	variants := CommandVariants(cmd)
 	if r := matchAny(g.denyRules, variants); r != nil {
 		g.incDeny(sessionID)
+		g.auditDeny(CategoryTool, r.id, tool, r.reason, sessionID)
 		return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 	}
 
-	// Sandbox tier (mirrors kernel-enforced Landlock/Seatbelt modes).
-	// ModeReadonly: every mutating tool is denied outright.
+	// Sandbox tier
 	if g.mode == ModeReadonly && g.isMutating(tool) {
+		g.auditDeny(CategorySandbox, "readonly", tool, "read-only sandbox: mutating tool denied", sessionID)
 		return Decision{Action: ActionDeny, Layer: "L1", RuleID: "readonly", Reason: "read-only sandbox: mutating tool denied", Tool: tool, Summary: summary}
 	}
-	// ModeStrict: bash execution confined to the workspace and network egress blocked.
 	if g.mode == ModeStrict {
 		base := toolBaseName(tool)
 		if tool == "bash" || base == "bash" || tool == "run_command" {
 			if r := matchAny(g.networkEgressRules(), variants); r != nil {
+				g.auditDeny(CategoryNetwork, "strict_egress", tool, "strict sandbox: network egress blocked", sessionID)
 				return Decision{Action: ActionDeny, Layer: "L1", RuleID: "strict_egress", Reason: "strict sandbox: network egress blocked", Tool: tool, Summary: summary}
 			}
 		}
 	}
 
-	// L2 path sandbox (also normalize path tricks / URL / Unicode)
-	// switch_workspace is exempt: it needs to accept paths outside current workspace
+	// L2 path sandbox + Glob deny engine
 	if g.pathSandbox && tool != "switch_workspace" {
 		if p := pathArg(tool, args); p != "" {
 			norm := NormalizePathArg(p)
 			if !g.underWorkspace(sessionID, norm) {
 				g.incDeny(sessionID)
+				g.auditDeny(CategorySandbox, "path_sandbox", norm, "path outside workspace", sessionID)
 				return Decision{Action: ActionDeny, Layer: "L2", RuleID: "path_sandbox", Reason: "path outside workspace", Tool: tool, Summary: summary}
 			}
+			if g.denyEngine != nil && g.denyEngine.IsDenied(norm) {
+				g.incDeny(sessionID)
+				g.auditDeny(CategorySandbox, "glob_deny", norm, "glob pattern denied path", sessionID)
+				return Decision{Action: ActionDeny, Layer: "L2", RuleID: "glob_deny", Reason: "path matches deny glob pattern", Tool: tool, Summary: summary}
+			}
 			if sensitivePath(norm) || sensitivePath(p) {
+				g.auditConfirm(CategorySandbox, "sensitive_path", norm, "sensitive path access requires confirm", sessionID)
 				return Decision{Action: ActionConfirm, Layer: "L2", RuleID: "sensitive_path", Reason: "sensitive path", Tool: tool, Summary: summary}
 			}
 		}
 	}
 
+	// L2.5 network policy enforcement
+	if g.netEnforcer != nil {
+		if cmd != "" {
+			lower := strings.ToLower(cmd)
+			for _, netPattern := range []string{"http://", "https://", "ssh://", "ftp://"} {
+				if strings.Contains(lower, netPattern) {
+					decision := g.netEnforcer.FilterURL(extractURL(cmd))
+					if decision.Action == ActionDeny {
+						g.incDeny(sessionID)
+						g.auditDeny(CategoryNetwork, decision.RuleID, cmd, decision.Reason, sessionID)
+						return Decision{Action: ActionDeny, Layer: "L2", RuleID: decision.RuleID, Reason: decision.Reason, Tool: tool, Summary: summary}
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// L3 tool class
-	base := toolBaseName(tool) // strip server__ prefix for MCP
+	base := toolBaseName(tool)
 	if g.readTools[tool] || g.readTools[base] {
-		return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: summary}
+		sanitizedSummary := g.sanitizeSummary(summary)
+		g.auditAllow(CategoryTool, tool, "read tool allowed", sessionID)
+		return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: sanitizedSummary}
 	}
 	if g.writeTools[tool] || g.writeTools[base] {
 		if g.confirmWrite {
+			g.auditConfirm(CategoryTool, "write", tool, "write/edit requires confirm", sessionID)
 			return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "write", Reason: "write/edit requires confirm", Tool: tool, Summary: summary}
 		}
 	}
 	if tool == "bash" || base == "bash" || tool == "run_command" {
 		if r := matchAny(g.confirmRules, variants); r != nil {
+			g.auditConfirm(CategoryTool, r.id, tool, r.reason, sessionID)
 			return Decision{Action: ActionConfirm, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 		}
+		g.auditConfirm(CategoryTool, "bash", tool, "shell requires confirm", sessionID)
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "bash", Reason: "shell requires confirm", Tool: tool, Summary: summary}
 	}
-	// SSH tools — always require confirm (remote operations)
 	if strings.HasPrefix(tool, "ssh_") || strings.HasPrefix(base, "ssh_") {
 		if r := matchAny(g.denyRules, variants); r != nil {
 			g.incDeny(sessionID)
+			g.auditDeny(CategoryTool, r.id, tool, r.reason, sessionID)
 			return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 		}
+		g.auditConfirm(CategoryTool, "ssh", tool, "SSH remote operation requires confirm", sessionID)
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "ssh", Reason: "SSH remote operation requires confirm", Tool: tool, Summary: summary}
 	}
 	if tool == "delegate" {
+		g.auditConfirm(CategoryTool, "delegate", tool, "subagent delegation requires confirm", sessionID)
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "delegate", Reason: "subagent delegation requires confirm", Tool: tool, Summary: summary}
 	}
 
-	// MCP / unknown tools — never silent allow; still scan string args for shell deny patterns
 	if g.mcpConfirm || isMCPTool(tool) {
 		if r := matchAny(g.denyRules, variants); r != nil {
 			g.incDeny(sessionID)
+			g.auditDeny(CategoryTool, "mcp_"+r.id, tool, "mcp args matched deny: "+r.reason, sessionID)
 			return Decision{Action: ActionDeny, Layer: "L1", RuleID: "mcp_" + r.id, Reason: "mcp args matched deny: " + r.reason, Tool: tool, Summary: summary}
 		}
-		// path sandbox already applied when path arg present
-		// read-like MCP still requires confirm if args look like shell
 		if looksReadOnlyMCP(tool) && !looksDangerousArgs(args) {
+			g.auditAllow(CategoryTool, tool, "mcp read-like allowed", sessionID)
 			return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: summary, Reason: "mcp read-like"}
 		}
+		g.auditConfirm(CategoryTool, "mcp_or_unknown", tool, "MCP/unknown tool requires confirm", sessionID)
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "mcp_or_unknown",
 			Reason: "MCP/unknown tool requires confirm", Tool: tool, Summary: summary}
 	}
+	g.auditConfirm(CategoryTool, "unknown_tool", tool, "unknown tool requires confirm", sessionID)
 	return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "unknown_tool", Reason: "unknown tool requires confirm", Tool: tool, Summary: summary}
+}
+
+func (g *Guard) auditAllow(category AuditCategory, target, detail string, sessionID ...string) {
+	if g.audit != nil {
+		g.audit.Allow(category, target, detail, sessionID...)
+	}
+}
+
+func (g *Guard) auditDeny(category AuditCategory, ruleID, target, detail string, sessionID ...string) {
+	if g.audit != nil {
+		g.audit.Deny(category, ruleID, target, detail, sessionID...)
+	}
+}
+
+func (g *Guard) auditConfirm(category AuditCategory, ruleID, target, detail string, sessionID ...string) {
+	if g.audit != nil {
+		g.audit.Confirm(category, ruleID, target, detail, sessionID...)
+	}
+}
+
+func (g *Guard) sanitizeSummary(s string) string {
+	if g.sanitizer != nil && g.sanitizer.HasAnyMatch(s) {
+		return g.sanitizer.RedactAll(s)
+	}
+	return s
+}
+
+func extractURL(cmd string) string {
+	for _, prefix := range []string{"http://", "https://", "ssh://", "ftp://"} {
+		if i := strings.Index(cmd, prefix); i >= 0 {
+			end := len(cmd)
+			for _, delim := range []string{" ", "\t", "\n", "\"", "'", ";", "|", "&", ")", "(", "[", "]"} {
+				if j := strings.Index(cmd[i:], delim); j >= 0 && i+j < end {
+					end = i + j
+				}
+			}
+			return cmd[i:end]
+		}
+	}
+	return ""
 }
 
 func toolBaseName(tool string) string {
@@ -479,11 +580,26 @@ func (g *Guard) underWorkspace(sessionID, p string) bool {
 	return true
 }
 
+func (g *Guard) sensitivePathEnhanced(p string) bool {
+	if g.denyEngine != nil {
+		return g.denyEngine.IsDeniedLegacy(p)
+	}
+	return sensitivePath(p)
+}
+
 func sensitivePath(p string) bool {
 	lp := strings.ToLower(filepath.ToSlash(p))
-	return strings.Contains(lp, ".ssh") || strings.Contains(lp, ".env") ||
+	if strings.Contains(lp, ".ssh") || strings.Contains(lp, ".env") ||
 		strings.Contains(lp, "id_rsa") || strings.Contains(lp, "credentials") ||
-		strings.Contains(lp, "secret") || strings.Contains(lp, "wallet")
+		strings.Contains(lp, "secret") || strings.Contains(lp, "wallet") {
+		return true
+	}
+	if strings.HasSuffix(lp, ".pem") || strings.HasSuffix(lp, ".key") ||
+		strings.HasSuffix(lp, ".p12") || strings.HasSuffix(lp, ".pfx") ||
+		strings.HasSuffix(lp, ".pub") {
+		return true
+	}
+	return false
 }
 
 func (g *Guard) CreatePending(sessionID, tool string, args map[string]any, d Decision) *PendingConfirm {
