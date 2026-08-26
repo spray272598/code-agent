@@ -45,20 +45,20 @@ type Hit struct {
 
 // Stats about the last build.
 type Stats struct {
-	Files   int `json:"files"`
-	Tokens  int `json:"tokens"`
+	Files   int    `json:"files"`
+	Tokens  int    `json:"tokens"`
 	Root    string `json:"root"`
 	BuiltAt int64  `json:"builtAt"`
 }
 
 // Index is an in-memory inverted index over workspace files.
 type Index struct {
-	mu      sync.RWMutex
-	root    string
+	mu   sync.RWMutex
+	root string
 	// term -> path -> tf
 	posting map[string]map[string]int
 	// path -> first lines for snippet
-	docs map[string][]string
+	docs  map[string][]string
 	stats Stats
 	// semantic search (optional): file summary vectors
 	embed   port.IEmbeddingPort

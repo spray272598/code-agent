@@ -20,9 +20,9 @@ type req struct {
 }
 
 type resp struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      any    `json:"id,omitempty"`
-	Result  any    `json:"result,omitempty"`
+	JSONRPC string  `json:"jsonrpc"`
+	ID      any     `json:"id,omitempty"`
+	Result  any     `json:"result,omitempty"`
 	Error   *rpcErr `json:"error,omitempty"`
 }
 

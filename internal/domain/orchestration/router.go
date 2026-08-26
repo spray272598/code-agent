@@ -33,25 +33,25 @@ func (m OrchestratorMode) String() string {
 //   - Requests with explicit step-by-step planning → DeepAgent.
 //   - Everything else → SingleAgent (legacy path).
 type Router struct {
-	teamsPfx  []string
-	deepPfx   []string
-	teamRE    *regexp.Regexp
-	deepRE    *regexp.Regexp
+	teamsPfx   []string
+	deepPfx    []string
+	teamRE     *regexp.Regexp
+	deepRE     *regexp.Regexp
 	parallelRE *regexp.Regexp
-	planRE    *regexp.Regexp
-	actionRE  *regexp.Regexp
+	planRE     *regexp.Regexp
+	actionRE   *regexp.Regexp
 }
 
 // NewRouter returns a Router with sensible defaults.
 func NewRouter() *Router {
 	return &Router{
-		teamsPfx:  []string{"/team", "/parallel", "/teams", "team mode", "parallel mode"},
-		deepPfx:   []string{"/deep", "/deepagent", "deep mode"},
-		teamRE:    regexp.MustCompile(`(?i)\b(compare|contrast|vs\.?|analyze (both|all|multiple)|multiple (files|modules|systems)|review (code|diff|report))\b`),
-		deepRE:    regexp.MustCompile(`(?i)\b(plan|break ?down|step ?by ?step|implement|refactor|build (a|an|the)|design a)\b`),
+		teamsPfx:   []string{"/team", "/parallel", "/teams", "team mode", "parallel mode"},
+		deepPfx:    []string{"/deep", "/deepagent", "deep mode"},
+		teamRE:     regexp.MustCompile(`(?i)\b(compare|contrast|vs\.?|analyze (both|all|multiple)|multiple (files|modules|systems)|review (code|diff|report))\b`),
+		deepRE:     regexp.MustCompile(`(?i)\b(plan|break ?down|step ?by ?step|implement|refactor|build (a|an|the)|design a)\b`),
 		parallelRE: regexp.MustCompile(`(?i)\b(investigate|explore|survey|audit|search (for|the)|find (all|every))\b`),
-		planRE:    regexp.MustCompile(`(?i)\b(plan|todo|task list|step 1|phase 1)\b`),
-		actionRE:  regexp.MustCompile(`(?i)\b(how to|how do I|what (is|are)|explain|show me|list all|find out)\b`),
+		planRE:     regexp.MustCompile(`(?i)\b(plan|todo|task list|step 1|phase 1)\b`),
+		actionRE:   regexp.MustCompile(`(?i)\b(how to|how do I|what (is|are)|explain|show me|list all|find out)\b`),
 	}
 }
 

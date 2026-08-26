@@ -28,12 +28,14 @@ func (r *fakeRepo) Save(_ context.Context, cfg *model.ConnectionConfig) error {
 	r.byID[cfg.ID] = cfg
 	return nil
 }
+
 func (r *fakeRepo) FindByID(_ context.Context, id string) (*model.ConnectionConfig, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
 	return r.byID[id], nil
 }
+
 func (r *fakeRepo) FindByName(_ context.Context, name string) (*model.ConnectionConfig, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
@@ -45,6 +47,7 @@ func (r *fakeRepo) FindByName(_ context.Context, name string) (*model.Connection
 	}
 	return nil, nil
 }
+
 func (r *fakeRepo) List(_ context.Context) ([]*model.ConnectionConfig, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
@@ -55,6 +58,7 @@ func (r *fakeRepo) List(_ context.Context) ([]*model.ConnectionConfig, error) {
 	}
 	return out, nil
 }
+
 func (r *fakeRepo) Delete(_ context.Context, id string) error {
 	delete(r.byID, id)
 	return nil

@@ -111,23 +111,23 @@ const (
 
 func (e GoalEvent) String() string {
 	names := map[GoalEvent]string{
-		GoalEventCreated: "goal_created",
-		GoalEventPlanningStarted: "planning_started",
-		GoalEventPlanningCompleted: "planning_completed",
-		GoalEventPlanningFailed: "planning_failed",
-		GoalEventWorkerStarted: "worker_started",
-		GoalEventWorkerCompleted: "worker_completed",
-		GoalEventWorkerFailed: "worker_failed",
-		GoalEventContextRotated: "context_rotated",
-		GoalEventGoalPaused: "goal_paused",
-		GoalEventGoalResumed: "goal_resumed",
-		GoalEventGoalCompleted: "goal_completed",
-		GoalEventGoalCleared: "goal_cleared",
-		GoalEventBudgetExceeded: "budget_exceeded",
+		GoalEventCreated:               "goal_created",
+		GoalEventPlanningStarted:       "planning_started",
+		GoalEventPlanningCompleted:     "planning_completed",
+		GoalEventPlanningFailed:        "planning_failed",
+		GoalEventWorkerStarted:         "worker_started",
+		GoalEventWorkerCompleted:       "worker_completed",
+		GoalEventWorkerFailed:          "worker_failed",
+		GoalEventContextRotated:        "context_rotated",
+		GoalEventGoalPaused:            "goal_paused",
+		GoalEventGoalResumed:           "goal_resumed",
+		GoalEventGoalCompleted:         "goal_completed",
+		GoalEventGoalCleared:           "goal_cleared",
+		GoalEventBudgetExceeded:        "budget_exceeded",
 		GoalEventPrematureStopDetected: "premature_stop_detected",
-		GoalEventStallDetected: "stall_detected",
-		GoalEventStrategistFired: "strategist_fired",
-		GoalEventClassifierFired: "classifier_fired",
+		GoalEventStallDetected:         "stall_detected",
+		GoalEventStrategistFired:       "strategist_fired",
+		GoalEventClassifierFired:       "classifier_fired",
 	}
 	if n, ok := names[e]; ok {
 		return n
@@ -144,30 +144,30 @@ type HistoryEntry struct {
 
 // GoalSnapshot is a serializable view of the current goal state.
 type GoalSnapshot struct {
-	ID                    string     `json:"id"`
-	Objective             string     `json:"objective"`
-	Status                GoalStatus `json:"status"`
-	Phase                 GoalPhase  `json:"phase"`
-	TokenBudget           int64      `json:"tokenBudget"`
-	TokensUsed            int64      `json:"tokensUsed"`
-	ElapsedMs             int64      `json:"elapsedMs"`
-	CurrentSubagentRole   string     `json:"currentSubagentRole,omitempty"`
-	TotalWorkerRounds     int        `json:"totalWorkerRounds"`
-	TotalVerifyRounds     int        `json:"totalVerifyRounds"`
-	TokenBaseline         int64      `json:"tokenBaseline"`
-	FinishedSubagentTokens int64     `json:"finishedSubagentTokens"`
-	LiveSubagentTokens    int64      `json:"liveSubagentTokens,omitempty"`
-	LastEvent             string     `json:"lastEvent,omitempty"`
-	ConsecutiveFailures   int        `json:"consecutiveFailures"`
-	StallGapFingerprint   string     `json:"stallGapFingerprint,omitempty"`
-	PauseMessage          string     `json:"pauseMessage,omitempty"`
-	BlockerKey            string     `json:"blockerKey,omitempty"`
-	BlockerCount          int        `json:"blockerCount,omitempty"`
-	ScratchRoot           string     `json:"scratchRoot,omitempty"`
-	VerifierID            string     `json:"verifierID,omitempty"`
-	VerifierCount         int        `json:"verifierCount,omitempty"`
-	CreatedAt             time.Time  `json:"createdAt"`
-	UpdatedAt             time.Time  `json:"updatedAt"`
+	ID                     string     `json:"id"`
+	Objective              string     `json:"objective"`
+	Status                 GoalStatus `json:"status"`
+	Phase                  GoalPhase  `json:"phase"`
+	TokenBudget            int64      `json:"tokenBudget"`
+	TokensUsed             int64      `json:"tokensUsed"`
+	ElapsedMs              int64      `json:"elapsedMs"`
+	CurrentSubagentRole    string     `json:"currentSubagentRole,omitempty"`
+	TotalWorkerRounds      int        `json:"totalWorkerRounds"`
+	TotalVerifyRounds      int        `json:"totalVerifyRounds"`
+	TokenBaseline          int64      `json:"tokenBaseline"`
+	FinishedSubagentTokens int64      `json:"finishedSubagentTokens"`
+	LiveSubagentTokens     int64      `json:"liveSubagentTokens,omitempty"`
+	LastEvent              string     `json:"lastEvent,omitempty"`
+	ConsecutiveFailures    int        `json:"consecutiveFailures"`
+	StallGapFingerprint    string     `json:"stallGapFingerprint,omitempty"`
+	PauseMessage           string     `json:"pauseMessage,omitempty"`
+	BlockerKey             string     `json:"blockerKey,omitempty"`
+	BlockerCount           int        `json:"blockerCount,omitempty"`
+	ScratchRoot            string     `json:"scratchRoot,omitempty"`
+	VerifierID             string     `json:"verifierID,omitempty"`
+	VerifierCount          int        `json:"verifierCount,omitempty"`
+	CreatedAt              time.Time  `json:"createdAt"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
 }
 
 // GoalTracker is a pure state machine (no I/O) that manages goal lifecycle.
@@ -179,8 +179,8 @@ type GoalTracker struct {
 	phase     GoalPhase
 	status    GoalStatus
 
-	tokenBudget int64
-	tokensUsed  int64
+	tokenBudget   int64
+	tokensUsed    int64
 	tokenBaseline int64
 
 	createdAt time.Time
@@ -216,16 +216,16 @@ type GoalTracker struct {
 func NewGoalTracker(id, objective string, tokenBudget int64) *GoalTracker {
 	now := time.Now()
 	return &GoalTracker{
-		id:           id,
-		objective:    objective,
-		phase:        GoalPhaseIdle,
-		status:       GoalStatusActive,
-		tokenBudget:  tokenBudget,
-		tokensUsed:   0,
+		id:            id,
+		objective:     objective,
+		phase:         GoalPhaseIdle,
+		status:        GoalStatusActive,
+		tokenBudget:   tokenBudget,
+		tokensUsed:    0,
 		tokenBaseline: 0,
-		createdAt:    now,
-		updatedAt:    now,
-		maxHist:      64,
+		createdAt:     now,
+		updatedAt:     now,
+		maxHist:       64,
 	}
 }
 
@@ -273,24 +273,24 @@ func (g *GoalTracker) Snapshot() GoalSnapshot {
 		lastEvent = g.history[len(g.history)-1].Event.String()
 	}
 	return GoalSnapshot{
-		ID:                  g.id,
-		Objective:           g.objective,
-		Status:              g.status,
-		Phase:               g.phase,
-		TokenBudget:         g.tokenBudget,
-		TokensUsed:          g.tokensUsed,
-		ElapsedMs:           time.Since(g.createdAt).Milliseconds(),
-		CurrentSubagentRole: g.currentRole,
-		TotalWorkerRounds:   g.totalWorkers,
-		TotalVerifyRounds:   g.totalVerifies,
-		TokenBaseline:       g.tokenBaseline,
+		ID:                     g.id,
+		Objective:              g.objective,
+		Status:                 g.status,
+		Phase:                  g.phase,
+		TokenBudget:            g.tokenBudget,
+		TokensUsed:             g.tokensUsed,
+		ElapsedMs:              time.Since(g.createdAt).Milliseconds(),
+		CurrentSubagentRole:    g.currentRole,
+		TotalWorkerRounds:      g.totalWorkers,
+		TotalVerifyRounds:      g.totalVerifies,
+		TokenBaseline:          g.tokenBaseline,
 		FinishedSubagentTokens: g.tokensUsed,
-		LastEvent:           lastEvent,
-		ConsecutiveFailures: g.consecutiveFailures,
-		StallGapFingerprint: g.stallFingerprint,
-		PauseMessage:        g.pauseMessage,
-		CreatedAt:           g.createdAt,
-		UpdatedAt:           g.updatedAt,
+		LastEvent:              lastEvent,
+		ConsecutiveFailures:    g.consecutiveFailures,
+		StallGapFingerprint:    g.stallFingerprint,
+		PauseMessage:           g.pauseMessage,
+		CreatedAt:              g.createdAt,
+		UpdatedAt:              g.updatedAt,
 	}
 }
 

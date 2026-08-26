@@ -28,7 +28,7 @@ type IntegrityChain struct {
 	// Verification history
 	lastVerifiedHash   string
 	lastVerifiedAt     time.Time
-	lastVerificationOK  bool
+	lastVerificationOK bool
 }
 
 // IntegrityEntry is a single tamper-evident log entry.
@@ -46,17 +46,17 @@ type IntegrityEntry struct {
 
 // VerificationResult reports the integrity state of the audit chain.
 type VerificationResult struct {
-	Valid          bool      `json:"valid"`
-	EntriesChecked int64     `json:"entriesChecked"`
-	FirstBadIndex  int64     `json:"firstBadIndex,omitempty"`
-	FirstBadReason string    `json:"firstBadReason,omitempty"`
-	ChainLength    int64     `json:"chainLength"`
-	CurrentHash    string    `json:"currentHash"`
-	CheckedAt      time.Time `json:"checkedAt"`
-	HistoryVerified bool     `json:"historyVerified"`
+	Valid              bool      `json:"valid"`
+	EntriesChecked     int64     `json:"entriesChecked"`
+	FirstBadIndex      int64     `json:"firstBadIndex,omitempty"`
+	FirstBadReason     string    `json:"firstBadReason,omitempty"`
+	ChainLength        int64     `json:"chainLength"`
+	CurrentHash        string    `json:"currentHash"`
+	CheckedAt          time.Time `json:"checkedAt"`
+	HistoryVerified    bool      `json:"historyVerified"`
 	LastVerifiedHash   string    `json:"lastVerifiedHash,omitempty"`
 	LastVerifiedAt     time.Time `json:"lastVerifiedAt,omitempty"`
-	LastVerificationOK  bool      `json:"lastVerificationOK"`
+	LastVerificationOK bool      `json:"lastVerificationOK"`
 }
 
 // NewIntegrityChain creates a new tamper-evident audit chain.

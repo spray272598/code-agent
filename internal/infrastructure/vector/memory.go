@@ -117,10 +117,11 @@ func sqrt(x float64) float64 {
 // service catches the error and degrades to keyword search.
 type NoopIndex struct{}
 
-func (NoopIndex) Ensure(context.Context, string, int) error  { return vector.ErrUnavailable }
+func (NoopIndex) Ensure(context.Context, string, int) error { return vector.ErrUnavailable }
 func (NoopIndex) Upsert(context.Context, string, []vector.Point) error {
 	return vector.ErrUnavailable
 }
+
 func (NoopIndex) Search(context.Context, string, []float32, int, map[string]any) ([]vector.Hit, error) {
 	return nil, vector.ErrUnavailable
 }

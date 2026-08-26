@@ -4,10 +4,10 @@ import "time"
 
 // Role values for a user.
 const (
-	RoleOwner   = "owner"
-	RoleAdmin   = "admin"
-	RoleMember  = "member"
-	RoleViewer  = "viewer"
+	RoleOwner  = "owner"
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+	RoleViewer = "viewer"
 )
 
 // Status of a user account lifecycle.
@@ -37,13 +37,13 @@ type User struct {
 	EmailVerified bool
 	VerifyToken   string
 	// ResetToken is the one-time password reset token (empty when not pending).
-	ResetToken    string
+	ResetToken     string
 	ResetExpiresAt time.Time
 	// QuotaTokens is the per-reset token budget; negative means unlimited.
-	QuotaTokens int64
+	QuotaTokens  int64
 	QuotaResetAt time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Device is an RFC8628 device authorization record (the device_code is the primary key).

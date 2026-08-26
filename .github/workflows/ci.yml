@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build-test:
+  build-vet:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,20 +27,77 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./... -v -count=1 -timeout 120s -coverprofile=cover/coverage.out -covermode=atomic
+  test:
+    needs: build-vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: domain-core
+            packages: "./internal/domain/agent/... ./internal/domain/security/... ./internal/domain/subagent/..."
+          - shard: domain-rest
+            packages: "./internal/domain/..."
+          - shard: infra-app
+            packages: "./internal/infrastructure/... ./internal/application/... ./internal/trigger/... ./cmd/..."
+    name: test (${{ matrix.shard }})
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Coverage summary
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      # Per-shard timeout of 10m replaces the old global 120s which the suite
+      # already exceeded locally (>5min). Sharding keeps each job fast.
+      - name: Test ${{ matrix.shard }}
+        run: go test ${{ matrix.packages }} -count=1 -timeout 10m -coverprofile=cover/coverage-${{ matrix.shard }}.out -covermode=atomic
+
+      - name: Coverage summary (${{ matrix.shard }})
         run: |
           mkdir -p cover
-          go tool cover -func=cover/coverage.out | tail -1
+          go tool cover -func=cover/coverage-${{ matrix.shard }}.out | tail -1
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
-          path: |
-            cover/
-            *_test.log
+          name: coverage-${{ matrix.shard }}
+          path: cover/
+          retention-days: 7
+
+  coverage-report:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: cover-artifacts/
+
+      - name: Merge coverage profiles and report total
+        run: |
+          mkdir -p cover
+          first=true
+          for f in cover-artifacts/coverage-*/coverage-*.out; do
+            if [ "$first" = true ]; then cat "$f" > cover/coverage.out; first=false
+            else tail -n +2 "$f" >> cover/coverage.out; fi
+          done
+          go tool cover -func=cover/coverage.out | tail -1
+
+      - name: Upload merged coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-merged
+          path: cover/coverage.out
           retention-days: 7

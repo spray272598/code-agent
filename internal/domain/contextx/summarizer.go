@@ -75,7 +75,7 @@ func (s *Summarizer) SummarizeSingle(ctx context.Context, content string, maxRun
 		SystemPrompt: `You summarize a single long message for context compression.
 Produce a concise summary (~3-5 sentences) preserving: key information, decisions, errors, file paths, and conclusions.
 Focus on facts, not style. No markdown.`,
-		Messages: []port.ChatMessage{{Role: "user", Content: content}},
+		Messages:    []port.ChatMessage{{Role: "user", Content: content}},
 		Temperature: 0.1,
 		MaxTokens:   150,
 	})
@@ -184,9 +184,11 @@ func splitSentences(text string) []string {
 func scoreSentence(s string) int {
 	score := 0
 	lower := strings.ToLower(s)
-	signals := []string{"error", "failed", "success", "result", "结论", "结果", "失败", "成功", "错误",
+	signals := []string{
+		"error", "failed", "success", "result", "结论", "结果", "失败", "成功", "错误",
 		"package ", "func ", "type ", "import ", "const ", "var ",
-		"DENIED", "CONFIRM", "completed", "approved", "=", "return", "nil"}
+		"DENIED", "CONFIRM", "completed", "approved", "=", "return", "nil",
+	}
 	for _, sig := range signals {
 		if strings.Contains(lower, strings.ToLower(sig)) {
 			score += 3

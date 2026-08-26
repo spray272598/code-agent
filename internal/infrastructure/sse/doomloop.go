@@ -12,7 +12,7 @@ const (
 	DefaultDoomRepeatWindow        = 20
 	DefaultDoomMaxReasoningTokens  = 32000
 	DefaultDoomMaxTurnAttempts     = 10
-	DefaultDoomMaxStreamBytes     = 8 * 1024 * 1024
+	DefaultDoomMaxStreamBytes      = 8 * 1024 * 1024
 )
 
 type DoomLoopTrigger struct {
@@ -24,10 +24,10 @@ type DoomLoopTrigger struct {
 }
 
 type DoomLoopSegmentStamp struct {
-	Triggers         []DoomLoopTrigger `json:"triggers"`
-	Attempt          int               `json:"attempt"`
-	AbortedAtChunk   int               `json:"abortedAtChunk,omitempty"`
-	Action           string            `json:"action"`
+	Triggers       []DoomLoopTrigger `json:"triggers"`
+	Attempt        int               `json:"attempt"`
+	AbortedAtChunk int               `json:"abortedAtChunk,omitempty"`
+	Action         string            `json:"action"`
 }
 
 type DoomLoopDetector struct {
@@ -168,7 +168,7 @@ func (d *DoomLoopDetector) flagTailRepeat(reasoning bool) {
 	trigger := DoomLoopTrigger{
 		Name:      name,
 		Detail:    strconv.Itoa(d.consecutiveSame) + "@thinking",
-		ChunkIdx: d.chunkCount,
+		ChunkIdx:  d.chunkCount,
 		Timestamp: time.Now().UnixMilli(),
 	}
 	d.aborted = true
@@ -225,33 +225,33 @@ func (p CapturePhase) String() string {
 }
 
 type StreamSegment struct {
-	StartedAtMs       int64                `json:"startedAtMs,omitempty"`
-	ReasoningText     string               `json:"reasoningText"`
-	ResponseText      string               `json:"responseText"`
-	ReasoningChunks   int                  `json:"reasoningChunks"`
-	TextChunks        int                  `json:"textChunks"`
-	Phase             CapturePhase         `json:"phase"`
-	DoomLoop          *DoomLoopSegmentStamp `json:"doomLoop,omitempty"`
+	StartedAtMs     int64                 `json:"startedAtMs,omitempty"`
+	ReasoningText   string                `json:"reasoningText"`
+	ResponseText    string                `json:"responseText"`
+	ReasoningChunks int                   `json:"reasoningChunks"`
+	TextChunks      int                   `json:"textChunks"`
+	Phase           CapturePhase          `json:"phase"`
+	DoomLoop        *DoomLoopSegmentStamp `json:"doomLoop,omitempty"`
 }
 
 type StreamingTurnCapture struct {
-	PromptID        string              `json:"promptId,omitempty"`
-	TurnNumber      uint64              `json:"turnNumber"`
-	StartedAtMs     int64               `json:"startedAtMs,omitempty"`
-	ReasoningText   string              `json:"reasoningText"`
-	ResponseText    string              `json:"responseText"`
-	ReasoningChunks int                 `json:"reasoningChunks"`
-	TextChunks      int                 `json:"textChunks"`
-	Truncated       bool                `json:"truncated"`
-	Reason          string              `json:"reason,omitempty"`
-	Phase           CapturePhase        `json:"phase"`
-	Segments        []StreamSegment     `json:"segments"`
-	AttemptCount    int                 `json:"attemptCount"`
-	ReasoningTokens int                 `json:"reasoningTokens,omitempty"`
-	CompletionTokens int                `json:"completionTokens,omitempty"`
-	FinishReason    string              `json:"finishReason,omitempty"`
-	EmptyReason     string              `json:"emptyReason,omitempty"`
-	DoomLoop        *DoomLoopSegmentStamp `json:"doomLoop,omitempty"`
+	PromptID         string                `json:"promptId,omitempty"`
+	TurnNumber       uint64                `json:"turnNumber"`
+	StartedAtMs      int64                 `json:"startedAtMs,omitempty"`
+	ReasoningText    string                `json:"reasoningText"`
+	ResponseText     string                `json:"responseText"`
+	ReasoningChunks  int                   `json:"reasoningChunks"`
+	TextChunks       int                   `json:"textChunks"`
+	Truncated        bool                  `json:"truncated"`
+	Reason           string                `json:"reason,omitempty"`
+	Phase            CapturePhase          `json:"phase"`
+	Segments         []StreamSegment       `json:"segments"`
+	AttemptCount     int                   `json:"attemptCount"`
+	ReasoningTokens  int                   `json:"reasoningTokens,omitempty"`
+	CompletionTokens int                   `json:"completionTokens,omitempty"`
+	FinishReason     string                `json:"finishReason,omitempty"`
+	EmptyReason      string                `json:"emptyReason,omitempty"`
+	DoomLoop         *DoomLoopSegmentStamp `json:"doomLoop,omitempty"`
 
 	maxBytes int
 }

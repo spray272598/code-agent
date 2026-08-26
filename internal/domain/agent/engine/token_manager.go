@@ -125,7 +125,7 @@ func (t *TokenManager) TrimMessages(messages []port.ChatMessage, keepTail int) [
 	tail := messages[len(messages)-keepTail:]
 	out := make([]port.ChatMessage, 0, 2+keepTail+1)
 	out = append(out, port.ChatMessage{
-		Role: "user",
+		Role:    "user",
 		Content: fmt.Sprintf("[TOKEN_BUDGET] Context trimmed mid-loop (budget=%d). Prefer Final Answer if possible.", t.Budget),
 	})
 	out = append(out, head...)

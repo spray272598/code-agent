@@ -7,16 +7,16 @@ import (
 )
 
 type ConnectionMetrics struct {
-	ID              string
-	SessionID       string
-	StartTime       time.Time
-	LastEventTime   time.Time
-	EventCount      atomic.Int64
-	BytesSent       atomic.Int64
-	EventsDropped   atomic.Int64
-	Reconnects      atomic.Int64
-	EventsByType    sync.Map
-	LastEventType   string
+	ID            string
+	SessionID     string
+	StartTime     time.Time
+	LastEventTime time.Time
+	EventCount    atomic.Int64
+	BytesSent     atomic.Int64
+	EventsDropped atomic.Int64
+	Reconnects    atomic.Int64
+	EventsByType  sync.Map
+	LastEventType string
 }
 
 func NewConnectionMetrics(id, sessionID string) *ConnectionMetrics {
@@ -70,15 +70,15 @@ func (m *ConnectionMetrics) EventsByTypeSnapshot() map[string]int64 {
 }
 
 type ConnectionPool struct {
-	mu              sync.RWMutex
-	connections     map[string]*ConnectionMetrics
-	maxConnections  int
-	activeCount     atomic.Int64
-	totalCreated    atomic.Int64
-	totalClosed     atomic.Int64
-	totalEvents     atomic.Int64
-	totalBytes      atomic.Int64
-	totalDropped    atomic.Int64
+	mu             sync.RWMutex
+	connections    map[string]*ConnectionMetrics
+	maxConnections int
+	activeCount    atomic.Int64
+	totalCreated   atomic.Int64
+	totalClosed    atomic.Int64
+	totalEvents    atomic.Int64
+	totalBytes     atomic.Int64
+	totalDropped   atomic.Int64
 }
 
 func NewConnectionPool(maxConnections int) *ConnectionPool {
@@ -145,8 +145,8 @@ func (p *ConnectionPool) RecordDrop() {
 }
 
 type PoolStats struct {
-	Active    int64
-	Max       int
+	Active       int64
+	Max          int
 	TotalCreated int64
 	TotalClosed  int64
 	TotalEvents  int64

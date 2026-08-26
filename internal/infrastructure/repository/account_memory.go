@@ -77,8 +77,8 @@ func (r *MemoryUserRepo) FindByResetToken(_ context.Context, token string) (*aut
 // ---- Device (in-memory) ----
 
 type MemoryDeviceRepo struct {
-	mu        sync.RWMutex
-	byCode    map[string]*auth.Device
+	mu         sync.RWMutex
+	byCode     map[string]*auth.Device
 	byUserCode map[string]*auth.Device
 }
 

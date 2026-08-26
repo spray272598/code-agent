@@ -242,8 +242,8 @@ func stripMultiPrefix(s string) string {
 // corefPatterns 将中文/英文指代映射到 EntityContext 字段。
 // 仅在对应字段非空时才替换，避免凭空捏造实体。
 var corefPatterns = []struct {
-	field  string
-	words  []string
+	field string
+	words []string
 }{
 	{"ssh", []string{"那台机器", "那台服务器", "这台机器", "这台服务器", "那个服务器", "那台", "这台", "that server", "the same server", "that machine"}},
 	{"file", []string{"刚才那个文件", "刚才的文件", "那个文件", "这个文件"}},

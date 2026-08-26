@@ -9,30 +9,32 @@ import (
 )
 
 const (
-	redactedSecret     = "[REDACTED_SECRET]"
-	redactedURLValue   = "redacted"
+	redactedSecret      = "[REDACTED_SECRET]"
+	redactedURLValue    = "redacted"
 	redactedUserSegment = "<user>"
 )
 
 type Sanitizer struct {
-	apiKeyPrefix   *regexp.Regexp
-	awsAccessKey   *regexp.Regexp
-	githubToken    *regexp.Regexp
-	vendorToken    *regexp.Regexp
-	googleAPIKey   *regexp.Regexp
-	pemPrivateKey  *regexp.Regexp
-	bearerToken    *regexp.Regexp
-	jwtToken       *regexp.Regexp
-	urlRegex       *regexp.Regexp
-	secretAssign   *regexp.Regexp
+	apiKeyPrefix    *regexp.Regexp
+	awsAccessKey    *regexp.Regexp
+	githubToken     *regexp.Regexp
+	vendorToken     *regexp.Regexp
+	googleAPIKey    *regexp.Regexp
+	pemPrivateKey   *regexp.Regexp
+	bearerToken     *regexp.Regexp
+	jwtToken        *regexp.Regexp
+	urlRegex        *regexp.Regexp
+	secretAssign    *regexp.Regexp
 	sensitiveParams map[string]bool
-	homeDir        string
-	usernames      []string
-	homeUserRegex  *regexp.Regexp
+	homeDir         string
+	usernames       []string
+	homeUserRegex   *regexp.Regexp
 }
 
-var defaultSanitizer *Sanitizer
-var onceSanitizer sync.Once
+var (
+	defaultSanitizer *Sanitizer
+	onceSanitizer    sync.Once
+)
 
 func DefaultSanitizer() *Sanitizer {
 	onceSanitizer.Do(func() {
@@ -44,22 +46,22 @@ func DefaultSanitizer() *Sanitizer {
 func newSanitizer() *Sanitizer {
 	s := &Sanitizer{
 		sensitiveParams: map[string]bool{
-			"access_token":     true,
-			"api_key":          true,
-			"assertion":        true,
-			"auth":             true,
-			"client_secret":    true,
-			"code":             true,
-			"code_verifier":    true,
-			"id_token":         true,
-			"key":              true,
-			"password":         true,
-			"refresh_token":    true,
-			"requested_token":  true,
-			"session_id":       true,
-			"state":            true,
-			"subject_token":    true,
-			"token":            true,
+			"access_token":    true,
+			"api_key":         true,
+			"assertion":       true,
+			"auth":            true,
+			"client_secret":   true,
+			"code":            true,
+			"code_verifier":   true,
+			"id_token":        true,
+			"key":             true,
+			"password":        true,
+			"refresh_token":   true,
+			"requested_token": true,
+			"session_id":      true,
+			"state":           true,
+			"subject_token":   true,
+			"token":           true,
 		},
 	}
 	s.compileRegexes()

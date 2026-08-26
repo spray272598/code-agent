@@ -223,9 +223,9 @@ func auth(app *application.ChatApp, next http.Handler) http.Handler {
 		// public / health / metrics / openapi / host ws (ws auth itself)
 		switch r.URL.Path {
 		case "/health", "/metrics", "/ws/host", "/ws/ssh", "/api/v1/openapi.json", "/docs",
-		"/api/v1/auth/signup", "/api/v1/auth/verify", "/api/v1/auth/login", "/api/v1/auth/refresh",
-		"/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
-		"/api/v1/device/code", "/api/v1/device/token":
+			"/api/v1/auth/signup", "/api/v1/auth/verify", "/api/v1/auth/login", "/api/v1/auth/refresh",
+			"/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
+			"/api/v1/device/code", "/api/v1/device/token":
 			next.ServeHTTP(w, r)
 			return
 		}

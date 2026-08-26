@@ -8,10 +8,10 @@ import (
 )
 
 type CompactionRecovery struct {
-	memSvc       *Service
-	checkpoints  *DurableCheckpointStore
-	maxLookback  int
-	minScore     float64
+	memSvc      *Service
+	checkpoints *DurableCheckpointStore
+	maxLookback int
+	minScore    float64
 }
 
 func NewCompactionRecovery(memSvc *Service, checkpoints *DurableCheckpointStore) *CompactionRecovery {

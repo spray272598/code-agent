@@ -14,11 +14,11 @@ import (
 
 // Status of a run snapshot.
 const (
-	StatusRunning    = "running"
-	StatusInterrupt  = "interrupt" // HITL / Eino interrupt awaiting approval
-	StatusCancelled  = "cancelled"
-	StatusCompleted  = "completed"
-	StatusFailed     = "failed"
+	StatusRunning   = "running"
+	StatusInterrupt = "interrupt" // HITL / Eino interrupt awaiting approval
+	StatusCancelled = "cancelled"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
 )
 
 // PendingTool mirrors security.PendingConfirm for JSON durability (no domain cycle).
@@ -35,19 +35,19 @@ type PendingTool struct {
 
 // Snapshot is durable agent run state for resume after restart.
 type Snapshot struct {
-	SessionID   string         `json:"sessionId"`
-	UserID      string         `json:"userId,omitempty"`
-	ProjectID   string         `json:"projectId,omitempty"`
-	Status      string         `json:"status"`
-	Goal        string         `json:"goal,omitempty"`
-	LastInput   string         `json:"lastInput,omitempty"`
-	Step        int            `json:"step,omitempty"`
-	Orchestrator string        `json:"orchestrator,omitempty"`
-	Pending     *PendingTool   `json:"pending,omitempty"`
-	ErrorClass  string         `json:"errorClass,omitempty"`
-	Meta        map[string]any `json:"meta,omitempty"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	UpdatedAt   time.Time      `json:"updatedAt"`
+	SessionID    string         `json:"sessionId"`
+	UserID       string         `json:"userId,omitempty"`
+	ProjectID    string         `json:"projectId,omitempty"`
+	Status       string         `json:"status"`
+	Goal         string         `json:"goal,omitempty"`
+	LastInput    string         `json:"lastInput,omitempty"`
+	Step         int            `json:"step,omitempty"`
+	Orchestrator string         `json:"orchestrator,omitempty"`
+	Pending      *PendingTool   `json:"pending,omitempty"`
+	ErrorClass   string         `json:"errorClass,omitempty"`
+	Meta         map[string]any `json:"meta,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	UpdatedAt    time.Time      `json:"updatedAt"`
 }
 
 // Store is durable checkpoint persistence.

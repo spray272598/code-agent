@@ -9,25 +9,25 @@ import (
 
 // Report is a comprehensive evaluation report for a set of sessions.
 type Report struct {
-	GeneratedAt time.Time         `json:"generatedAt"`
-	TotalSessions int              `json:"totalSessions"`
-	CompletedSessions int          `json:"completedSessions"`
-	FailedSessions int            `json:"failedSessions"`
-	TotalDurationMs int64         `json:"totalDurationMs"`
-	TotalTokens    int           `json:"totalTokens"`
-	TotalCostUSD   float64       `json:"totalCostUsd"`
-	AvgLatencyMs   int64         `json:"avgLatencyMs"`
-	ToolSuccessRate float64       `json:"toolSuccessRate"`
-	PermissionDenyRate float64    `json:"permissionDenyRate"`
-	TopologyDistribution map[string]int `json:"topologyDistribution,omitempty"`
-	Scores         ScoreBreakdown `json:"scores"`
-	Sessions       []SessionMetrics `json:"sessions,omitempty"`
+	GeneratedAt          time.Time        `json:"generatedAt"`
+	TotalSessions        int              `json:"totalSessions"`
+	CompletedSessions    int              `json:"completedSessions"`
+	FailedSessions       int              `json:"failedSessions"`
+	TotalDurationMs      int64            `json:"totalDurationMs"`
+	TotalTokens          int              `json:"totalTokens"`
+	TotalCostUSD         float64          `json:"totalCostUsd"`
+	AvgLatencyMs         int64            `json:"avgLatencyMs"`
+	ToolSuccessRate      float64          `json:"toolSuccessRate"`
+	PermissionDenyRate   float64          `json:"permissionDenyRate"`
+	TopologyDistribution map[string]int   `json:"topologyDistribution,omitempty"`
+	Scores               ScoreBreakdown   `json:"scores"`
+	Sessions             []SessionMetrics `json:"sessions,omitempty"`
 }
 
 // GenerateReport computes a Report from a set of session metrics.
 func GenerateReport(sessions []SessionMetrics) Report {
 	r := Report{
-		GeneratedAt:  time.Now(),
+		GeneratedAt:   time.Now(),
 		TotalSessions: len(sessions),
 	}
 	if len(sessions) == 0 {
@@ -175,12 +175,12 @@ func computeScores(sessions []SessionMetrics) ScoreBreakdown {
 // Accuracy 30%, Efficiency 25%, Safety 15%, ToolUsage 15%, ContextQuality 10%, Cost 5%.
 func weightedScore(scores map[Dimension]float64) float64 {
 	weights := map[Dimension]float64{
-		DimAccuracy:      0.30,
-		DimEfficiency:    0.25,
-		DimSafety:        0.15,
-		DimToolUsage:     0.15,
+		DimAccuracy:       0.30,
+		DimEfficiency:     0.25,
+		DimSafety:         0.15,
+		DimToolUsage:      0.15,
 		DimContextQuality: 0.10,
-		DimCost:          0.05,
+		DimCost:           0.05,
 	}
 	var total float64
 	for dim, w := range weights {
@@ -269,6 +269,8 @@ func (r Report) ToMarkdown() string {
 }
 
 // Compile-time checks.
-var _ = GenerateReport(nil)
-var _ = func(r Report) string { return r.ToJSON() }
-var _ = func(r Report) string { return r.ToMarkdown() }
+var (
+	_ = GenerateReport(nil)
+	_ = func(r Report) string { return r.ToJSON() }
+	_ = func(r Report) string { return r.ToMarkdown() }
+)

@@ -15,9 +15,9 @@ const (
 )
 
 type darwinPlatformSandbox struct {
-	sandbox         *OSLevelSandbox
-	profilePath     string
-	usingSeatbelt   bool
+	sandbox       *OSLevelSandbox
+	profilePath   string
+	usingSeatbelt bool
 }
 
 func newPlatformSandbox(platform string, s *OSLevelSandbox) platformSandbox {
@@ -37,7 +37,7 @@ func (d *darwinPlatformSandbox) apply(profile ProfileConfig, workspace string) e
 	profilePath := filepath.Join(os.TempDir(), "code-agent-sandbox.sbpl")
 	content := generateSeatbeltProfile(profile, workspace)
 
-	if err := os.WriteFile(profilePath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(profilePath, []byte(content), 0o600); err != nil {
 		if d.sandbox.audit != nil {
 			d.sandbox.audit.Warn(CategorySandbox, "sandbox", "seatbelt profile write failed, using in-process enforcement")
 		}

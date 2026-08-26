@@ -27,7 +27,7 @@ type jwtHeader struct {
 	Typ string `json:"typ"`
 }
 
-func b64(b []byte) string  { return base64.RawURLEncoding.EncodeToString(b) }
+func b64(b []byte) string             { return base64.RawURLEncoding.EncodeToString(b) }
 func b64Dec(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
 
 func signHS256(signed string, secret []byte) string {

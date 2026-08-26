@@ -28,9 +28,9 @@ const (
 	SubAgentTimeoutMax     = 180 * time.Second
 
 	// Multi-agent budget (P0-2): token and agent quotas for parallel orchestration.
-	DefaultMultiAgentTokenBudget  = 16000
-	DefaultMultiAgentAgentBudget  = 4
-	DefaultDeepAgentMaxSteps      = 20
+	DefaultMultiAgentTokenBudget = 16000
+	DefaultMultiAgentAgentBudget = 4
+	DefaultDeepAgentMaxSteps     = 20
 
 	// Graph
 	DefaultGraphName       = "CodeAgentReAct"

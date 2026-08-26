@@ -11,22 +11,22 @@ import (
 )
 
 const (
-	DefaultDreamMinSessions   = 3
-	DefaultDreamInterval      = 4 * time.Hour
-	DefaultDreamMinMemories   = 5
-	DefaultDreamConsolidateMax = 20
+	DefaultDreamMinSessions     = 3
+	DefaultDreamInterval        = 4 * time.Hour
+	DefaultDreamMinMemories     = 5
+	DefaultDreamConsolidateMax  = 20
 	DefaultDreamPruneImportance = 20
-	DefaultDreamPruneAge      = 30 * 24 * time.Hour
+	DefaultDreamPruneAge        = 30 * 24 * time.Hour
 )
 
 type DreamConfig struct {
-	Enabled       bool
-	MinSessions   int
-	Interval      time.Duration
-	MinMemories   int
-	ConsolidateMax int
+	Enabled         bool
+	MinSessions     int
+	Interval        time.Duration
+	MinMemories     int
+	ConsolidateMax  int
 	PruneImportance int
-	PruneAge      time.Duration
+	PruneAge        time.Duration
 }
 
 func DefaultDreamConfig() DreamConfig {
@@ -80,13 +80,13 @@ func (s *Service) RunDreamConsolidation(ctx context.Context, cfg DreamConfig, us
 
 	if summary != "" {
 		item := &memport.MemoryItem{
-			UserID:    userID,
-			ProjectID: projectID,
-			Scope:     memport.ScopeProject,
-			Category:  "dream_consolidation",
-			Content:   summary,
+			UserID:     userID,
+			ProjectID:  projectID,
+			Scope:      memport.ScopeProject,
+			Category:   "dream_consolidation",
+			Content:    summary,
 			Importance: 75,
-			Source:    "dream",
+			Source:     "dream",
 		}
 		if err := s.Save(ctx, item); err == nil {
 			result.NewItemID = item.ID

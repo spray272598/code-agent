@@ -27,11 +27,11 @@ type CircuitBreaker struct {
 }
 
 const (
-	StateNormal    = "normal"
-	StateHalfOpen  = "half_open"
-	StateOpen      = "open"
+	StateNormal             = "normal"
+	StateHalfOpen           = "half_open"
+	StateOpen               = "open"
 	DefaultFailureThreshold = 3
-	DefaultCooldown          = 30 * time.Second
+	DefaultCooldown         = 30 * time.Second
 )
 
 func NewCircuitBreaker() *CircuitBreaker {
@@ -133,20 +133,20 @@ func (cb *CircuitBreaker) State() string {
 // MCPHealthMonitor provides per-server health snapshots and supports
 // background health checks (PING) for registered MCP servers.
 type MCPHealthMonitor struct {
-	mu      sync.RWMutex
-	servers map[string]*serverHealth
-	checkFn func(ctx context.Context, serverName string) error
+	mu       sync.RWMutex
+	servers  map[string]*serverHealth
+	checkFn  func(ctx context.Context, serverName string) error
 	interval time.Duration
 	stopCh   chan struct{}
 }
 
 type serverHealth struct {
-	def         model.ServerConfig
-	cb          *CircuitBreaker
-	lastPing    time.Time
-	lastError   string
-	online      bool
-	toolCount   int
+	def       model.ServerConfig
+	cb        *CircuitBreaker
+	lastPing  time.Time
+	lastError string
+	online    bool
+	toolCount int
 }
 
 func NewMCPHealthMonitor(interval time.Duration, checkFn func(ctx context.Context, name string) error) *MCPHealthMonitor {

@@ -136,12 +136,14 @@ func (AgentTracer) StartPhaseSpan(ctx context.Context, sessionID, phaseID, phase
 var GlobalAgentTracer = AgentTracer{}
 
 // Compile-time checks.
-var _ = GlobalAgentTracer.StartAgentSpan
-var _ = GlobalAgentTracer.StartToolSpan
-var _ = GlobalAgentTracer.StartLLMSpan
-var _ = GlobalAgentTracer.StartCompressionSpan
-var _ = GlobalAgentTracer.StartMemorySpan
-var _ = GlobalAgentTracer.StartSafetySpan
-var _ = GlobalAgentTracer.RecordAgentEvent
-var _ = GlobalAgentTracer.TraceAgentSession
-var _ = GlobalAgentTracer.StartPhaseSpan
+var (
+	_ = GlobalAgentTracer.StartAgentSpan
+	_ = GlobalAgentTracer.StartToolSpan
+	_ = GlobalAgentTracer.StartLLMSpan
+	_ = GlobalAgentTracer.StartCompressionSpan
+	_ = GlobalAgentTracer.StartMemorySpan
+	_ = GlobalAgentTracer.StartSafetySpan
+	_ = GlobalAgentTracer.RecordAgentEvent
+	_ = GlobalAgentTracer.TraceAgentSession
+	_ = GlobalAgentTracer.StartPhaseSpan
+)

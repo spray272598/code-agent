@@ -33,45 +33,45 @@ import (
 )
 
 type ChatApp struct {
-	loop        engine.Runner // native Loop or Eino orchestrator
-	sessions    sessrepo.ISessionRepository
-	messages    sessrepo.IMessageRepository
-	tools       *tool.MapRegistry
-	perm        *security.Guard
-	redis       *redisx.Client
-	skills      *skill.Service
-	slash       *slash.Registry
-	memSvc      *memory.Service
-	auditRepo   audit.Repository
-	llmKeyRepo  llmkey.Repository
-	blobs       blob.Store
-	ckStore     checkpoint.Store
-	runs        *checkpoint.RunRegistry
-	summaryRepo sessrepo.ISummaryRepository
-	hooks       *hook.Bus
-	timeoutSec  int
-	workspace   string
-	rateEnabled bool
-	ratePerMin  int
+	loop         engine.Runner // native Loop or Eino orchestrator
+	sessions     sessrepo.ISessionRepository
+	messages     sessrepo.IMessageRepository
+	tools        *tool.MapRegistry
+	perm         *security.Guard
+	redis        *redisx.Client
+	skills       *skill.Service
+	slash        *slash.Registry
+	memSvc       *memory.Service
+	auditRepo    audit.Repository
+	llmKeyRepo   llmkey.Repository
+	blobs        blob.Store
+	ckStore      checkpoint.Store
+	runs         *checkpoint.RunRegistry
+	summaryRepo  sessrepo.ISummaryRepository
+	hooks        *hook.Bus
+	timeoutSec   int
+	workspace    string
+	rateEnabled  bool
+	ratePerMin   int
 	quotaEnabled bool
 	quotaPerDay  int
-	keys        *auth.KeyStore
-	sshPool     *sshinfra.Pool
-	sshRepo     sshport.IConnectionRepository
-	authSvc     *AuthService
-	tokenSvc    *TokenService
-	deviceSvc   *DeviceService
+	keys         *auth.KeyStore
+	sshPool      *sshinfra.Pool
+	sshRepo      sshport.IConnectionRepository
+	authSvc      *AuthService
+	tokenSvc     *TokenService
+	deviceSvc    *DeviceService
 	// Sprint 1.6: MCP is now per-user. ChatApp no longer holds a single global
 	// Manager; callers obtain the per-user Manager via MCPFactory().For(ctx).
 	mcpFactory mcpport.IUserMCPManagerFactory
 }
 
 // Set* methods retained for gradual migration; prefer application.Option.
-func (a *ChatApp) SetSkills(s *skill.Service)       { a.skills = s }
-func (a *ChatApp) SetMemory(s *memory.Service)      { a.memSvc = s }
-func (a *ChatApp) SetAudit(r audit.Repository)      { a.auditRepo = r }
-func (a *ChatApp) SetLLMKey(r llmkey.Repository)    { a.llmKeyRepo = r }
-func (a *ChatApp) SetBlobStore(s blob.Store)        { a.blobs = s }
+func (a *ChatApp) SetSkills(s *skill.Service)    { a.skills = s }
+func (a *ChatApp) SetMemory(s *memory.Service)   { a.memSvc = s }
+func (a *ChatApp) SetAudit(r audit.Repository)   { a.auditRepo = r }
+func (a *ChatApp) SetLLMKey(r llmkey.Repository) { a.llmKeyRepo = r }
+func (a *ChatApp) SetBlobStore(s blob.Store)     { a.blobs = s }
 
 // SetMCPFactory injects the per-user MCP factory (Sprint 1.6). After this is
 // called ChatApp no longer accepts direct Manager wiring; the factory is the
@@ -118,13 +118,13 @@ func (a *ChatApp) SetSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository
 }
 
 // SSHPool returns the SSH connection pool.
-func (a *ChatApp) SSHPool() *sshinfra.Pool      { return a.sshPool }
-func (a *ChatApp) Slash() *slash.Registry       { return a.slash }
-func (a *ChatApp) Skills() *skill.Service       { return a.skills }
-func (a *ChatApp) Memory() *memory.Service      { return a.memSvc }
-func (a *ChatApp) Audit() audit.Repository      { return a.auditRepo }
-func (a *ChatApp) Blobs() blob.Store            { return a.blobs }
-func (a *ChatApp) LLMKey() llmkey.Repository    { return a.llmKeyRepo }
+func (a *ChatApp) SSHPool() *sshinfra.Pool   { return a.sshPool }
+func (a *ChatApp) Slash() *slash.Registry    { return a.slash }
+func (a *ChatApp) Skills() *skill.Service    { return a.skills }
+func (a *ChatApp) Memory() *memory.Service   { return a.memSvc }
+func (a *ChatApp) Audit() audit.Repository   { return a.auditRepo }
+func (a *ChatApp) Blobs() blob.Store         { return a.blobs }
+func (a *ChatApp) LLMKey() llmkey.Repository { return a.llmKeyRepo }
 
 func (a *ChatApp) GetBlob(ctx context.Context, key string) ([]byte, error) {
 	if a.blobs == nil {
@@ -622,11 +622,11 @@ func (a *ChatApp) RunBackground(ctx context.Context, req ChatRequest, onEvent fu
 					(ev.Type == engine.EventCompress || ev.Type == engine.EventDone) {
 					if s, gerr := a.summaryRepo.Get(ctx, session.ID); gerr == nil && s != "" {
 						_ = a.memSvc.Save(ctx, &memport.MemoryItem{
-							UserID:    session.UserID,
-							ProjectID: session.ProjectID,
-							Scope:     memport.ScopeProject,
-							Content:   s,
-							Category:  "task_progress",
+							UserID:     session.UserID,
+							ProjectID:  session.ProjectID,
+							Scope:      memport.ScopeProject,
+							Content:    s,
+							Category:   "task_progress",
 							Importance: 60,
 						})
 					}

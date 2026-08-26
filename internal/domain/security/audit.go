@@ -31,14 +31,14 @@ const (
 )
 
 type AuditEvent struct {
-	Time      time.Time     `json:"time"`
-	Level     AuditLevel    `json:"level"`
-	Category  AuditCategory `json:"category"`
-	RuleID    string        `json:"ruleId,omitempty"`
-	Target    string        `json:"target"`
-	Detail    string        `json:"detail"`
-	SessionID string        `json:"sessionId,omitempty"`
-	UserID    string        `json:"userId,omitempty"`
+	Time      time.Time      `json:"time"`
+	Level     AuditLevel     `json:"level"`
+	Category  AuditCategory  `json:"category"`
+	RuleID    string         `json:"ruleId,omitempty"`
+	Target    string         `json:"target"`
+	Detail    string         `json:"detail"`
+	SessionID string         `json:"sessionId,omitempty"`
+	UserID    string         `json:"userId,omitempty"`
 	Extra     map[string]any `json:"extra,omitempty"`
 }
 
@@ -51,16 +51,16 @@ type AuditMetrics struct {
 }
 
 type AuditLogger struct {
-	mu       sync.Mutex
-	file     *os.File
-	buffer   []AuditEvent
-	maxBuf   int
-	enabled  bool
-	flushOn  bool
-	maxSize  int64
-	size     int64
-	metrics  AuditMetrics
-	logger   *log.Logger
+	mu      sync.Mutex
+	file    *os.File
+	buffer  []AuditEvent
+	maxBuf  int
+	enabled bool
+	flushOn bool
+	maxSize int64
+	size    int64
+	metrics AuditMetrics
+	logger  *log.Logger
 }
 
 var (
@@ -90,7 +90,7 @@ func NewAuditLogger(cfg AuditConfig) *AuditLogger {
 		logger:  log.New(os.Stderr, "[AUDIT] ", log.LstdFlags),
 	}
 	if cfg.LogPath != "" {
-		f, err := os.OpenFile(cfg.LogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(cfg.LogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err == nil {
 			a.file = f
 		} else {
@@ -206,7 +206,7 @@ func (a *AuditLogger) rotateLocked() {
 		a.file.Close()
 		backupPath := a.file.Name() + "." + time.Now().Format("20060102-150405")
 		os.Rename(a.file.Name(), backupPath)
-		newFile, err := os.OpenFile(a.file.Name(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		newFile, err := os.OpenFile(a.file.Name(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err == nil {
 			a.file = newFile
 		}
@@ -244,9 +244,9 @@ func (a *AuditLogger) SetLogPath(path string) error {
 	}
 	dir := filepath.Dir(path)
 	if dir != "." {
-		os.MkdirAll(dir, 0750)
+		os.MkdirAll(dir, 0o750)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}

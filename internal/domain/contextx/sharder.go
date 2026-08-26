@@ -16,10 +16,10 @@ type ShardSegment struct {
 
 // ShardConfig controls sharding behavior.
 type ShardConfig struct {
-	MaxSegments  int   // max segments to keep (default 6)
-	HeadSegments int   // always keep N head segments (default 2)
-	TailSegments int   // always keep N tail segments (default 2)
-	MaxRunes     int   // total rune budget for output (default 2000)
+	MaxSegments  int // max segments to keep (default 6)
+	HeadSegments int // always keep N head segments (default 2)
+	TailSegments int // always keep N tail segments (default 2)
+	MaxRunes     int // total rune budget for output (default 2000)
 }
 
 func DefaultShardConfig() ShardConfig {

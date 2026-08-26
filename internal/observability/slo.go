@@ -7,10 +7,10 @@ import (
 
 // SLO defines a Service Level Objective.
 type SLO struct {
-	Name           string        `json:"name"`
-	TargetLatency  time.Duration `json:"targetLatency"`  // e.g. 99% of requests < 2s
-	TargetErrorRate float64      `json:"targetErrorRate"` // e.g. < 1% error rate
-	Window         time.Duration `json:"window"`         // evaluation window (e.g. 1h)
+	Name            string        `json:"name"`
+	TargetLatency   time.Duration `json:"targetLatency"`   // e.g. 99% of requests < 2s
+	TargetErrorRate float64       `json:"targetErrorRate"` // e.g. < 1% error rate
+	Window          time.Duration `json:"window"`          // evaluation window (e.g. 1h)
 }
 
 // SLOState tracks the current state of an SLO.
@@ -40,22 +40,22 @@ func NewSLOMonitor() *SLOMonitor {
 	}
 	// Register default SLIs.
 	m.RegisterSLO(SLO{
-		Name:           "agent_latency",
-		TargetLatency:  30 * time.Second,
+		Name:            "agent_latency",
+		TargetLatency:   30 * time.Second,
 		TargetErrorRate: 0.02,
-		Window:         1 * time.Hour,
+		Window:          1 * time.Hour,
 	})
 	m.RegisterSLO(SLO{
-		Name:           "tool_call_latency",
-		TargetLatency:  5 * time.Second,
+		Name:            "tool_call_latency",
+		TargetLatency:   5 * time.Second,
 		TargetErrorRate: 0.05,
-		Window:         1 * time.Hour,
+		Window:          1 * time.Hour,
 	})
 	m.RegisterSLO(SLO{
-		Name:           "llm_call_latency",
-		TargetLatency:  10 * time.Second,
+		Name:            "llm_call_latency",
+		TargetLatency:   10 * time.Second,
 		TargetErrorRate: 0.03,
-		Window:         1 * time.Hour,
+		Window:          1 * time.Hour,
 	})
 	m.latency = newLatencyTracker(10000) // keep last 10k samples
 	m.errors = newErrorTracker()
@@ -250,9 +250,9 @@ func quickSortInt64s(s []int64, lo, hi int) {
 // --- errorTracker: rolling error rate ---
 
 type errorTracker struct {
-	mu       sync.Mutex
-	total    map[string]int64 // sloName → total requests
-	errored  map[string]int64 // sloName → error count
+	mu      sync.Mutex
+	total   map[string]int64 // sloName → total requests
+	errored map[string]int64 // sloName → error count
 }
 
 func newErrorTracker() *errorTracker {
@@ -287,5 +287,7 @@ func (m *SLOMonitor) Reset() {
 	m.errors = newErrorTracker()
 }
 
-var _ = GlobalSLO.Evaluate
-var _ = func() { GlobalSLO.RecordLatency("test", 100*time.Millisecond, nil) }
+var (
+	_ = GlobalSLO.Evaluate
+	_ = func() { GlobalSLO.RecordLatency("test", 100*time.Millisecond, nil) }
+)

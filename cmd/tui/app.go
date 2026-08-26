@@ -154,12 +154,12 @@ func (a *App) addConn(ctx context.Context, args []string) (string, bool) {
 		return "invalid <user@host[:port]>", false
 	}
 	cfg := &model.ConnectionConfig{
-		Name:     name,
-		Host:     host,
-		Port:     port,
-		Username: user,
-		AuthType: "password",
-		Enabled:  true,
+		Name:      name,
+		Host:      host,
+		Port:      port,
+		Username:  user,
+		AuthType:  "password",
+		Enabled:   true,
 		CreatedAt: a.Now().UTC(),
 		UpdatedAt: a.Now().UTC(),
 	}

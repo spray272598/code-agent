@@ -11,14 +11,14 @@ import (
 )
 
 type SearchOptions struct {
-	Limit       int
-	MinScore    float64
-	UseFTS      bool
-	UseVector   bool
-	Scope       memport.Scope
-	Category    string
-	ExcludeIDs  []int64
-	TimeDecay   float64
+	Limit      int
+	MinScore   float64
+	UseFTS     bool
+	UseVector  bool
+	Scope      memport.Scope
+	Category   string
+	ExcludeIDs []int64
+	TimeDecay  float64
 }
 
 func DefaultSearchOptions() SearchOptions {
@@ -113,7 +113,7 @@ func computeFTSScore(query string, item memport.MemoryItem) float64 {
 	}
 
 	importanceBoost := float64(item.Importance) / 100.0
-	score := (matches / float64(len(qTokens))) * 0.7 + importanceBoost * 0.3
+	score := (matches/float64(len(qTokens)))*0.7 + importanceBoost*0.3
 	return score
 }
 

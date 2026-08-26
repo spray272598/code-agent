@@ -109,11 +109,13 @@ func (t *ReadFileTool) Name() string          { return "read_file" }
 func (t *ReadFileTool) Description() string {
 	return "Read a file under the project workspace. Args: path (required), offset?, limit?"
 }
+
 func (t *ReadFileTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"path": map[string]any{"type": "string"},
 	}, "required": []string{"path"}}
 }
+
 func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	path, _ := args["path"].(string)
 	abs, err := t.ws.ResolveForSession(tool.SessionIDFrom(ctx), path)
@@ -140,11 +142,13 @@ func (t *WriteFileTool) Name() string           { return "write_file" }
 func (t *WriteFileTool) Description() string {
 	return "Write full file content. Args: path, content"
 }
+
 func (t *WriteFileTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"},
 	}, "required": []string{"path", "content"}}
 }
+
 func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
@@ -175,6 +179,7 @@ func (t *EditFileTool) Name() string          { return "edit_file" }
 func (t *EditFileTool) Description() string {
 	return "Edit file: exact multi-line replace or regex. Args: path, old_string, new_string; optional regex(bool), replace_all(bool), count(int)"
 }
+
 func (t *EditFileTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"path":        map[string]any{"type": "string"},
@@ -185,6 +190,7 @@ func (t *EditFileTool) InputSchema() map[string]any {
 		"count":       map[string]any{"type": "integer", "description": "max replacements; 0 or omit = 1 for exact unless replace_all"},
 	}, "required": []string{"path", "old_string", "new_string"}}
 }
+
 func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	path, _ := args["path"].(string)
 	oldS, _ := args["old_string"].(string)
@@ -338,12 +344,14 @@ func (t *GlobTool) Name() string      { return "glob" }
 func (t *GlobTool) Description() string {
 	return "Find files by glob (doublestar ** supported). Args: pattern (e.g. **/*.{go,md}), path? (subdir)"
 }
+
 func (t *GlobTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"pattern": map[string]any{"type": "string"},
 		"path":    map[string]any{"type": "string"},
 	}, "required": []string{"pattern"}}
 }
+
 func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	pattern, _ := args["pattern"].(string)
 	sub, _ := args["path"].(string)
@@ -410,6 +418,7 @@ func (t *GrepTool) Name() string      { return "grep" }
 func (t *GrepTool) Description() string {
 	return "Search file contents by regex. Args: pattern, path?, glob?, context|context_before|context_after (like -C/-B/-A)"
 }
+
 func (t *GrepTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"pattern":        map[string]any{"type": "string"},
@@ -420,6 +429,7 @@ func (t *GrepTool) InputSchema() map[string]any {
 		"context_after":  map[string]any{"type": "integer"},
 	}, "required": []string{"pattern"}}
 }
+
 func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	pat, _ := args["pattern"].(string)
 	sub, _ := args["path"].(string)

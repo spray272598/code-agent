@@ -41,7 +41,7 @@ type SpawnFunc func(ctx context.Context, modelID, harnessID, prompt string) (str
 
 // RoleRenderedPrompt holds primary (configured) and fallback (inherit) prompts.
 type RoleRenderedPrompt struct {
-	Primary string
+	Primary  string
 	Fallback string
 }
 
@@ -152,7 +152,7 @@ func BuildStrategistPrompt(plan *GoalPlan, failures int, gaps []string, tools *R
 
 // LLMPlanner implements PlannerFunc using a real LLM.
 type LLMPlanner struct {
-	LLM  port.ILLMPort
+	LLM     port.ILLMPort
 	Timeout time.Duration
 }
 
@@ -185,8 +185,8 @@ func parsePlanResponse(content, objective string) (*GoalPlan, error) {
 		Kind:               GoalKindCodeChange,
 		AcceptanceCriteria: []string{"deliverable matches objective"},
 		VerificationPlan:   []string{"verify against criteria"},
-		CreatedAt:           time.Now(),
-		LastUpdatedAt:       time.Now(),
+		CreatedAt:          time.Now(),
+		LastUpdatedAt:      time.Now(),
 	}
 
 	// Try to parse structured sections
@@ -327,9 +327,9 @@ func (i *LLMImplementer) Execute(ctx context.Context, plan *GoalPlan) (string, e
 	prompt := fmt.Sprintf("Execute plan for objective: %s. Steps: %s",
 		plan.Objective, strings.Join(plan.TaskChecklist, "; "))
 	res := i.Runner.RunOne(ctx, Spec{
-		ID:    "impl-" + plan.ID,
+		ID:     "impl-" + plan.ID,
 		Prompt: prompt,
-		Role:  "general",
+		Role:   "general",
 	})
 	if res.Status == "error" {
 		return res.Output, fmt.Errorf("implementer failed: %s", res.Output)

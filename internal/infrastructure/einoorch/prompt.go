@@ -51,9 +51,9 @@ func NewPromptBuilder(ctx *PromptContext, tools *domtool.MapRegistry) *PromptBui
 	}
 }
 
-func (p *PromptBuilder) SetSkills(s *skill.Service)    { p.skills = s }
-func (p *PromptBuilder) SetMemory(m *memory.Service)   { p.mem = m }
-func (p *PromptBuilder) SetSpecService(s SpecProvider) { p.spec = s }
+func (p *PromptBuilder) SetSkills(s *skill.Service)             { p.skills = s }
+func (p *PromptBuilder) SetMemory(m *memory.Service)            { p.mem = m }
+func (p *PromptBuilder) SetSpecService(s SpecProvider)          { p.spec = s }
 func (p *PromptBuilder) SetAgentsMdProvider(a AgentsMdProvider) { p.agentsMd = a }
 func (p *PromptBuilder) SetContext(ctx *PromptContext) {
 	p.mu.Lock()

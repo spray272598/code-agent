@@ -11,10 +11,10 @@ import (
 )
 
 type FlushConfig struct {
-	Enabled    bool
-	WindowSize int
+	Enabled       bool
+	WindowSize    int
 	MinImportance int
-	AutoExtract bool
+	AutoExtract   bool
 }
 
 func DefaultFlushConfig() FlushConfig {

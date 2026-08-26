@@ -12,7 +12,7 @@ import (
 // Manager creates isolated git worktrees under .code-agent/worktrees/.
 // Falls back to plain directories if not a git repo.
 type Manager struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	RepoRoot string
 	BaseDir  string // .code-agent/worktrees
 }

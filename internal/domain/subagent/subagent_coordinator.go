@@ -25,22 +25,22 @@ type SubagentRunner func(ctx context.Context, input SubagentInput) (SubagentOutp
 type SubagentCoordinator struct {
 	mu sync.RWMutex
 
-	tasks          map[string]*subagentTask
-	maxConcurrent  int
-	runningCount   int
-	runner         SubagentRunner
-	progressCh     chan SubagentProgress
-	onComplete     func(SubagentOutput)
-	onError        func(error)
-	defaultModel   string
+	tasks         map[string]*subagentTask
+	maxConcurrent int
+	runningCount  int
+	runner        SubagentRunner
+	progressCh    chan SubagentProgress
+	onComplete    func(SubagentOutput)
+	onError       func(error)
+	defaultModel  string
 }
 
 type subagentTask struct {
-	handle   SubagentHandle
-	input    SubagentInput
-	cancel   context.CancelFunc
-	output   *SubagentOutput
-	err      error
+	handle SubagentHandle
+	input  SubagentInput
+	cancel context.CancelFunc
+	output *SubagentOutput
+	err    error
 }
 
 // NewSubagentCoordinator creates a new subagent coordinator.
@@ -123,11 +123,11 @@ func (c *SubagentCoordinator) Spawn(ctx context.Context, input SubagentInput) (*
 
 	ctx, cancel := context.WithCancel(ctx)
 	handle := SubagentHandle{
-		TaskID:       taskID,
-		Status:       SubagentStatusPending,
-		Description:  input.Description,
-		SubagentType: input.SubagentType,
-		StartedAt:    time.Now(),
+		TaskID:        taskID,
+		Status:        SubagentStatusPending,
+		Description:   input.Description,
+		SubagentType:  input.SubagentType,
+		StartedAt:     time.Now(),
 		ParentSession: input.ParentSession,
 	}
 
@@ -279,11 +279,11 @@ func (c *SubagentCoordinator) runTask(ctx context.Context, task *subagentTask) {
 
 	select {
 	case c.progressCh <- SubagentProgress{
-		TaskID:        output.TaskID,
-		TokensUsed:    output.TokensUsed,
+		TaskID:         output.TaskID,
+		TokensUsed:     output.TokensUsed,
 		FinishedTokens: output.TokensUsed,
-		Message:       fmt.Sprintf("task %s completed: %s", task.handle.TaskID, output.Status),
-		Timestamp:     time.Now(),
+		Message:        fmt.Sprintf("task %s completed: %s", task.handle.TaskID, output.Status),
+		Timestamp:      time.Now(),
 	}:
 	default:
 	}
@@ -298,11 +298,11 @@ func (c *SubagentCoordinator) runTask(ctx context.Context, task *subagentTask) {
 
 // ParentContext holds the parent agent's context for subagent inheritance.
 type ParentContext struct {
-	SessionID      string                 `json:"session_id"`
-	ToolDefinitions []ToolDefinition      `json:"tool_definitions,omitempty"`
-	MCPServers     []MCPServerInfo        `json:"mcp_servers,omitempty"`
-	Hooks          map[string]string      `json:"hooks,omitempty"`
-	Metadata       map[string]string      `json:"metadata,omitempty"`
+	SessionID       string            `json:"session_id"`
+	ToolDefinitions []ToolDefinition  `json:"tool_definitions,omitempty"`
+	MCPServers      []MCPServerInfo   `json:"mcp_servers,omitempty"`
+	Hooks           map[string]string `json:"hooks,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
 }
 
 // ToolDefinition describes a tool available to a subagent.

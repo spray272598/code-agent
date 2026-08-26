@@ -150,7 +150,7 @@ func TestAdaptiveCircuitBreaker_RecentDenialRate(t *testing.T) {
 
 	// Record 3 denials rapidly
 	for i := 0; i < 3; i++ {
-		acb.RecordDenial("s1", "bash", "denial " + string(rune('a'+i)))
+		acb.RecordDenial("s1", "bash", "denial "+string(rune('a'+i)))
 	}
 
 	// 3 denials within 1 minute should trigger RiskCritical (threshold 2)

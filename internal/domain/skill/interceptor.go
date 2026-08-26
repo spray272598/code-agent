@@ -6,9 +6,7 @@ import (
 	"sync"
 )
 
-var (
-	ErrSkillBlockedTool = errors.New("skill blocked this tool")
-)
+var ErrSkillBlockedTool = errors.New("skill blocked this tool")
 
 type ToolInterceptor interface {
 	Intercept(ctx context.Context, toolName string, args map[string]any) error
@@ -17,9 +15,9 @@ type ToolInterceptor interface {
 }
 
 type BlockInterceptor struct {
-	mu         sync.RWMutex
-	skillSvc   *Service
-	activeSkill *Skill
+	mu           sync.RWMutex
+	skillSvc     *Service
+	activeSkill  *Skill
 	blockedTools map[string]bool
 }
 
@@ -75,9 +73,9 @@ func (b *BlockInterceptor) Intercept(ctx context.Context, toolName string, args 
 
 	if blocked, ok := b.blockedTools[toolName]; ok && blocked {
 		return &BlockedToolError{
-			ToolName:  toolName,
-			SkillID:   b.activeSkill.ID,
-			Reason:    "tool explicitly blocked by skill policy",
+			ToolName: toolName,
+			SkillID:  b.activeSkill.ID,
+			Reason:   "tool explicitly blocked by skill policy",
 		}
 	}
 
@@ -86,9 +84,9 @@ func (b *BlockInterceptor) Intercept(ctx context.Context, toolName string, args 
 			prefix := key[7:]
 			if len(toolName) >= len(prefix) && toolName[:len(prefix)] == prefix {
 				return &BlockedToolError{
-					ToolName:  toolName,
-					SkillID:   b.activeSkill.ID,
-					Reason:    "tool prefix blocked by skill policy",
+					ToolName: toolName,
+					SkillID:  b.activeSkill.ID,
+					Reason:   "tool prefix blocked by skill policy",
 				}
 			}
 		}

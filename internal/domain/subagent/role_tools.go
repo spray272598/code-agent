@@ -23,9 +23,9 @@ const (
 type RoleCapability int
 
 const (
-	RoleCapabilityNone RoleCapability = iota
-	RoleCapabilitySkeptic              // Needs read + search
-	RoleCapabilityStrategist           // Needs read + search + execute
+	RoleCapabilityNone       RoleCapability = iota
+	RoleCapabilitySkeptic                   // Needs read + search
+	RoleCapabilityStrategist                // Needs read + search + execute
 )
 
 // IsSatisfied checks whether this capability level is satisfied by the given
@@ -43,15 +43,15 @@ func (c RoleCapability) IsSatisfied(read, search, execute string) bool {
 
 // RoleToolNames holds the resolved tool names for a role's prompt placeholders.
 type RoleToolNames struct {
-	Read       string
-	List       string
-	Search     string
-	Write      string
-	Edit       string
-	Execute    string
-	WebSearch  string
-	WebFetch   string
-	Toolset    string
+	Read      string
+	List      string
+	Search    string
+	Write     string
+	Edit      string
+	Execute   string
+	WebSearch string
+	WebFetch  string
+	Toolset   string
 }
 
 // Default fallback tool names (conservative, safe identifiers).

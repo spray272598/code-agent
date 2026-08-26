@@ -26,6 +26,7 @@ func (s *slowEcho) InputSchema() map[string]any {
 		"text": map[string]any{"type": "string"},
 	}, "required": []string{"text"}}
 }
+
 func (s *slowEcho) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	cur := s.n.Add(1)
 	for {

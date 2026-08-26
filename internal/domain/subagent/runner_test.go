@@ -20,6 +20,7 @@ func (s *stubLLM) Generate(ctx context.Context, req *port.ChatRequest) (*port.Ch
 	}
 	return &port.ChatResponse{Content: `{"name":"glob","args":{"pattern":"*"}}`, TotalTokens: 5}, nil
 }
+
 func (s *stubLLM) GenerateStream(ctx context.Context, req *port.ChatRequest, onDelta func(port.StreamDelta)) (*port.ChatResponse, error) {
 	return s.Generate(ctx, req)
 }

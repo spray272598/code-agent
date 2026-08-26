@@ -91,8 +91,12 @@ type IToolResolver interface {
 	Resolve(ctx context.Context) (mcpport.IMCPManagerPort, error)
 }
 
-type directResolver struct{ mgr mcpport.IMCPManagerPort }
-type factoryResolver struct{ f mcpport.IUserMCPManagerFactory }
+type (
+	directResolver  struct{ mgr mcpport.IMCPManagerPort }
+	factoryResolver struct {
+		f mcpport.IUserMCPManagerFactory
+	}
+)
 
 func (d directResolver) Resolve(_ context.Context) (mcpport.IMCPManagerPort, error) {
 	if d.mgr == nil {
@@ -100,16 +104,17 @@ func (d directResolver) Resolve(_ context.Context) (mcpport.IMCPManagerPort, err
 	}
 	return d.mgr, nil
 }
+
 func (f factoryResolver) Resolve(ctx context.Context) (mcpport.IMCPManagerPort, error) {
 	return f.f.For(ctx)
 }
 
 // MCPTool adapts model.ToolDef to tool.ITool via the resolver.
 type MCPTool struct {
-	def        model.ToolDef
-	resolve    IToolResolver
-	cache      *mcpcache.ToolCache
-	cacheable  bool
+	def       model.ToolDef
+	resolve   IToolResolver
+	cache     *mcpcache.ToolCache
+	cacheable bool
 }
 
 func NewMCPTool(def model.ToolDef, resolve IToolResolver, cache *mcpcache.ToolCache, cacheable bool) *MCPTool {
@@ -123,12 +128,14 @@ func (t *MCPTool) Description() string {
 	}
 	return t.def.Description
 }
+
 func (t *MCPTool) InputSchema() map[string]any {
 	if t.def.InputSchema != nil {
 		return t.def.InputSchema
 	}
 	return map[string]any{"type": "object"}
 }
+
 func (t *MCPTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	if t.resolve == nil {
 		return tool.Result{Text: "mcp manager unavailable", IsError: true}, nil

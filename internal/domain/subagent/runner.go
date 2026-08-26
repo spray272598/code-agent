@@ -41,10 +41,10 @@ type Spec struct {
 
 // Result of one subagent.
 type Result struct {
-	ID       string `json:"id"`
-	Role     string `json:"role"`
-	Status   string `json:"status"` // ok|error
-	Output   string `json:"output"`
+	ID     string `json:"id"`
+	Role   string `json:"role"`
+	Status string `json:"status"` // ok|error
+	Output string `json:"output"`
 	// Summary is the window-isolated distillation of Output (M5.7-4). When set,
 	// the parent context receives Summary instead of the full Output, so long
 	// subagent transcripts never balloon the main window.

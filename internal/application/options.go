@@ -15,8 +15,8 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/slash"
 	sshport "github.com/spray272598/code-agent/internal/domain/ssh/port"
-	mcpinfra "github.com/spray272598/code-agent/internal/infrastructure/mcp"
 	"github.com/spray272598/code-agent/internal/domain/tool"
+	mcpinfra "github.com/spray272598/code-agent/internal/infrastructure/mcp"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 )
@@ -55,6 +55,7 @@ func (f *systemOnlyFactory) For(ctx context.Context) (mcpport.IMCPManagerPort, e
 	}
 	return f.inner, nil
 }
+
 func (f *systemOnlyFactory) ForUserID(_ string) (mcpport.IMCPManagerPort, error) {
 	if f.inner == nil {
 		return nil, mcpinfra.ErrTenantMismatch
@@ -126,17 +127,17 @@ func WithSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository) Option {
 // CoreDeps required dependencies for ChatApp construction.
 type CoreDeps struct {
 	// Loop is the agent orchestrator (native *engine.Loop or Eino runner).
-	Loop        engine.Runner
-	Sessions    sessrepo.ISessionRepository
-	Messages    sessrepo.IMessageRepository
-	Tools       *tool.MapRegistry
-	Perm        *security.Guard
-	Redis       *redisx.Client
-	TimeoutSec  int
-	Workspace   string
-	RateEnabled bool
-	RatePerMin  int
-	APIKeys     []string // hashed at construct; prefer WithKeyStore for pre-hashed
+	Loop         engine.Runner
+	Sessions     sessrepo.ISessionRepository
+	Messages     sessrepo.IMessageRepository
+	Tools        *tool.MapRegistry
+	Perm         *security.Guard
+	Redis        *redisx.Client
+	TimeoutSec   int
+	Workspace    string
+	RateEnabled  bool
+	RatePerMin   int
+	APIKeys      []string // hashed at construct; prefer WithKeyStore for pre-hashed
 	QuotaEnabled bool     // per-user daily token quota (3.3)
 	QuotaPerDay  int      // tokens allowed per user per day (0 = unlimited)
 }

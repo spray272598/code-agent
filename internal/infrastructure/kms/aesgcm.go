@@ -51,6 +51,7 @@ type keySlot struct {
 // NewSealer loads (or initializes) the KMS key from one of:
 //  1. the CODE_AGENT_KMS_KEY env var (hex, 64 chars)
 //  2. the keyfile (./secrets/kms.key)
+//
 // A missing keyfile is auto-created with a freshly generated key.
 //
 // A second env var CODE_AGENT_KMS_PREVIOUS may carry a previous hex key for

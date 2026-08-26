@@ -13,14 +13,14 @@ import (
 // reuses observability.CounterRegistry (token/quota counters) and the per-user
 // daily token counters (3.3) tracked in Redis.
 type Usage struct {
-	GeneratedAt   string         `json:"generated_at"`
-	QuotaEnabled  bool           `json:"quota_enabled"`
-	QuotaPerDay   int            `json:"quota_per_day"`
-	DailyUsed     int            `json:"daily_used"`
-	DailyRemaining int           `json:"daily_remaining"`
-	SessionUsed   int            `json:"session_used"`
-	ActiveRuns    int            `json:"active_runs"`
-	Counters      map[string]any `json:"counters"`
+	GeneratedAt    string         `json:"generated_at"`
+	QuotaEnabled   bool           `json:"quota_enabled"`
+	QuotaPerDay    int            `json:"quota_per_day"`
+	DailyUsed      int            `json:"daily_used"`
+	DailyRemaining int            `json:"daily_remaining"`
+	SessionUsed    int            `json:"session_used"`
+	ActiveRuns     int            `json:"active_runs"`
+	Counters       map[string]any `json:"counters"`
 }
 
 // UsageSnapshot returns the current usage view for a user/session.

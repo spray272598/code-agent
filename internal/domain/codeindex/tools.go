@@ -19,6 +19,7 @@ func (t *SearchTool) Name() string { return "code_search" }
 func (t *SearchTool) Description() string {
 	return "Search the workspace code index (inverted index). Args: query (required), top_k? (default 8). Prefer this over blind glob when looking for symbols/files."
 }
+
 func (t *SearchTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -29,6 +30,7 @@ func (t *SearchTool) InputSchema() map[string]any {
 		"required": []string{"query"},
 	}
 }
+
 func (t *SearchTool) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
 	if t.Idx == nil {
 		return tool.Result{Text: "code index unavailable", IsError: true}, nil
@@ -92,9 +94,11 @@ func (t *RebuildTool) Name() string { return "code_index" }
 func (t *RebuildTool) Description() string {
 	return "Rebuild the workspace code index. Args: none required. Call after many file edits."
 }
+
 func (t *RebuildTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
+
 func (t *RebuildTool) Execute(ctx context.Context, _ map[string]any) (tool.Result, error) {
 	if t.Idx == nil {
 		return tool.Result{Text: "code index unavailable", IsError: true}, nil

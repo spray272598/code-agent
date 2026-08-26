@@ -22,17 +22,21 @@ func (f *fakeTerminal) OpenTerminal(connName string, cols, rows int) (*model.Ter
 	f.opened++
 	return &model.TerminalSession{ID: "sess-" + connName, ConnectionID: connName, Cols: cols, Rows: rows, Active: true}, nil
 }
+
 func (f *fakeTerminal) Write(sessionID string, data []byte) error {
 	f.written = append(f.written, string(data))
 	return nil
 }
+
 func (f *fakeTerminal) Read(sessionID string, clear bool) (string, error) {
 	return f.buf, nil
 }
+
 func (f *fakeTerminal) Close(sessionID string) error {
 	f.closed++
 	return nil
 }
+
 func (f *fakeTerminal) Resize(sessionID string, cols, rows int) error {
 	f.resized++
 	return nil

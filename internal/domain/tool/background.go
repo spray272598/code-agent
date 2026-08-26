@@ -155,7 +155,7 @@ func (be *BackgroundExecutor) Cleanup(maxAge time.Duration) int {
 }
 
 type CompositionExecutor struct {
-	be   *BackgroundExecutor
+	be    *BackgroundExecutor
 	tasks map[int]string
 }
 

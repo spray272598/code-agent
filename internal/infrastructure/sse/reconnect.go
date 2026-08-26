@@ -40,12 +40,12 @@ func DefaultReconnectPolicy() ReconnectPolicy {
 }
 
 type ReconnectManager struct {
-	mu             sync.Mutex
-	policy         ReconnectPolicy
-	lastEventID    uint64
-	retryCount     int
-	lastErr        error
-	lastErrAt      time.Time
+	mu              sync.Mutex
+	policy          ReconnectPolicy
+	lastEventID     uint64
+	retryCount      int
+	lastErr         error
+	lastErrAt       time.Time
 	lastReconnectAt time.Time
 }
 
@@ -351,7 +351,9 @@ func buildEvent(eventType EventType, dataParts []string, lastID uint64) *Structu
 		if data[0] == '{' || data[0] == '[' {
 			ev.Data = json.RawMessage(data)
 			if ev.Type == "" {
-				var typed struct{ Type EventType `json:"type"` }
+				var typed struct {
+					Type EventType `json:"type"`
+				}
 				if err := json.Unmarshal([]byte(data), &typed); err == nil && typed.Type != "" {
 					ev.Type = typed.Type
 				}

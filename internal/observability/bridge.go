@@ -28,13 +28,13 @@ const (
 
 // ObservabilityEvent is a structured event for observability pipelines.
 type ObservabilityEvent struct {
-	Type      EventType              `json:"type"`
-	Timestamp time.Time              `json:"ts"`
-	SessionID string                 `json:"sessionId,omitempty"`
-	UserID    string                 `json:"userId,omitempty"`
-	Data      map[string]any         `json:"data,omitempty"`
-	DurationMs int64                 `json:"durationMs,omitempty"`
-	Error     string                 `json:"error,omitempty"`
+	Type       EventType      `json:"type"`
+	Timestamp  time.Time      `json:"ts"`
+	SessionID  string         `json:"sessionId,omitempty"`
+	UserID     string         `json:"userId,omitempty"`
+	Data       map[string]any `json:"data,omitempty"`
+	DurationMs int64          `json:"durationMs,omitempty"`
+	Error      string         `json:"error,omitempty"`
 }
 
 // ObservabilityBridge routes observability events to registered handlers.
@@ -148,6 +148,8 @@ func (h LogEventHandler) HandleEvent(_ context.Context, evt ObservabilityEvent) 
 var GlobalObservabilityBridge = NewObservabilityBridge()
 
 // Compile-time checks.
-var _ = GlobalObservabilityBridge.Emit
-var _ = MetricEventHandler{}.HandleEvent
-var _ = LogEventHandler{}.HandleEvent
+var (
+	_ = GlobalObservabilityBridge.Emit
+	_ = MetricEventHandler{}.HandleEvent
+	_ = LogEventHandler{}.HandleEvent
+)

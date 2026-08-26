@@ -40,12 +40,15 @@ func (m *memRepo) Save(_ context.Context, cfg *model.ConnectionConfig) error {
 	m.byName[cp.Name] = &cp
 	return nil
 }
+
 func (m *memRepo) FindByID(_ context.Context, id string) (*model.ConnectionConfig, error) {
 	return m.byID[id], nil
 }
+
 func (m *memRepo) FindByName(_ context.Context, name string) (*model.ConnectionConfig, error) {
 	return m.byName[name], nil
 }
+
 func (m *memRepo) List(_ context.Context) ([]*model.ConnectionConfig, error) {
 	out := make([]*model.ConnectionConfig, 0, len(m.byName))
 	for _, c := range m.byName {
@@ -53,6 +56,7 @@ func (m *memRepo) List(_ context.Context) ([]*model.ConnectionConfig, error) {
 	}
 	return out, nil
 }
+
 func (m *memRepo) Delete(_ context.Context, id string) error {
 	if c, ok := m.byID[id]; ok {
 		delete(m.byName, c.Name)

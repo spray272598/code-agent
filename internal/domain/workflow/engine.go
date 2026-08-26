@@ -15,9 +15,9 @@ func NewEngine(host Host, journal *Journal) *Engine {
 }
 
 type RunResult struct {
-	Outcome   Outcome      `json:"outcome"`
-	Steps     []StepResult `json:"steps"`
-	Spent     int          `json:"spent"`
+	Outcome Outcome      `json:"outcome"`
+	Steps   []StepResult `json:"steps"`
+	Spent   int          `json:"spent"`
 }
 
 func (e *Engine) Run(ctx context.Context, spec WorkflowSpec) (*RunResult, error) {

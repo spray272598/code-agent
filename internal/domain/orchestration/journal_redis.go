@@ -14,8 +14,9 @@ import (
 // Suitable for high-throughput, low-latency orchestration logging.
 //
 // Key structure:
-//   journal:{runID} → SortedSet (score=timestamp_unix_nano, value=JSON_entry)
-//   journal:{runID}:state → Hash with current state snapshot
+//
+//	journal:{runID} → SortedSet (score=timestamp_unix_nano, value=JSON_entry)
+//	journal:{runID}:state → Hash with current state snapshot
 type RedisJournalStorage struct {
 	client *redis.Client
 	prefix string
@@ -95,11 +96,11 @@ func (s *RedisJournalStorage) SaveState(state *JournalState) error {
 	s.mustCtx()
 	pipe := s.client.TxPipeline()
 	pipe.HSet(s.ctx, key, map[string]interface{}{
-		"status":      string(state.Status),
-		"goal":        state.Goal,
+		"status":       string(state.Status),
+		"goal":         state.Goal,
 		"agent_budget": state.AgentBudget,
-		"agents_used": state.AgentsUsed,
-		"tokens_used": state.TokensUsed,
+		"agents_used":  state.AgentsUsed,
+		"tokens_used":  state.TokensUsed,
 		"phases_done": func() string {
 			b, _ := json.Marshal(state.PhasesDone)
 			return string(b)

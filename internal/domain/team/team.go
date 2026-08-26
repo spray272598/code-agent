@@ -54,7 +54,7 @@ func ApplyToRunner(r *subagent.Runner, c *Config) {
 	for name, rc := range c.Roles {
 		key := strings.ToLower(name)
 		r.Roles[key] = subagent.RoleConfig{
-			Tools:   append([]string{}, rc.Tools...),
+			Tools:    append([]string{}, rc.Tools...),
 			MaxSteps: rc.MaxSteps,
 		}
 	}

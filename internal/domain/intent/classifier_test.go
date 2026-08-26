@@ -33,6 +33,7 @@ type fakeLLM struct {
 func (f *fakeLLM) Generate(_ context.Context, _ *port.ChatRequest) (*port.ChatResponse, error) {
 	return &port.ChatResponse{Content: f.out}, f.err
 }
+
 func (f *fakeLLM) GenerateStream(_ context.Context, _ *port.ChatRequest, _ func(port.StreamDelta)) (*port.ChatResponse, error) {
 	return f.Generate(context.Background(), nil)
 }

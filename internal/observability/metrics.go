@@ -74,23 +74,23 @@ func NewMetrics() *Metrics {
 	}
 }
 
-func (m *Metrics) AddChatTotal(n int64)      { m.ChatTotal.Add(n) }
-func (m *Metrics) AddChatErrors(n int64)     { m.ChatErrors.Add(n) }
-func (m *Metrics) AddToolCalls(n int64)      { m.ToolCalls.Add(n) }
-func (m *Metrics) AddPermissionDeny(n int64) { m.PermissionDeny.Add(n) }
-func (m *Metrics) AddMemoryWrites(n int64)   { m.MemoryWrites.Add(n) }
-func (m *Metrics) AddMemoryReads(n int64)    { m.MemoryReads.Add(n) }
-func (m *Metrics) AddTokens(n int64)         { m.TokensTotal.Add(n) }
-func (m *Metrics) AddReflect(n int64)        { m.ReflectTotal.Add(n) }
-func (m *Metrics) AddCompress(n int64)       { m.CompressTotal.Add(n) }
-func (m *Metrics) AddBlobOffload(n int64)    { m.BlobOffload.Add(n) }
-func (m *Metrics) AddEmbeddingCalls(n int64) { m.EmbeddingCalls.Add(n) }
-func (m *Metrics) AddEmbeddingErrors(n int64) { m.EmbeddingErrs.Add(n) }
-func (m *Metrics) AddQuotaDeny(n int64)       { m.QuotaDeny.Add(n) }
-func (m *Metrics) AddMCPCacheHits(n int64)    { m.MCPCacheHits.Add(n) }
-func (m *Metrics) AddMCPCacheMisses(n int64)  { m.MCPCacheMisses.Add(n) }
-func (m *Metrics) AddMCPToolSuccess(n int64)  { m.MCPToolSuccesses.Add(n) }
-func (m *Metrics) AddMCPToolErrors(n int64)   { m.MCPToolErrors.Add(n) }
+func (m *Metrics) AddChatTotal(n int64)                 { m.ChatTotal.Add(n) }
+func (m *Metrics) AddChatErrors(n int64)                { m.ChatErrors.Add(n) }
+func (m *Metrics) AddToolCalls(n int64)                 { m.ToolCalls.Add(n) }
+func (m *Metrics) AddPermissionDeny(n int64)            { m.PermissionDeny.Add(n) }
+func (m *Metrics) AddMemoryWrites(n int64)              { m.MemoryWrites.Add(n) }
+func (m *Metrics) AddMemoryReads(n int64)               { m.MemoryReads.Add(n) }
+func (m *Metrics) AddTokens(n int64)                    { m.TokensTotal.Add(n) }
+func (m *Metrics) AddReflect(n int64)                   { m.ReflectTotal.Add(n) }
+func (m *Metrics) AddCompress(n int64)                  { m.CompressTotal.Add(n) }
+func (m *Metrics) AddBlobOffload(n int64)               { m.BlobOffload.Add(n) }
+func (m *Metrics) AddEmbeddingCalls(n int64)            { m.EmbeddingCalls.Add(n) }
+func (m *Metrics) AddEmbeddingErrors(n int64)           { m.EmbeddingErrs.Add(n) }
+func (m *Metrics) AddQuotaDeny(n int64)                 { m.QuotaDeny.Add(n) }
+func (m *Metrics) AddMCPCacheHits(n int64)              { m.MCPCacheHits.Add(n) }
+func (m *Metrics) AddMCPCacheMisses(n int64)            { m.MCPCacheMisses.Add(n) }
+func (m *Metrics) AddMCPToolSuccess(n int64)            { m.MCPToolSuccesses.Add(n) }
+func (m *Metrics) AddMCPToolErrors(n int64)             { m.MCPToolErrors.Add(n) }
 func (m *Metrics) AddCircuitBreakerTransitions(n int64) { m.CircuitBreakerTrans.Add(n) }
 
 // SetCircuitBreakerState records the current circuit breaker state for a
@@ -157,10 +157,10 @@ func (m *Metrics) Snapshot() map[string]any {
 		"compress_total": m.CompressTotal.Load(), "blob_offload_total": m.BlobOffload.Load(),
 		"embedding_calls": m.EmbeddingCalls.Load(), "embedding_errors": m.EmbeddingErrs.Load(),
 		"quota_deny_total": m.QuotaDeny.Load(),
-		"mcp_cache_hits": m.MCPCacheHits.Load(), "mcp_cache_misses": m.MCPCacheMisses.Load(),
+		"mcp_cache_hits":   m.MCPCacheHits.Load(), "mcp_cache_misses": m.MCPCacheMisses.Load(),
 		"mcp_tool_success": m.MCPToolSuccesses.Load(), "mcp_tool_errors": m.MCPToolErrors.Load(),
 		"circuit_breaker_transitions": m.CircuitBreakerTrans.Load(),
-		"llm_latency_avg_ms": llmAvg, "llm_latency_count": llmN,
+		"llm_latency_avg_ms":          llmAvg, "llm_latency_count": llmN,
 		"tool_latency_avg_ms": toolAvg, "tool_latency_count": toolN,
 	}
 }
@@ -170,7 +170,7 @@ var (
 	defaultMetrics = NewMetrics()
 	// Global is the default in-process metrics. Prefer Current() / SetMetrics for new code.
 	// Kept as *Metrics so legacy field access (Global.ChatTotal.Add) still compiles during migration.
-	Global = defaultMetrics
+	Global                     = defaultMetrics
 	metricsReg CounterRegistry = defaultMetrics
 )
 

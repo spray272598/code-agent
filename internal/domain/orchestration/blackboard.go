@@ -12,16 +12,16 @@ import (
 // Sub-agents write key findings (file paths, function names, errors) that
 // become visible to other sub-agents via their system prompt.
 type Blackboard struct {
-	mu     sync.RWMutex
+	mu      sync.RWMutex
 	entries map[string]*Entry
 }
 
 // Entry is a single blackboard record.
 type Entry struct {
-	Key       string      `json:"key"`
-	Agent     string      `json:"agent"`
-	Value     interface{} `json:"value"`
-	Timestamp time.Time   `json:"ts"`
+	Key       string        `json:"key"`
+	Agent     string        `json:"agent"`
+	Value     interface{}   `json:"value"`
+	Timestamp time.Time     `json:"ts"`
 	TTL       time.Duration `json:"ttl,omitempty"`
 }
 

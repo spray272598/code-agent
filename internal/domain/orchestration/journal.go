@@ -10,12 +10,12 @@ import (
 type Status string
 
 const (
-	StatusInit       Status = "init"
-	StatusRunning    Status = "running"
-	StatusPaused     Status = "paused"
-	StatusCompleted  Status = "completed"
-	StatusFailed     Status = "failed"
-	StatusCancelled  Status = "cancelled"
+	StatusInit        Status = "init"
+	StatusRunning     Status = "running"
+	StatusPaused      Status = "paused"
+	StatusCompleted   Status = "completed"
+	StatusFailed      Status = "failed"
+	StatusCancelled   Status = "cancelled"
 	StatusInterrupted Status = "interrupted"
 )
 
@@ -23,16 +23,16 @@ const (
 type EntryType string
 
 const (
-	EntryStartRun  EntryType = "start_run"
-	EntryPhase     EntryType = "phase"
-	EntryToolCall  EntryType = "tool_call"
-	EntryToolRes   EntryType = "tool_result"
-	EntryTokenUse  EntryType = "token_use"
-	EntryPause     EntryType = "pause"
-	EntryResume    EntryType = "resume"
-	EntryComplete  EntryType = "complete"
-	EntryFail      EntryType = "fail"
-	EntryCancel    EntryType = "cancel"
+	EntryStartRun EntryType = "start_run"
+	EntryPhase    EntryType = "phase"
+	EntryToolCall EntryType = "tool_call"
+	EntryToolRes  EntryType = "tool_result"
+	EntryTokenUse EntryType = "token_use"
+	EntryPause    EntryType = "pause"
+	EntryResume   EntryType = "resume"
+	EntryComplete EntryType = "complete"
+	EntryFail     EntryType = "fail"
+	EntryCancel   EntryType = "cancel"
 )
 
 // JournalEntry is one line in the journal (JSONL).
@@ -50,17 +50,17 @@ type JournalEntry struct {
 
 // JournalState is the persisted in-memory snapshot of a run.
 type JournalState struct {
-	RunID       string    `json:"runId"`
-	ParentID    string    `json:"parentId,omitempty"`
-	Status      Status    `json:"status"`
-	Goal        string    `json:"goal,omitempty"`
-	AgentBudget int       `json:"agentBudget"`
-	AgentsUsed  int       `json:"agentsUsed"`
-	TokensUsed  int       `json:"tokensUsed"`
-	PhasesDone  []string  `json:"phasesDone"`
+	RunID       string            `json:"runId"`
+	ParentID    string            `json:"parentId,omitempty"`
+	Status      Status            `json:"status"`
+	Goal        string            `json:"goal,omitempty"`
+	AgentBudget int               `json:"agentBudget"`
+	AgentsUsed  int               `json:"agentsUsed"`
+	TokensUsed  int               `json:"tokensUsed"`
+	PhasesDone  []string          `json:"phasesDone"`
 	Results     map[string]string `json:"results,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
 }
 
 // Journal persists orchestration progress for resumable execution (P1-1).

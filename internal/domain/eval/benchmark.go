@@ -10,39 +10,39 @@ import (
 
 // BenchmarkScenario defines a single benchmark scenario for regression testing.
 type BenchmarkScenario struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Input       string   `json:"input"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Input            string `json:"input"`
 	ExpectedTopology string `json:"expectedTopology,omitempty"`
-	MaxTokens   int      `json:"maxTokens,omitempty"`
-	MaxSteps    int      `json:"maxSteps,omitempty"`
+	MaxTokens        int    `json:"maxTokens,omitempty"`
+	MaxSteps         int    `json:"maxSteps,omitempty"`
 }
 
 // BenchmarkSuite is a collection of benchmark scenarios.
 type BenchmarkSuite struct {
-	Name       string             `json:"name"`
-	Scenarios  []BenchmarkScenario `json:"scenarios"`
-	CreatedAt  time.Time          `json:"createdAt"`
+	Name      string              `json:"name"`
+	Scenarios []BenchmarkScenario `json:"scenarios"`
+	CreatedAt time.Time           `json:"createdAt"`
 }
 
 // BenchmarkResult captures the result of running a benchmark scenario.
 type BenchmarkResult struct {
-	ScenarioID     string  `json:"scenarioId"`
+	ScenarioID     string          `json:"scenarioId"`
 	SessionMetrics *SessionMetrics `json:"sessionMetrics"`
-	Score          float64 `json:"score"`
-	Passed         bool    `json:"passed"`
-	Notes          string  `json:"notes,omitempty"`
-	DurationMs     int64   `json:"durationMs"`
+	Score          float64         `json:"score"`
+	Passed         bool            `json:"passed"`
+	Notes          string          `json:"notes,omitempty"`
+	DurationMs     int64           `json:"durationMs"`
 }
 
 // BenchmarkReport summarizes a benchmark run.
 type BenchmarkReport struct {
-	Suite       BenchmarkSuite    `json:"suite"`
-	Results     []BenchmarkResult `json:"results"`
-	OverallScore float64          `json:"overallScore"`
-	PassRate    float64           `json:"passRate"`
-	GeneratedAt time.Time         `json:"generatedAt"`
+	Suite        BenchmarkSuite    `json:"suite"`
+	Results      []BenchmarkResult `json:"results"`
+	OverallScore float64           `json:"overallScore"`
+	PassRate     float64           `json:"passRate"`
+	GeneratedAt  time.Time         `json:"generatedAt"`
 }
 
 // DefaultBenchmarkSuite returns the default set of benchmark scenarios.
@@ -51,37 +51,37 @@ func DefaultBenchmarkSuite() BenchmarkSuite {
 		Name: "code-agent-default",
 		Scenarios: []BenchmarkScenario{
 			{
-				ID: "simple_query",
-				Name: "Simple Query",
+				ID:          "simple_query",
+				Name:        "Simple Query",
 				Description: "A straightforward question that should use single agent.",
-				Input: "What is the capital of France?",
+				Input:       "What is the capital of France?",
 			},
 			{
-				ID: "deep_implementation",
-				Name: "Deep Implementation",
-				Description: "A complex coding task requiring plan-act-reflect.",
-				Input: "Implement a binary search tree with insertion, deletion, and traversal methods in Go.",
+				ID:               "deep_implementation",
+				Name:             "Deep Implementation",
+				Description:      "A complex coding task requiring plan-act-reflect.",
+				Input:            "Implement a binary search tree with insertion, deletion, and traversal methods in Go.",
 				ExpectedTopology: "deep",
 			},
 			{
-				ID: "parallel_research",
-				Name: "Parallel Research",
-				Description: "A task that benefits from parallel multi-agent exploration.",
-				Input: "Compare the performance of PostgreSQL and MySQL for high-concurrency OLTP workloads, and also analyze their indexing strategies.",
+				ID:               "parallel_research",
+				Name:             "Parallel Research",
+				Description:      "A task that benefits from parallel multi-agent exploration.",
+				Input:            "Compare the performance of PostgreSQL and MySQL for high-concurrency OLTP workloads, and also analyze their indexing strategies.",
 				ExpectedTopology: "teams",
 			},
 			{
-				ID: "multi_step_bugfix",
-				Name: "Multi-step Bug Fix",
-				Description: "Debug a complex issue requiring investigation and fixing.",
-				Input: "The login API returns 500 errors intermittently. Investigate the root cause, fix the issue, and write tests.",
+				ID:               "multi_step_bugfix",
+				Name:             "Multi-step Bug Fix",
+				Description:      "Debug a complex issue requiring investigation and fixing.",
+				Input:            "The login API returns 500 errors intermittently. Investigate the root cause, fix the issue, and write tests.",
 				ExpectedTopology: "deep",
 			},
 			{
-				ID: "code_refactor",
-				Name: "Code Refactoring",
-				Description: "Refactor a module with clear plan and execution steps.",
-				Input: "Refactor the authentication module to use JWT instead of sessions, update all related tests, and document the migration.",
+				ID:               "code_refactor",
+				Name:             "Code Refactoring",
+				Description:      "Refactor a module with clear plan and execution steps.",
+				Input:            "Refactor the authentication module to use JWT instead of sessions, update all related tests, and document the migration.",
 				ExpectedTopology: "deep",
 			},
 		},
@@ -92,9 +92,9 @@ func DefaultBenchmarkSuite() BenchmarkSuite {
 // NewBenchmarkSuite creates a benchmark suite with custom scenarios.
 func NewBenchmarkSuite(name string, scenarios []BenchmarkScenario) BenchmarkSuite {
 	return BenchmarkSuite{
-		Name:       name,
-		Scenarios:  scenarios,
-		CreatedAt:  time.Now(),
+		Name:      name,
+		Scenarios: scenarios,
+		CreatedAt: time.Now(),
 	}
 }
 
@@ -181,6 +181,8 @@ func CompareReports(baseline, current BenchmarkReport) string {
 }
 
 // Compile-time checks.
-var _ = DefaultBenchmarkSuite()
-var _ = func() error { return SaveReport(BenchmarkReport{}, "bench.json") }
-var _ = func() (*BenchmarkReport, error) { return LoadReport("bench.json") }
+var (
+	_ = DefaultBenchmarkSuite()
+	_ = func() error { return SaveReport(BenchmarkReport{}, "bench.json") }
+	_ = func() (*BenchmarkReport, error) { return LoadReport("bench.json") }
+)

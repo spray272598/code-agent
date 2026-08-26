@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
+	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 )
 
 func TestJournalAppendAndReplay(t *testing.T) {

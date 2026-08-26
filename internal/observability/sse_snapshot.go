@@ -1,8 +1,6 @@
 package observability
 
-var (
-	sseSnapshotFn func() []SSECounter
-)
+var sseSnapshotFn func() []SSECounter
 
 type SSECounter struct {
 	Name  string

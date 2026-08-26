@@ -9,10 +9,10 @@ import (
 type StorageType string
 
 const (
-	StorageFile    StorageType = "file"    // Local JSONL file (default, single-instance)
-	StorageMySQL    StorageType = "mysql"   // MySQL database (multi-instance, shared state)
-	StorageRedis    StorageType = "redis"   // Redis sorted sets (high-throughput, low-latency)
-	StorageMemory   StorageType = "memory"  // In-memory only (no persistence, for tests)
+	StorageFile   StorageType = "file"   // Local JSONL file (default, single-instance)
+	StorageMySQL  StorageType = "mysql"  // MySQL database (multi-instance, shared state)
+	StorageRedis  StorageType = "redis"  // Redis sorted sets (high-throughput, low-latency)
+	StorageMemory StorageType = "memory" // In-memory only (no persistence, for tests)
 )
 
 // JournalStorageConfig configures the journal persistence backend.

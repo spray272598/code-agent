@@ -65,20 +65,20 @@ type Guard struct {
 	mcpConfirm   bool
 	mode         SandboxMode
 	// Extended security components
-	denyEngine    *DenyEngine
-	sanitizer     *Sanitizer
-	audit         *AuditLogger
-	netEnforcer   *NetworkEnforcer
-	sandboxMgr    *SandboxManager
-	configLoader  *ConfigLoader
+	denyEngine   *DenyEngine
+	sanitizer    *Sanitizer
+	audit        *AuditLogger
+	netEnforcer  *NetworkEnforcer
+	sandboxMgr   *SandboxManager
+	configLoader *ConfigLoader
 	// Advanced security: prompt injection detection
 	injectionDetector *PromptInjectionDetector
 	// Advanced security: behavior analysis & anomaly detection
-	behaviorTracker   *BehaviorTracker
+	behaviorTracker *BehaviorTracker
 	// Advanced security: tamper-evident integrity chain
-	integrityChain    *IntegrityChain
+	integrityChain *IntegrityChain
 	// Advanced security: adaptive circuit breaker
-	adaptiveBreaker   *AdaptiveCircuitBreaker
+	adaptiveBreaker *AdaptiveCircuitBreaker
 }
 
 // SandboxMode selects the enforcement tier applied to tool execution.
@@ -190,16 +190,16 @@ func (g *Guard) initExtendedSecurity(workspace string) {
 	)
 }
 
-func (g *Guard) DenyEngine() *DenyEngine        { return g.denyEngine }
-func (g *Guard) Sanitizer() *Sanitizer          { return g.sanitizer }
-func (g *Guard) Audit() *AuditLogger            { return g.audit }
-func (g *Guard) NetworkEnforcer() *NetworkEnforcer { return g.netEnforcer }
-func (g *Guard) SandboxManager() *SandboxManager  { return g.sandboxMgr }
-func (g *Guard) ConfigLoader() *ConfigLoader     { return g.configLoader }
+func (g *Guard) DenyEngine() *DenyEngine                     { return g.denyEngine }
+func (g *Guard) Sanitizer() *Sanitizer                       { return g.sanitizer }
+func (g *Guard) Audit() *AuditLogger                         { return g.audit }
+func (g *Guard) NetworkEnforcer() *NetworkEnforcer           { return g.netEnforcer }
+func (g *Guard) SandboxManager() *SandboxManager             { return g.sandboxMgr }
+func (g *Guard) ConfigLoader() *ConfigLoader                 { return g.configLoader }
 func (g *Guard) InjectionDetector() *PromptInjectionDetector { return g.injectionDetector }
-func (g *Guard) BehaviorTracker() *BehaviorTracker { return g.behaviorTracker }
-func (g *Guard) IntegrityChain() *IntegrityChain { return g.integrityChain }
-func (g *Guard) AdaptiveBreaker() *AdaptiveCircuitBreaker { return g.adaptiveBreaker }
+func (g *Guard) BehaviorTracker() *BehaviorTracker           { return g.behaviorTracker }
+func (g *Guard) IntegrityChain() *IntegrityChain             { return g.integrityChain }
+func (g *Guard) AdaptiveBreaker() *AdaptiveCircuitBreaker    { return g.adaptiveBreaker }
 
 // Mode returns the active sandbox tier.
 func (g *Guard) Mode() SandboxMode { return g.mode }
@@ -536,8 +536,10 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 			return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: summary, Reason: "mcp read-like"}
 		}
 		g.auditConfirm(CategoryTool, "mcp_or_unknown", tool, "MCP/unknown tool requires confirm", sessionID)
-		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "mcp_or_unknown",
-			Reason: "MCP/unknown tool requires confirm", Tool: tool, Summary: summary}
+		return Decision{
+			Action: ActionConfirm, Layer: "L3", RuleID: "mcp_or_unknown",
+			Reason: "MCP/unknown tool requires confirm", Tool: tool, Summary: summary,
+		}
 	}
 	g.auditConfirm(CategoryTool, "unknown_tool", tool, "unknown tool requires confirm", sessionID)
 	return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "unknown_tool", Reason: "unknown tool requires confirm", Tool: tool, Summary: summary}

@@ -20,22 +20,22 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/deepagent"
 	"github.com/spray272598/code-agent/internal/domain/orchestration"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
-	domtool "github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/team"
+	domtool "github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
 // MultiAgent runs lightweight parallel ReAct agents (explore + verify style).
 // Complements domain SubAgent; uses same Guarded tools.
 type MultiAgent struct {
-	parent      *Runner
-	teamCfg     *team.Config
-	budgetMgr   *BudgetManager
-	router      *orchestration.Router
-	blackboard  *orchestration.Blackboard
-	journals    map[string]*orchestration.Journal
-	journalCfg  orchestration.JournalStorageConfig
-	journalMu   sync.Mutex
+	parent     *Runner
+	teamCfg    *team.Config
+	budgetMgr  *BudgetManager
+	router     *orchestration.Router
+	blackboard *orchestration.Blackboard
+	journals   map[string]*orchestration.Journal
+	journalCfg orchestration.JournalStorageConfig
+	journalMu  sync.Mutex
 }
 
 // TeamConfigPath is the default YAML file for team role configuration.
@@ -247,7 +247,7 @@ func (m *MultiAgent) RunDeep(
 		if orchestration.IsResumable(state.Status) {
 			publish(&engine.Event{
 				Type: engine.EventSubAgent, SubType: "deep-resume",
-				Content: fmt.Sprintf("Resuming run=%s after phase=%s status=%s", runID, lastPhase(state.PhasesDone), state.Status),
+				Content:   fmt.Sprintf("Resuming run=%s after phase=%s status=%s", runID, lastPhase(state.PhasesDone), state.Status),
 				Timestamp: nowMs(),
 			})
 			completedPhases = state.Results
@@ -523,10 +523,14 @@ func (m *MultiAgent) resolveRoles(goal string) []teamRole {
 	}
 	// Fallback hardcoded defaults (preserve previous behavior).
 	return []teamRole{
-		{role: "explore", prompt: "Investigate and gather facts (read-only preferred):\n" + goal,
-			tools: []string{"read_file", "glob", "grep", "memory_search"}, maxSteps: 8},
-		{role: "verify", prompt: "Verify findings, list risks and checks:\n" + goal,
-			tools: []string{"read_file", "grep", "glob", "bash"}, maxSteps: 6},
+		{
+			role: "explore", prompt: "Investigate and gather facts (read-only preferred):\n" + goal,
+			tools: []string{"read_file", "glob", "grep", "memory_search"}, maxSteps: 8,
+		},
+		{
+			role: "verify", prompt: "Verify findings, list risks and checks:\n" + goal,
+			tools: []string{"read_file", "grep", "glob", "bash"}, maxSteps: 6,
+		},
 	}
 }
 

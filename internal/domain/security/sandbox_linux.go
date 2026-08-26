@@ -22,10 +22,10 @@ type LandlockConfig struct {
 }
 
 type linuxPlatformSandbox struct {
-	sandbox      *OSLevelSandbox
-	bwrapArgs    []string
-	usingBwrap   bool
-	landlockCfg  *LandlockConfig
+	sandbox       *OSLevelSandbox
+	bwrapArgs     []string
+	usingBwrap    bool
+	landlockCfg   *LandlockConfig
 	usingLandlock bool
 }
 

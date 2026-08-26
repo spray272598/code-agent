@@ -21,11 +21,11 @@ type SubagentRuntime struct {
 }
 
 type runtimeProgress struct {
-	taskID         string
-	tokensUsed     int64
-	step           int
-	message        string
-	lastUpdate     time.Time
+	taskID     string
+	tokensUsed int64
+	step       int
+	message    string
+	lastUpdate time.Time
 }
 
 // NewSubagentRuntime creates a new subagent runtime.
@@ -114,13 +114,13 @@ func (r *SubagentRuntime) UpdateProgress(taskID string, tokens int64, step int, 
 
 	select {
 	case r.progressCh <- SubagentProgress{
-		TaskID:        taskID,
-		TokensUsed:    tokens,
-		LiveTokens:    tokens,
+		TaskID:         taskID,
+		TokensUsed:     tokens,
+		LiveTokens:     tokens,
 		FinishedTokens: r.totalTokens,
-		Step:          step,
-		Message:       message,
-		Timestamp:     time.Now(),
+		Step:           step,
+		Message:        message,
+		Timestamp:      time.Now(),
 	}:
 	default:
 	}

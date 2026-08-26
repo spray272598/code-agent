@@ -38,6 +38,7 @@ func (t *BashTool) Name() string { return "bash" }
 func (t *BashTool) Description() string {
 	return "Run a shell command in the workspace. Args: command (required)"
 }
+
 func (t *BashTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"command": map[string]any{"type": "string"},

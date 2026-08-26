@@ -7,7 +7,7 @@ import (
 )
 
 type DenyConfig struct {
-	ExactPaths  []string `yaml:"exact_paths" json:"exactPaths"`
+	ExactPaths   []string `yaml:"exact_paths" json:"exactPaths"`
 	GlobPatterns []string `yaml:"glob_patterns" json:"globPatterns"`
 }
 

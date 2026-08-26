@@ -14,10 +14,10 @@ import (
 //
 // L0: Per-message long-content reduction with 4-level priority chain:
 //
-//	1. Semantic summary (LLM)  → SummarizeSingle() if Summarizer available
-//	2. Segment-based sharding  → ShardLongText() preserves key paragraphs
-//	3. Blob offload            → write to object store, return pointer
-//	4. Head-tail truncation    → TruncateRunesKeepTail() as ultimate fallback
+//  1. Semantic summary (LLM)  → SummarizeSingle() if Summarizer available
+//  2. Segment-based sharding  → ShardLongText() preserves key paragraphs
+//  3. Blob offload            → write to object store, return pointer
+//  4. Head-tail truncation    → TruncateRunesKeepTail() as ultimate fallback
 //
 // L1: Priority-based middle message retention
 // L2: Aggressive budget enforcement
@@ -148,7 +148,7 @@ func (c *Compressor) CompressLevels(ctx context.Context, history []map[string]an
 	// Estimate the token count of the intended "recent" section as target.
 	if cut < len(trimmed) {
 		recentTokens := estimateHistory(trimmed[cut:])
-		safeCut := SelectSafeSplit(trimmed, recentTokens)
+		safeCut := SelectSafeSplit(trimmed, recentTokens, 50)
 		if safeCut < cut {
 			cut = safeCut
 		}
@@ -360,9 +360,13 @@ func findToolGroupEnd(history []map[string]any, startIdx int) int {
 // message, it snaps backward to include all consecutive tool-result messages
 // and the preceding assistant tool-request message in the same partition.
 //
+// minCompactable is the minimum number of tokens in the compactable region
+// (history[:cut]) required to justify a split. If the compactable region is
+// smaller, returns 0 (don't compact — not worth an LLM summarization call).
+//
 // Returns the safe split index where history[:idx] is the older "middle"
 // section and history[idx:] is the newer "recent" section.
-func SelectSafeSplit(history []map[string]any, targetTokens int) int {
+func SelectSafeSplit(history []map[string]any, targetTokens, minCompactable int) int {
 	if len(history) == 0 {
 		return 0
 	}
@@ -387,6 +391,20 @@ func SelectSafeSplit(history []map[string]any, targetTokens int) int {
 			snapCut--
 		}
 		cut = snapCut
+	}
+
+	// Guard: if snapping ate everything or compactable region is too small,
+	// don't waste an LLM call on summarization.
+	if cut == 0 {
+		return 0
+	}
+	compactableTokens := 0
+	for i := 0; i < cut; i++ {
+		content, _ := history[i]["content"].(string)
+		compactableTokens += common.EstimateTokens(content)
+	}
+	if compactableTokens < minCompactable {
+		return 0
 	}
 
 	return cut

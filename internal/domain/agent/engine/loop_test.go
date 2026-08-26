@@ -56,6 +56,7 @@ type memSessionRepo struct {
 func newMemSessionRepo() *memSessionRepo {
 	return &memSessionRepo{byID: map[string]*sessmodel.Session{}}
 }
+
 func (r *memSessionRepo) Save(ctx context.Context, s *sessmodel.Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -63,11 +64,13 @@ func (r *memSessionRepo) Save(ctx context.Context, s *sessmodel.Session) error {
 	r.byID[s.ID] = &cp
 	return nil
 }
+
 func (r *memSessionRepo) FindByID(ctx context.Context, id string) (*sessmodel.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.byID[id], nil
 }
+
 func (r *memSessionRepo) ListByUser(ctx context.Context, userID string, limit int) ([]*sessmodel.Session, error) {
 	return nil, nil
 }
@@ -84,9 +87,11 @@ func (r *memMsgRepo) Save(ctx context.Context, m *sessmodel.Message) error {
 	r.msgs = append(r.msgs, &cp)
 	return nil
 }
+
 func (r *memMsgRepo) ListBySession(ctx context.Context, sessionID string, limit int) ([]*sessmodel.Message, error) {
 	return nil, nil
 }
+
 func (r *memMsgRepo) ListAsMaps(ctx context.Context, sessionID string, limit int) ([]map[string]any, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -109,6 +114,7 @@ func (echoTool) Description() string { return "echo arg text" }
 func (echoTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object"}
 }
+
 func (echoTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	t, _ := args["text"].(string)
 	return tool.Result{Text: "echo:" + t}, nil
@@ -264,6 +270,7 @@ func (f *failNTimesTool) Description() string { return "fails the first N times"
 func (f *failNTimesTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object"}
 }
+
 func (f *failNTimesTool) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

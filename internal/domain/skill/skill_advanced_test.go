@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func osMkdirAll(path string) error   { return os.MkdirAll(path, 0o755) }
+func osMkdirAll(path string) error               { return os.MkdirAll(path, 0o755) }
 func osWriteFile(path string, data []byte) error { return os.WriteFile(path, data, 0o644) }
 
 func TestSubstituteArgumentsFull(t *testing.T) {

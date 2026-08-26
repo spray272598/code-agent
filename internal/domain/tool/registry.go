@@ -7,18 +7,18 @@ import (
 )
 
 type MapRegistry struct {
-	mu      sync.RWMutex
-	tools   map[string]ITool
-	meta    map[string]ToolMetadata
-	version map[string]string
+	mu       sync.RWMutex
+	tools    map[string]ITool
+	meta     map[string]ToolMetadata
+	version  map[string]string
 	depGraph *ToolDependencyGraph
 }
 
 func NewRegistry() *MapRegistry {
 	return &MapRegistry{
-		tools:   make(map[string]ITool),
-		meta:    make(map[string]ToolMetadata),
-		version: make(map[string]string),
+		tools:    make(map[string]ITool),
+		meta:     make(map[string]ToolMetadata),
+		version:  make(map[string]string),
 		depGraph: NewToolDependencyGraph(),
 	}
 }

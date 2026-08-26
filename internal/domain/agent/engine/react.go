@@ -9,10 +9,10 @@ import (
 
 // ReActStep is one parsed agent turn: Thought → Action(s) → (later Observation).
 type ReActStep struct {
-	Thought    string
-	Actions    []port.ToolCall
+	Thought     string
+	Actions     []port.ToolCall
 	FinalAnswer string // set when the model answers without tools
-	Raw        string
+	Raw         string
 }
 
 var (
@@ -172,5 +172,3 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
-
-

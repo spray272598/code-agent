@@ -12,15 +12,15 @@ import (
 
 // regressionFixture is one row of the data-driven eval dataset.
 type regressionFixture struct {
-	Name     string `yaml:"name"`
-	Input    string `yaml:"input"`
-	Intent   string `yaml:"intent"`
-	Clean    string `yaml:"clean"`
-	Source   string `yaml:"source"`
-	EC       *struct {
-		SSH    string `yaml:"ssh"`
-		File   string `yaml:"file"`
-		Dir    string `yaml:"dir"`
+	Name   string `yaml:"name"`
+	Input  string `yaml:"input"`
+	Intent string `yaml:"intent"`
+	Clean  string `yaml:"clean"`
+	Source string `yaml:"source"`
+	EC     *struct {
+		SSH     string `yaml:"ssh"`
+		File    string `yaml:"file"`
+		Dir     string `yaml:"dir"`
 		Session string `yaml:"session"`
 	} `yaml:"ec"`
 	Resolved string `yaml:"resolved"`
@@ -28,11 +28,11 @@ type regressionFixture struct {
 
 // regressionDataset groups fixtures by routing category.
 type regressionDataset struct {
-	Prefix       []regressionFixture `yaml:"prefix"`
-	Continue     []regressionFixture `yaml:"continue"`
-	Normal       []regressionFixture `yaml:"normal"`
-	Coreference  []regressionFixture `yaml:"coreference"`
-	LLMFallback  []regressionFixture `yaml:"llm_fallback"`
+	Prefix      []regressionFixture `yaml:"prefix"`
+	Continue    []regressionFixture `yaml:"continue"`
+	Normal      []regressionFixture `yaml:"normal"`
+	Coreference []regressionFixture `yaml:"coreference"`
+	LLMFallback []regressionFixture `yaml:"llm_fallback"`
 }
 
 // loadFixtures reads the shared eval dataset (scripts/eval/fixtures.yaml),

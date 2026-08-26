@@ -11,7 +11,7 @@ import (
 type InjectionSeverity int
 
 const (
-	InjectionLow      InjectionSeverity = iota
+	InjectionLow InjectionSeverity = iota
 	InjectionMedium
 	InjectionHigh
 	InjectionCritical
@@ -43,11 +43,11 @@ type InjectionMatch struct {
 
 // InjectionReport summarizes all detected injection attempts in a text.
 type InjectionReport struct {
-	Detected bool             `json:"detected"`
-	Score    float64          `json:"score"`
-	Matches  []InjectionMatch `json:"matches"`
-	InputLen int              `json:"inputLen"`
-	CheckedAt time.Time       `json:"checkedAt"`
+	Detected  bool             `json:"detected"`
+	Score     float64          `json:"score"`
+	Matches   []InjectionMatch `json:"matches"`
+	InputLen  int              `json:"inputLen"`
+	CheckedAt time.Time        `json:"checkedAt"`
 }
 
 // PromptInjectionDetector performs real-time semantic analysis of text
@@ -63,25 +63,25 @@ type PromptInjectionDetector struct {
 	sessionStats map[string]*sessionInjectionStats
 
 	// Configurable thresholds
-	maxScore     float64
-	autoBlock    InjectionSeverity
+	maxScore  float64
+	autoBlock InjectionSeverity
 }
 
 type injectionCategory struct {
-	name      string
-	patterns  []*regexp.Regexp
-	severity  InjectionSeverity
-	weight    float64
-	enabled   bool
+	name     string
+	patterns []*regexp.Regexp
+	severity InjectionSeverity
+	weight   float64
+	enabled  bool
 }
 
 type sessionInjectionStats struct {
-	totalChecks    int
+	totalChecks     int
 	totalDetections int
-	criticalCount  int
-	highCount      int
-	mediumCount    int
-	lastCheckAt    time.Time
+	criticalCount   int
+	highCount       int
+	mediumCount     int
+	lastCheckAt     time.Time
 }
 
 // NewPromptInjectionDetector creates a detector with default patterns for

@@ -13,11 +13,12 @@ import (
 // (VS Code, etc.) can drive sessions. It is a thin adapter over ChatApp's
 // existing session/stream/control APIs — no new agent logic, just an
 // ACP-shaped JSON contract. Endpoints:
-//   POST /acp/sessions              -> create session (returns {sessionId})
-//   POST /acp/sessions/{id}/prompt  -> run a prompt (background, returns 202)
-//   POST /acp/sessions/{id}/cancel  -> cancel
-//   POST /acp/sessions/{id}/control -> send ControlSignal (replan/pause/...)
-//   GET  /acp/sessions/{id}         -> usage/status snapshot
+//
+//	POST /acp/sessions              -> create session (returns {sessionId})
+//	POST /acp/sessions/{id}/prompt  -> run a prompt (background, returns 202)
+//	POST /acp/sessions/{id}/cancel  -> cancel
+//	POST /acp/sessions/{id}/control -> send ControlSignal (replan/pause/...)
+//	GET  /acp/sessions/{id}         -> usage/status snapshot
 func (s *Server) MountACP(mux *http.ServeMux) {
 	mux.HandleFunc("/acp/sessions", s.acpCreateSession)
 	mux.HandleFunc("/acp/sessions/", s.acpSessionDispatcher)

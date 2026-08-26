@@ -9,8 +9,8 @@ import (
 
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
-	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/telemetry"
+	"github.com/spray272598/code-agent/internal/domain/tool"
 )
 
 // MemoryContext is process-wide service + per-request identity (set before each agent run).
@@ -51,6 +51,7 @@ func (t *MemorySaveTool) Name() string { return "memory_save" }
 func (t *MemorySaveTool) Description() string {
 	return "Save long-term memory. Args: content (required), scope=user|project, category?, importance? (1-100), projectId?"
 }
+
 func (t *MemorySaveTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"content":    map[string]any{"type": "string"},
@@ -109,6 +110,7 @@ func (t *MemorySearchTool) Name() string { return "memory_search" }
 func (t *MemorySearchTool) Description() string {
 	return "Search long-term memories. Args: query (required), limit?, scope?=user|project|all"
 }
+
 func (t *MemorySearchTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"query": map[string]any{"type": "string"},

@@ -19,7 +19,7 @@ type mcpServerEntry struct {
 	Command string            `json:"command"` // required for stdio
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
-	URL     string            `json:"url"`     // required for http/sse
+	URL     string            `json:"url"` // required for http/sse
 	Headers map[string]string `json:"headers"`
 	Enabled *bool             `json:"enabled"` // nil → default true
 	Timeout int               `json:"timeout"` // seconds; 0 → default 60

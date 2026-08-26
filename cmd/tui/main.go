@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
+	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 )
 
 // dataDir returns a per-user local data directory for the TUI vault.

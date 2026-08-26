@@ -82,13 +82,13 @@ func NewManager() *Manager {
 // the JWT subject. Empty userID is allowed only for system-level servers.
 func NewUserManager(userID string) *Manager {
 	m := &Manager{
-		userID:     userID,
-		clients:    make(map[string]mcpport.IMCPClient),
-		configs:    make(map[string]model.ServerConfig),
-		toolRoute:  make(map[string]string),
-		lastErr:    make(map[string]string),
-		states:     make(map[string]*connState),
-		stopWatch:  make(chan struct{}),
+		userID:    userID,
+		clients:   make(map[string]mcpport.IMCPClient),
+		configs:   make(map[string]model.ServerConfig),
+		toolRoute: make(map[string]string),
+		lastErr:   make(map[string]string),
+		states:    make(map[string]*connState),
+		stopWatch: make(chan struct{}),
 	}
 	m.startWatchdog()
 	return m

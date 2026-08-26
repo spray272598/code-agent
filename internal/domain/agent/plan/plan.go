@@ -7,10 +7,10 @@ import (
 
 // Plan multi-step plan for coding tasks.
 type Plan struct {
-	Goal     string    `json:"goal"`
-	Steps    []Step    `json:"steps"`
-	Source   string    `json:"source"` // rule|spec|llm
-	SpecRef  string    `json:"spec_ref,omitempty"`
+	Goal    string `json:"goal"`
+	Steps   []Step `json:"steps"`
+	Source  string `json:"source"` // rule|spec|llm
+	SpecRef string `json:"spec_ref,omitempty"`
 }
 
 type Step struct {
@@ -73,12 +73,12 @@ func BuildRulePlan(goal string) *Plan {
 }
 
 type complexityAnalysis struct {
-	isComplex   bool
-	hasSearch   bool
-	hasEdit     bool
-	hasTest     bool
-	hasDeploy   bool
-	keywords    []string
+	isComplex bool
+	hasSearch bool
+	hasEdit   bool
+	hasTest   bool
+	hasDeploy bool
+	keywords  []string
 }
 
 func analyzeComplexity(goal string) complexityAnalysis {

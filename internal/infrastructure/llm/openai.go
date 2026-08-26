@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,11 +16,21 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
 )
 
+// Sentinel errors surfaced to the session/loop layer for special handling.
+var (
+	// ErrContextOverflow means the request exceeded the model's context window.
+	// The caller should compress history and resubmit rather than retry blindly.
+	ErrContextOverflow = errors.New("llm: context window overflow — needs compaction")
+	// ErrAuth means the API key or credential is invalid (HTTP 401/403).
+	ErrAuth = errors.New("llm: authentication failed")
+)
+
 type OpenAIGateway struct {
-	apiKey  string
-	apiBase string
-	model   string
-	client  *http.Client
+	apiKey     string
+	apiBase    string
+	model      string
+	client     *http.Client
+	maxRetries int
 }
 
 func NewOpenAI(apiKey, apiBase, model string) *OpenAIGateway {
@@ -32,7 +43,8 @@ func NewOpenAI(apiKey, apiBase, model string) *OpenAIGateway {
 	}
 	return &OpenAIGateway{
 		apiKey: apiKey, apiBase: apiBase, model: model,
-		client: &http.Client{Timeout: 180 * time.Second},
+		client:     &http.Client{Timeout: 180 * time.Second},
+		maxRetries: MaxLLMRetries,
 	}
 }
 
@@ -51,11 +63,66 @@ type chatMsg struct {
 }
 
 func (g *OpenAIGateway) Generate(ctx context.Context, req *port.ChatRequest) (*port.ChatResponse, error) {
-	return g.do(ctx, req, false, nil)
+	return g.doWithRetry(ctx, req, false, nil)
 }
 
 func (g *OpenAIGateway) GenerateStream(ctx context.Context, req *port.ChatRequest, onDelta func(port.StreamDelta)) (*port.ChatResponse, error) {
-	return g.do(ctx, req, true, onDelta)
+	return g.doWithRetry(ctx, req, true, onDelta)
+}
+
+// doWithRetry wraps do() with the retry classifier loop. Transient errors
+// (429/5xx) are retried with exponential backoff. Context overflow (400) returns
+// ErrContextOverflow so the caller can compress and resubmit. Auth errors (401/403)
+// return ErrAuth for credential refresh.
+func (g *OpenAIGateway) doWithRetry(ctx context.Context, req *port.ChatRequest, stream bool, onDelta func(port.StreamDelta)) (*port.ChatResponse, error) {
+	maxRetries := g.maxRetries
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err := g.do(ctx, req, stream, onDelta)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+
+		// Extract status code from error for classification.
+		status := extractStatus(err)
+		if status == 0 {
+			// Not an HTTP error (e.g. connection refused, context cancelled) — don't retry.
+			return nil, err
+		}
+
+		result := ClassifyLLMError(status, err.Error(), attempt, maxRetries)
+
+		switch result.Decision {
+		case RetryDecisionFatal:
+			return nil, err
+
+		case RetryDecisionEmitToSession:
+			if status == 401 || status == 403 {
+				return nil, ErrAuth
+			}
+			return nil, err
+
+		case RetryDecisionRetryCompaction:
+			return nil, ErrContextOverflow
+
+		case RetryDecisionRetry, RetryDecisionRetryBackoff:
+			if result.Backoff > 0 {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(result.Backoff):
+				}
+			}
+			// Loop continues to next attempt
+		}
+	}
+
+	return nil, fmt.Errorf("llm: %d retries exhausted: %w", maxRetries, lastErr)
 }
 
 func (g *OpenAIGateway) do(ctx context.Context, req *port.ChatRequest, stream bool, onDelta func(port.StreamDelta)) (*port.ChatResponse, error) {
@@ -125,7 +192,7 @@ func (g *OpenAIGateway) do(ctx context.Context, req *port.ChatRequest, stream bo
 		content = out.Choices[0].Message.Content
 	}
 	return &port.ChatResponse{
-		Content: content,
+		Content:      content,
 		PromptTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens,
 		TotalTokens: out.Usage.TotalTokens,
 	}, nil
@@ -165,4 +232,24 @@ func (g *OpenAIGateway) readStream(r io.Reader, onDelta func(port.StreamDelta)) 
 		}
 	}
 	return &port.ChatResponse{Content: b.String(), TotalTokens: len(b.String()) / 4}, sc.Err()
+}
+
+// extractStatus pulls the HTTP status code from an error message produced by do().
+// Returns 0 if the error is not an HTTP error.
+func extractStatus(err error) int {
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "llm http ") {
+		return 0
+	}
+	// Format: "llm http 400: body" — parse digits, stop at first non-digit.
+	rest := strings.TrimPrefix(msg, "llm http ")
+	code := 0
+	for _, c := range rest {
+		if c >= '0' && c <= '9' {
+			code = code*10 + int(c-'0')
+		} else {
+			break
+		}
+	}
+	return code
 }

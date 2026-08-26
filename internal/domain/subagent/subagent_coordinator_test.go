@@ -370,9 +370,9 @@ func TestBuildSpawnContextPreservesExplicit(t *testing.T) {
 		Metadata:  map[string]string{"env": "test"},
 	}
 	input := SubagentInput{
-		Prompt:      "task",
+		Prompt:        "task",
 		ParentSession: "explicit-parent",
-		Metadata:     map[string]string{"custom": "value"},
+		Metadata:      map[string]string{"custom": "value"},
 	}
 	result := BuildSpawnContext(parent, input)
 	if result.ParentSession != "explicit-parent" {

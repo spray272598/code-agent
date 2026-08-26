@@ -15,51 +15,51 @@ import (
 type PhaseState string
 
 const (
-	PhasePending   PhaseState = "pending"
-	PhaseRunning   PhaseState = "running"
-	PhaseFeedback  PhaseState = "feedback"
-	PhaseComplete  PhaseState = "complete"
-	PhaseFailed    PhaseState = "failed"
-	PhaseBlocked   PhaseState = "blocked"
+	PhasePending  PhaseState = "pending"
+	PhaseRunning  PhaseState = "running"
+	PhaseFeedback PhaseState = "feedback"
+	PhaseComplete PhaseState = "complete"
+	PhaseFailed   PhaseState = "failed"
+	PhaseBlocked  PhaseState = "blocked"
 )
 
 // CollaborationState tracks the full multi-agent workflow.
 type CollaborationState struct {
-	ID           string
-	Mode         string
-	Goal         string
-	Phases       []*Phase
-	CurrentIdx   int
+	ID            string
+	Mode          string
+	Goal          string
+	Phases        []*Phase
+	CurrentIdx    int
 	FeedbackCount int
-	MaxFeedback  int
-	Status       string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	MaxFeedback   int
+	Status        string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Phase represents one step in the collaboration workflow.
 type Phase struct {
-	ID          string
-	Name        string
-	Role        string
-	State       PhaseState
-	Spec        subagent.Spec
-	Result      *subagent.Result
-	Feedback    string
-	RetryOf     string
+	ID           string
+	Name         string
+	Role         string
+	State        PhaseState
+	Spec         subagent.Spec
+	Result       *subagent.Result
+	Feedback     string
+	RetryOf      string
 	Dependencies []string
-	StartedAt   time.Time
-	CompletedAt time.Time
+	StartedAt    time.Time
+	CompletedAt  time.Time
 }
 
 // Collaboration orchestrates multi-agent workflows with feedback loops.
 type Collaboration struct {
-	mu       sync.Mutex
-	state    *CollaborationState
-	runner   *subagent.Runner
-	llm      port.ILLMPort
-	specs    []subagent.Spec
-	results  map[string]*subagent.Result
+	mu        sync.Mutex
+	state     *CollaborationState
+	runner    *subagent.Runner
+	llm       port.ILLMPort
+	specs     []subagent.Spec
+	results   map[string]*subagent.Result
 	published chan<- CollaborationEvent
 }
 

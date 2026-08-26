@@ -18,8 +18,8 @@ func newTestRunner() *subagent.Runner {
 
 type testTool struct{}
 
-func (t *testTool) Name() string               { return "test_tool" }
-func (t *testTool) Description() string        { return "test tool" }
+func (t *testTool) Name() string                { return "test_tool" }
+func (t *testTool) Description() string         { return "test tool" }
 func (t *testTool) InputSchema() map[string]any { return map[string]any{} }
 func (t *testTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	return tool.Result{Text: "test output"}, nil

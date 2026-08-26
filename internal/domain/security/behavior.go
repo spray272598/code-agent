@@ -9,12 +9,12 @@ import (
 
 // BehaviorEvent represents a single tracked behavior event.
 type BehaviorEvent struct {
-	Time      time.Time     `json:"time"`
-	SessionID string        `json:"sessionId"`
-	Tool      string        `json:"tool"`
-	Target    string        `json:"target"`
-	Category  string        `json:"category"`
-	Risk      BehaviorRisk  `json:"risk"`
+	Time      time.Time      `json:"time"`
+	SessionID string         `json:"sessionId"`
+	Tool      string         `json:"tool"`
+	Target    string         `json:"target"`
+	Category  string         `json:"category"`
+	Risk      BehaviorRisk   `json:"risk"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
@@ -48,11 +48,11 @@ func (r BehaviorRisk) String() string {
 
 // AnomalyRecord captures a detected anomalous behavior with context.
 type AnomalyRecord struct {
-	Time      time.Time     `json:"time"`
-	Type      AnomalyType   `json:"type"`
-	SessionID string        `json:"sessionId"`
-	Severity  BehaviorRisk  `json:"severity"`
-	Message   string        `json:"message"`
+	Time      time.Time      `json:"time"`
+	Type      AnomalyType    `json:"type"`
+	SessionID string         `json:"sessionId"`
+	Severity  BehaviorRisk   `json:"severity"`
+	Message   string         `json:"message"`
 	Details   map[string]any `json:"details,omitempty"`
 }
 
@@ -60,13 +60,13 @@ type AnomalyRecord struct {
 type AnomalyType string
 
 const (
-	AnomalyRapidSensitiveAccess  AnomalyType = "rapid_sensitive_access"
-	AnomalyLargeScopeDeletion    AnomalyType = "large_scope_deletion"
-	AnomalyNetworkEgressBurst    AnomalyType = "network_egress_burst"
-	AnomalyCredentialAccess      AnomalyType = "credential_access"
-	AnomalyCrossBoundaryAccess   AnomalyType = "cross_boundary_access"
-	AnomalyHighRiskToolSequence  AnomalyType = "high_risk_tool_sequence"
-	AnomalyReadThenWriteJump     AnomalyType = "read_then_write_jump"
+	AnomalyRapidSensitiveAccess AnomalyType = "rapid_sensitive_access"
+	AnomalyLargeScopeDeletion   AnomalyType = "large_scope_deletion"
+	AnomalyNetworkEgressBurst   AnomalyType = "network_egress_burst"
+	AnomalyCredentialAccess     AnomalyType = "credential_access"
+	AnomalyCrossBoundaryAccess  AnomalyType = "cross_boundary_access"
+	AnomalyHighRiskToolSequence AnomalyType = "high_risk_tool_sequence"
+	AnomalyReadThenWriteJump    AnomalyType = "read_then_write_jump"
 )
 
 // BehaviorTracker maintains sliding windows of behavior events per session
@@ -78,32 +78,32 @@ type BehaviorTracker struct {
 	sessions map[string]*sessionBehavior
 
 	// Configurable parameters
-	rapidAccessWindow   time.Duration
-	rapidAccessThreshold int
-	deletionBurstWindow time.Duration
-	deletionBurstMax    int
-	networkBurstWindow  time.Duration
-	networkBurstMax     int
+	rapidAccessWindow     time.Duration
+	rapidAccessThreshold  int
+	deletionBurstWindow   time.Duration
+	deletionBurstMax      int
+	networkBurstWindow    time.Duration
+	networkBurstMax       int
 	sensitivePathPrefixes []string
 }
 
 type sessionBehavior struct {
-	events   []BehaviorEvent
-	anomalies []AnomalyRecord
+	events     []BehaviorEvent
+	anomalies  []AnomalyRecord
 	lastAccess map[string]time.Time
-	createdAt time.Time
+	createdAt  time.Time
 }
 
 // NewBehaviorTracker creates a tracker with default thresholds.
 func NewBehaviorTracker() *BehaviorTracker {
 	return &BehaviorTracker{
-		sessions:             make(map[string]*sessionBehavior),
-		rapidAccessWindow:    5 * time.Minute,
-		rapidAccessThreshold: 3,
-		deletionBurstWindow:  10 * time.Minute,
-		deletionBurstMax:     5,
-		networkBurstWindow:   5 * time.Minute,
-		networkBurstMax:      5,
+		sessions:              make(map[string]*sessionBehavior),
+		rapidAccessWindow:     5 * time.Minute,
+		rapidAccessThreshold:  3,
+		deletionBurstWindow:   10 * time.Minute,
+		deletionBurstMax:      5,
+		networkBurstWindow:    5 * time.Minute,
+		networkBurstMax:       5,
 		sensitivePathPrefixes: []string{".ssh", ".env", ".pem", "credentials", "secret", "wallet", "id_rsa"},
 	}
 }
@@ -137,10 +137,10 @@ func (b *BehaviorTracker) Track(event BehaviorEvent) []AnomalyRecord {
 	sb, ok := b.sessions[event.SessionID]
 	if !ok {
 		sb = &sessionBehavior{
-			events:    make([]BehaviorEvent, 0, 128),
-			anomalies: make([]AnomalyRecord, 0, 16),
+			events:     make([]BehaviorEvent, 0, 128),
+			anomalies:  make([]AnomalyRecord, 0, 16),
 			lastAccess: make(map[string]time.Time),
-			createdAt: now,
+			createdAt:  now,
 		}
 		b.sessions[event.SessionID] = sb
 	}
@@ -197,9 +197,9 @@ func (b *BehaviorTracker) detectAnomaliesLocked(sb *sessionBehavior, current Beh
 			Severity:  BehaviorHigh,
 			Message:   "rapid access to sensitive files detected",
 			Details: map[string]any{
-				"count":   sensitiveCount,
-				"window":  b.rapidAccessWindow.String(),
-				"paths":   sensitivePaths,
+				"count":     sensitiveCount,
+				"window":    b.rapidAccessWindow.String(),
+				"paths":     sensitivePaths,
 				"threshold": b.rapidAccessThreshold,
 			},
 		})

@@ -21,6 +21,7 @@ func (echoT) InputSchema() map[string]any {
 		"text": map[string]any{"type": "string"},
 	}, "required": []string{"text"}}
 }
+
 func (echoT) Execute(_ context.Context, args map[string]any) (tool.Result, error) {
 	t, _ := args["text"].(string)
 	return tool.Result{Text: "echo:" + t}, nil
@@ -35,6 +36,7 @@ func (readT) InputSchema() map[string]any {
 		"path": map[string]any{"type": "string"},
 	}}
 }
+
 func (readT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
 	return tool.Result{Text: "file content"}, nil
 }
@@ -48,6 +50,7 @@ func (editT) InputSchema() map[string]any {
 		"path": map[string]any{"type": "string"},
 	}}
 }
+
 func (editT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
 	return tool.Result{Text: "edited"}, nil
 }
@@ -61,6 +64,7 @@ func (grepT) InputSchema() map[string]any {
 		"pattern": map[string]any{"type": "string"},
 	}}
 }
+
 func (grepT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
 	return tool.Result{Text: "matches"}, nil
 }
@@ -74,6 +78,7 @@ func (bashT) InputSchema() map[string]any {
 		"command": map[string]any{"type": "string"},
 	}}
 }
+
 func (bashT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
 	return tool.Result{Text: "should-not-run"}, nil
 }
@@ -86,9 +91,11 @@ func (m *memAudit) Append(_ context.Context, e audit.Entry) error {
 	m.entries = append(m.entries, e)
 	return nil
 }
+
 func (m *memAudit) ListBySession(context.Context, string, string, int) ([]audit.Entry, error) {
 	return m.entries, nil
 }
+
 func (m *memAudit) ListForUser(context.Context, string, int) ([]audit.Entry, error) {
 	return m.entries, nil
 }
@@ -204,6 +211,7 @@ func (writeT) InputSchema() map[string]any {
 		"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"},
 	}}
 }
+
 func (writeT) Execute(context.Context, map[string]any) (tool.Result, error) {
 	return tool.Result{Text: "wrote"}, nil
 }

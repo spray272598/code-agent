@@ -69,31 +69,32 @@ func Current() Sink {
 
 // --- convenience wrappers (domain call sites stay short) ---
 
-func IncChatError()              { Current().IncChatError() }
-func IncToolCall()               { Current().IncToolCall() }
-func IncPermissionDeny()         { Current().IncPermissionDeny() }
-func IncMemoryWrite()            { Current().IncMemoryWrite() }
-func IncMemoryRead()             { Current().IncMemoryRead() }
-func IncBlobOffload()            { Current().IncBlobOffload() }
-func IncCompress()               { Current().IncCompress() }
-func IncReflect()                { Current().IncReflect() }
-func AddTokens(n int64)          { Current().AddTokens(n) }
-func IncMCPCacheHit()            { Current().IncMCPCacheHit() }
-func IncMCPCacheMiss()           { Current().IncMCPCacheMiss() }
-func IncMCPToolSuccess()         { Current().IncMCPToolSuccess() }
-func IncMCPToolError()           { Current().IncMCPToolError() }
-func IncCircuitBreakerStateTransition() { Current().IncCircuitBreakerStateTransition() }
+func IncChatError()                               { Current().IncChatError() }
+func IncToolCall()                                { Current().IncToolCall() }
+func IncPermissionDeny()                          { Current().IncPermissionDeny() }
+func IncMemoryWrite()                             { Current().IncMemoryWrite() }
+func IncMemoryRead()                              { Current().IncMemoryRead() }
+func IncBlobOffload()                             { Current().IncBlobOffload() }
+func IncCompress()                                { Current().IncCompress() }
+func IncReflect()                                 { Current().IncReflect() }
+func AddTokens(n int64)                           { Current().AddTokens(n) }
+func IncMCPCacheHit()                             { Current().IncMCPCacheHit() }
+func IncMCPCacheMiss()                            { Current().IncMCPCacheMiss() }
+func IncMCPToolSuccess()                          { Current().IncMCPToolSuccess() }
+func IncMCPToolError()                            { Current().IncMCPToolError() }
+func IncCircuitBreakerStateTransition()           { Current().IncCircuitBreakerStateTransition() }
 func SetCircuitBreakerState(server, state string) { Current().SetCircuitBreakerState(server, state) }
-func ObserveLLM(d time.Duration) { Current().ObserveLLM(d) }
+func ObserveLLM(d time.Duration)                  { Current().ObserveLLM(d) }
 func ObserveTool(d time.Duration) {
 	Current().ObserveTool(d)
 }
-func TraceEvent(fields map[string]any)                  { Current().TraceEvent(fields) }
-func Warnf(format string, args ...any)                  { Current().Warnf(format, args...) }
-func Errorf(format string, args ...any)                 { Current().Errorf(format, args...) }
+func TraceEvent(fields map[string]any)  { Current().TraceEvent(fields) }
+func Warnf(format string, args ...any)  { Current().Warnf(format, args...) }
+func Errorf(format string, args ...any) { Current().Errorf(format, args...) }
 func StartSpan(ctx context.Context, name string, attrs map[string]string) (context.Context, SpanEnd) {
 	return Current().StartSpan(ctx, name, attrs)
 }
+
 func SpanTool(ctx context.Context, tool string, fn func(context.Context) error) error {
 	return Current().SpanTool(ctx, tool, fn)
 }
@@ -101,29 +102,30 @@ func SpanTool(ctx context.Context, tool string, fn func(context.Context) error) 
 // Nop is a no-op Sink used by default and in unit tests.
 type Nop struct{}
 
-func (Nop) IncChatError()                                {}
-func (Nop) IncToolCall()                                 {}
-func (Nop) IncPermissionDeny()                           {}
-func (Nop) IncMemoryWrite()                              {}
-func (Nop) IncMemoryRead()                               {}
-func (Nop) IncBlobOffload()                              {}
-func (Nop) IncCompress()                                 {}
-func (Nop) IncReflect()                                  {}
-func (Nop) AddTokens(int64)                              {}
-func (Nop) IncMCPCacheHit()                              {}
-func (Nop) IncMCPCacheMiss()                             {}
-func (Nop) IncMCPToolSuccess()                           {}
-func (Nop) IncMCPToolError()                             {}
-func (Nop) IncCircuitBreakerStateTransition()            {}
-func (Nop) SetCircuitBreakerState(server, state string)  {}
-func (Nop) ObserveLLM(time.Duration)                     {}
-func (Nop) ObserveTool(time.Duration)                    {}
-func (Nop) TraceEvent(map[string]any)                    {}
-func (Nop) Warnf(string, ...any)                         {}
-func (Nop) Errorf(string, ...any)                        {}
+func (Nop) IncChatError()                               {}
+func (Nop) IncToolCall()                                {}
+func (Nop) IncPermissionDeny()                          {}
+func (Nop) IncMemoryWrite()                             {}
+func (Nop) IncMemoryRead()                              {}
+func (Nop) IncBlobOffload()                             {}
+func (Nop) IncCompress()                                {}
+func (Nop) IncReflect()                                 {}
+func (Nop) AddTokens(int64)                             {}
+func (Nop) IncMCPCacheHit()                             {}
+func (Nop) IncMCPCacheMiss()                            {}
+func (Nop) IncMCPToolSuccess()                          {}
+func (Nop) IncMCPToolError()                            {}
+func (Nop) IncCircuitBreakerStateTransition()           {}
+func (Nop) SetCircuitBreakerState(server, state string) {}
+func (Nop) ObserveLLM(time.Duration)                    {}
+func (Nop) ObserveTool(time.Duration)                   {}
+func (Nop) TraceEvent(map[string]any)                   {}
+func (Nop) Warnf(string, ...any)                        {}
+func (Nop) Errorf(string, ...any)                       {}
 func (Nop) StartSpan(ctx context.Context, _ string, _ map[string]string) (context.Context, SpanEnd) {
 	return ctx, nopSpan{}
 }
+
 func (Nop) SpanTool(ctx context.Context, _ string, fn func(context.Context) error) error {
 	if fn == nil {
 		return nil

@@ -156,13 +156,13 @@ func (b *BackpressureBuffer) DroppedOldCount() int64 {
 }
 
 type BufferStats struct {
-	Len         int
-	Cap         int
-	Usage       float64
-	HighWater   bool
-	LowWater    bool
-	DropCount   int64
-	DroppedOld  int64
+	Len        int
+	Cap        int
+	Usage      float64
+	HighWater  bool
+	LowWater   bool
+	DropCount  int64
+	DroppedOld int64
 }
 
 func (b *BackpressureBuffer) Stats() BufferStats {

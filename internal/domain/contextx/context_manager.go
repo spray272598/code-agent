@@ -9,13 +9,13 @@ import (
 
 // BudgetState tracks the current token budget state with dynamic adjustment.
 type BudgetState struct {
-	TotalBudget     int   `json:"totalBudget"`
-	InputBudget     int   `json:"inputBudget"`     // Max tokens for system + history
-	OutputBudget    int   `json:"outputBudget"`    // Max tokens for LLM response
-	UsedInput       int   `json:"usedInput"`       // History tokens used
-	UsedOutput      int   `json:"usedOutput"`      // Output tokens (running estimate)
-	AvailableTokens int   `json:"availableTokens"` // Total - UsedInput
-	PressureRatio   float64 `json:"pressureRatio"` // UsedInput / InputBudget
+	TotalBudget     int       `json:"totalBudget"`
+	InputBudget     int       `json:"inputBudget"`     // Max tokens for system + history
+	OutputBudget    int       `json:"outputBudget"`    // Max tokens for LLM response
+	UsedInput       int       `json:"usedInput"`       // History tokens used
+	UsedOutput      int       `json:"usedOutput"`      // Output tokens (running estimate)
+	AvailableTokens int       `json:"availableTokens"` // Total - UsedInput
+	PressureRatio   float64   `json:"pressureRatio"`   // UsedInput / InputBudget
 	LastUpdated     time.Time `json:"lastUpdated"`
 }
 
@@ -124,7 +124,7 @@ type MemoryEnricher struct {
 // NewMemoryEnricher creates a MemoryEnricher with default settings.
 func NewMemoryEnricher(fetchFn func(query string, sessionID string, maxTokens int) ([]string, int, error)) *MemoryEnricher {
 	return &MemoryEnricher{
-		FetchRelated:   fetchFn,
+		FetchRelated:    fetchFn,
 		MaxMemoryTokens: 1000,
 	}
 }
@@ -156,9 +156,9 @@ func (e *MemoryEnricher) EnrichContext(query, sessionID string, history []map[st
 		memContent += "- " + entry + "\n"
 	}
 	memMsg := map[string]any{
-		"role":      "system",
-		"content":   memContent,
-		"priority":  3,
+		"role":              "system",
+		"content":           memContent,
+		"priority":          3,
 		"memory_enrichment": true,
 	}
 	enriched := make([]map[string]any, 0, len(history)+1)
@@ -169,11 +169,11 @@ func (e *MemoryEnricher) EnrichContext(query, sessionID string, history []map[st
 
 // ImportanceScore ranks messages for compression retention.
 type ImportanceScore struct {
-	Index       int     `json:"index"`
-	Score       float64 `json:"score"`
-	IsToolPair  bool    `json:"isToolPair"`
-	IsError     bool    `json:"isError"`
-	IsSummary   bool    `json:"isSummary"`
+	Index      int     `json:"index"`
+	Score      float64 `json:"score"`
+	IsToolPair bool    `json:"isToolPair"`
+	IsError    bool    `json:"isError"`
+	IsSummary  bool    `json:"isSummary"`
 }
 
 // RankMessages returns importance scores for all messages in history.
@@ -233,9 +233,9 @@ func Throttle(history []map[string]any, budget int) ([]map[string]any, int) {
 
 	// Estimate token usage for each message.
 	type indexedMsg struct {
-		index int
-		msg   map[string]any
-		score float64
+		index  int
+		msg    map[string]any
+		score  float64
 		tokens int
 	}
 	indexed := make([]indexedMsg, len(history))
@@ -244,9 +244,9 @@ func Throttle(history []map[string]any, budget int) ([]map[string]any, int) {
 		content, _ := m["content"].(string)
 		tokens := estimateMsgTokens(content)
 		indexed[i] = indexedMsg{
-			index: i,
-			msg:   m,
-			score: scores[i].Score,
+			index:  i,
+			msg:    m,
+			score:  scores[i].Score,
 			tokens: tokens,
 		}
 		totalTokens += tokens
@@ -347,11 +347,11 @@ func estimateMsgTokens(content string) int {
 
 // ContextIntegrator coordinates budget management, compression, and memory enrichment.
 type ContextIntegrator struct {
-	compressor  *Compressor
-	budgetMgr   *BudgetManager
-	enricher    *MemoryEnricher
-	sessionID   string
-	userID      string
+	compressor *Compressor
+	budgetMgr  *BudgetManager
+	enricher   *MemoryEnricher
+	sessionID  string
+	userID     string
 }
 
 // NewContextIntegrator creates a coordinated context management system.

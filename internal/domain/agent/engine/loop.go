@@ -56,8 +56,8 @@ type Loop struct {
 	tokenBudget  int
 	systemPrompt string
 	// system prompt cache (tools + skill id)
-	sysCacheKey string
-	sysCacheVal string
+	sysCacheKey      string
+	sysCacheVal      string
 	skillInterceptor *skill.BlockInterceptor
 	workflowBridge   *workflow.LoopBridge
 }
@@ -115,10 +115,13 @@ func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
 	l.memSvc = svc
 	l.memCtx = mc
 }
-func (l *Loop) SetSkillInterceptor(interceptor *skill.BlockInterceptor) { l.skillInterceptor = interceptor }
+
+func (l *Loop) SetSkillInterceptor(interceptor *skill.BlockInterceptor) {
+	l.skillInterceptor = interceptor
+}
 func (l *Loop) SetWorkflowBridge(bridge *workflow.LoopBridge) { l.workflowBridge = bridge }
-func (l *Loop) SetAudit(a audit.Repository)                  { l.audit = a }
-func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository) { l.summaries = s }
+func (l *Loop) SetAudit(a audit.Repository)                   { l.audit = a }
+func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository)  { l.summaries = s }
 func (l *Loop) SetSubRunner(r *subagent.Runner) {
 	l.subRunner = r
 	// Wire window isolation (M5.7-4): subagent results are distilled into a
@@ -138,6 +141,7 @@ func (l *Loop) SetSubRunner(r *subagent.Runner) {
 		}
 	}
 }
+
 func (l *Loop) SetBlobStore(s blob.Store, threshold int) {
 	l.blobs = s
 	if threshold <= 0 {
@@ -724,13 +728,24 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		sig := toolSig(calls)
 		if sig == lastSig {
 			same++
-			if same >= 2 {
+			if same >= 3 {
 				ref := l.reflect(ctx, "repeated identical tool calls", lastSig)
 				publish(&Event{Type: EventReflect, Content: ref, Timestamp: now()})
 				telemetry.IncReflect()
 				final = "stopped: repeated tool calls\n" + ref
 				publish(&Event{Type: EventError, SubType: "loop", Content: final, Completed: true, Timestamp: now()})
 				break
+			}
+			if same == 1 {
+				nudge := fmt.Sprintf(
+					"NOTICE: You have called %s with identical arguments twice in a row. "+
+						"This is likely a stuck loop. Please STOP repeating this call and "+
+						"either diagnose the failure, try a different approach, or provide a Final Answer.",
+					calls[0].Name,
+				)
+				publish(&Event{Type: EventThought, Content: "stationarity nudge", Timestamp: now()})
+				messages = append(messages, port.ChatMessage{Role: "user", Content: nudge})
+				saveMsg(sessmodel.NewMessage(id("msg"), session.ID, "user", nudge))
 			}
 		} else {
 			same, lastSig = 0, sig

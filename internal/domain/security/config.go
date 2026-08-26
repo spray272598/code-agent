@@ -34,16 +34,16 @@ type NetworkPolicyConfig struct {
 }
 
 type AuditConfig struct {
-	Enabled    bool   `yaml:"enabled" json:"enabled"`
-	LogPath    string `yaml:"log_path" json:"logPath"`
-	MaxSizeMB  int    `yaml:"max_size_mb" json:"maxSizeMb"`
-	FlushOnWrite bool `yaml:"flush_on_write" json:"flushOnWrite"`
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	LogPath      string `yaml:"log_path" json:"logPath"`
+	MaxSizeMB    int    `yaml:"max_size_mb" json:"maxSizeMb"`
+	FlushOnWrite bool   `yaml:"flush_on_write" json:"flushOnWrite"`
 }
 
 type IsolationConfig struct {
-	GlobalPath  string `yaml:"global_path" json:"globalPath"`
-	ProjectPath string `yaml:"project_path" json:"projectPath"`
-	PreferGlobal bool  `yaml:"prefer_global" json:"preferGlobal"`
+	GlobalPath   string `yaml:"global_path" json:"globalPath"`
+	ProjectPath  string `yaml:"project_path" json:"projectPath"`
+	PreferGlobal bool   `yaml:"prefer_global" json:"preferGlobal"`
 }
 
 type ConfigLoader struct {

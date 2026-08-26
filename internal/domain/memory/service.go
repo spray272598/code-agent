@@ -112,10 +112,10 @@ const dupThreshold = 0.88
 const (
 	halfLifeDays = 30.0
 
-	sourceWeightGlobal   = 1.2
-	sourceWeightProject  = 1.0
-	sourceWeightSession  = 0.8
-	sourceWeightDefault  = 1.0
+	sourceWeightGlobal  = 1.2
+	sourceWeightProject = 1.0
+	sourceWeightSession = 0.8
+	sourceWeightDefault = 1.0
 )
 
 var evergreenSources = map[string]bool{
@@ -319,7 +319,7 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		}
 		decay := TemporalDecay(it.CreatedAt, it.Source)
 		sw := SourceWeight(it.Source)
-		score := sim * decay * sw + float64(it.Importance)/10000
+		score := sim*decay*sw + float64(it.Importance)/10000
 		if v, ok := idOrder[it.ID]; ok {
 			score += float64(v) + 0.001
 		}

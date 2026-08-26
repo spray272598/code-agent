@@ -22,10 +22,10 @@ type MemoryLLMKeyRepo struct {
 // storedKey keeps ciphertext in-memory; the Repository interface hands back
 // Key with plaintext filled in by the wrapper.
 type storedKey struct {
-	Provider string
-	APIKeyCT string // kms:v1:<base64>
+	Provider  string
+	APIKeyCT  string // kms:v1:<base64>
 	APIBaseCT string
-	Enabled  bool
+	Enabled   bool
 }
 
 // NewMemoryLLMKeyRepo returns an empty in-memory repo.

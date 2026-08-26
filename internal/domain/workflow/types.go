@@ -3,11 +3,11 @@ package workflow
 type Outcome string
 
 const (
-	OutcomeCompleted     Outcome = "completed"
-	OutcomePaused        Outcome = "paused"
+	OutcomeCompleted      Outcome = "completed"
+	OutcomePaused         Outcome = "paused"
 	OutcomeBudgetExceeded Outcome = "budget_exceeded"
-	OutcomeCancelled     Outcome = "cancelled"
-	OutcomeFailed        Outcome = "failed"
+	OutcomeCancelled      Outcome = "cancelled"
+	OutcomeFailed         Outcome = "failed"
 )
 
 type StepResult struct {

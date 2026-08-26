@@ -311,5 +311,7 @@ func TestSubagentProgressTimestamp(t *testing.T) {
 }
 
 // Verify fmt and sync imports are used
-var _ = fmt.Sprintf
-var _ = sync.Mutex{}
+var (
+	_ = fmt.Sprintf
+	_ = sync.Mutex{}
+)

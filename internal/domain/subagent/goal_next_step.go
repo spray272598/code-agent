@@ -197,11 +197,11 @@ func RestorePlanFromBaseline(baseline *PlanBaseline) error {
 	}
 
 	dir := filepath.Dir(baseline.PlanPath)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
-	return os.WriteFile(baseline.PlanPath, []byte(baseline.Content), 0600)
+	return os.WriteFile(baseline.PlanPath, []byte(baseline.Content), 0o600)
 }
 
 // simpleHash produces a stable FNV-1a hash of a string for integrity checking.
@@ -232,8 +232,8 @@ type SnapshotEntry struct {
 // StrategistSnapshotManager manages versioned snapshots of plan files.
 // Thread-safe for concurrent access.
 type StrategistSnapshotManager struct {
-	mu       sync.RWMutex
-	snapshots map[string][]SnapshotEntry // keyed by plan path
+	mu         sync.RWMutex
+	snapshots  map[string][]SnapshotEntry // keyed by plan path
 	maxHistory int
 }
 
@@ -364,11 +364,11 @@ func (m *StrategistSnapshotManager) RestoreSnapshot(planPath string, version int
 	}
 
 	dir := filepath.Dir(absPath)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
-	if err := os.WriteFile(absPath, []byte(target.Content), 0600); err != nil {
+	if err := os.WriteFile(absPath, []byte(target.Content), 0o600); err != nil {
 		return fmt.Errorf("write plan: %w", err)
 	}
 

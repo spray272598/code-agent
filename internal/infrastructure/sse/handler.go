@@ -14,11 +14,11 @@ import (
 )
 
 type SSEHandler struct {
-	pool        *ConnectionPool
-	seqCounter  atomic.Uint64
-	defaultHWM  float64
-	defaultLWM  float64
-	defaultBuf  int
+	pool       *ConnectionPool
+	seqCounter atomic.Uint64
+	defaultHWM float64
+	defaultLWM float64
+	defaultBuf int
 }
 
 func NewSSEHandler() *SSEHandler {
@@ -39,20 +39,20 @@ func (h *SSEHandler) SetPoolSize(max int) {
 }
 
 type SSEConnection struct {
-	id          string
-	sessionID   string
-	writer      *SSEStreamWriter
-	buffer      *BackpressureBuffer
-	heartbeat   *HeartbeatManager
-	metrics     *ConnectionMetrics
-	handler     *SSEHandler
-	seq         uint64
-	lastEvent   time.Time
-	eventCount  atomic.Int64
-	bytesSent   atomic.Int64
-	detector    *DoomLoopDetector
-	capture     *StreamingTurnCapture
-	active      bool
+	id         string
+	sessionID  string
+	writer     *SSEStreamWriter
+	buffer     *BackpressureBuffer
+	heartbeat  *HeartbeatManager
+	metrics    *ConnectionMetrics
+	handler    *SSEHandler
+	seq        uint64
+	lastEvent  time.Time
+	eventCount atomic.Int64
+	bytesSent  atomic.Int64
+	detector   *DoomLoopDetector
+	capture    *StreamingTurnCapture
+	active     bool
 }
 
 func (h *SSEHandler) NewConnection(w http.ResponseWriter, r *http.Request, sessionID string) (*SSEConnection, error) {
@@ -239,9 +239,9 @@ func (c *SSEConnection) ConvertEngineEvent(ev *engine.Event) *StructuredEvent {
 
 	if eventType == EventToolCallDelta {
 		sseEv.Data = mustJSON(map[string]any{
-			"tool":    ev.Content,
-			"step":    ev.Step,
-			"args":    ev.Data,
+			"tool": ev.Content,
+			"step": ev.Step,
+			"args": ev.Data,
 		})
 	}
 
@@ -329,9 +329,9 @@ func mustJSON(v any) json.RawMessage {
 }
 
 type StreamOptions struct {
-	SessionID    string
+	SessionID     string
 	AutoReconnect bool
-	LastEventID  string
+	LastEventID   string
 }
 
 func DefaultStreamOptions() StreamOptions {
@@ -341,15 +341,15 @@ func DefaultStreamOptions() StreamOptions {
 }
 
 type SSEStreamRunner struct {
-	handler  *SSEHandler
-	conn     *SSEConnection
-	ctx      context.Context
-	cancel   context.CancelFunc
-	errCh    chan error
-	eventCh  chan *engine.Event
-	doneCh   chan struct{}
-	writer   http.ResponseWriter
-	flusher  http.Flusher
+	handler *SSEHandler
+	conn    *SSEConnection
+	ctx     context.Context
+	cancel  context.CancelFunc
+	errCh   chan error
+	eventCh chan *engine.Event
+	doneCh  chan struct{}
+	writer  http.ResponseWriter
+	flusher http.Flusher
 }
 
 func (h *SSEHandler) NewStreamRunner(w http.ResponseWriter, r *http.Request, sessionID string) (*SSEStreamRunner, error) {

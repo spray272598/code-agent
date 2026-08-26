@@ -180,8 +180,10 @@ func TestGoalTrackerEventHistory(t *testing.T) {
 	for _, e := range h {
 		eventSet[e.Event] = true
 	}
-	for _, ev := range []GoalEvent{GoalEventPlanningStarted, GoalEventPlanningCompleted,
-		GoalEventWorkerStarted, GoalEventWorkerCompleted, GoalEventGoalCompleted} {
+	for _, ev := range []GoalEvent{
+		GoalEventPlanningStarted, GoalEventPlanningCompleted,
+		GoalEventWorkerStarted, GoalEventWorkerCompleted, GoalEventGoalCompleted,
+	} {
 		if !eventSet[ev] {
 			t.Errorf("missing event: %v", ev)
 		}
@@ -366,7 +368,7 @@ func TestGoalOrchestratorCompleteFlow(t *testing.T) {
 			ID: "plan-1", Objective: objective, Kind: GoalKindCodeChange,
 			AcceptanceCriteria: []string{"criteria met"},
 			VerificationPlan:   []string{"verify"},
-			CreatedAt: time.Now(), LastUpdatedAt: time.Now(),
+			CreatedAt:          time.Now(), LastUpdatedAt: time.Now(),
 		}, nil
 	}
 	cfg.Implementer = func(ctx context.Context, plan *GoalPlan) (string, error) {
@@ -409,7 +411,7 @@ func TestGoalOrchestratorFailLoopAndComplete(t *testing.T) {
 			ID: "plan-2", Objective: objective, Kind: GoalKindCodeChange,
 			AcceptanceCriteria: []string{"criteria met"},
 			VerificationPlan:   []string{"verify"},
-			CreatedAt: time.Now(), LastUpdatedAt: time.Now(),
+			CreatedAt:          time.Now(), LastUpdatedAt: time.Now(),
 		}, nil
 	}
 	cfg.Implementer = func(ctx context.Context, plan *GoalPlan) (string, error) {
@@ -421,8 +423,10 @@ func TestGoalOrchestratorFailLoopAndComplete(t *testing.T) {
 		current := callCount
 		mu.Unlock()
 		if current < 5 {
-			return VerifierResult{Passed: false, Reason: "not yet", Evidence: "fail",
-				Gaps: []string{fmt.Sprintf("gap-%d", current)}}, nil
+			return VerifierResult{
+				Passed: false, Reason: "not yet", Evidence: "fail",
+				Gaps: []string{fmt.Sprintf("gap-%d", current)},
+			}, nil
 		}
 		return VerifierResult{Passed: true, Reason: "done", Evidence: "success"}, nil
 	}
@@ -454,7 +458,7 @@ func TestGoalOrchestratorStallDetection(t *testing.T) {
 			ID: "plan-3", Objective: objective, Kind: GoalKindCodeChange,
 			AcceptanceCriteria: []string{"criteria"},
 			VerificationPlan:   []string{"verify"},
-			CreatedAt: time.Now(), LastUpdatedAt: time.Now(),
+			CreatedAt:          time.Now(), LastUpdatedAt: time.Now(),
 		}, nil
 	}
 	cfg.Implementer = func(ctx context.Context, plan *GoalPlan) (string, error) {
@@ -465,8 +469,10 @@ func TestGoalOrchestratorStallDetection(t *testing.T) {
 		mu.Lock()
 		callCount++
 		mu.Unlock()
-		return VerifierResult{Passed: false, Reason: "gap", Evidence: "fail",
-			Gaps: []string{"always same gap"}}, nil
+		return VerifierResult{
+			Passed: false, Reason: "gap", Evidence: "fail",
+			Gaps: []string{"always same gap"},
+		}, nil
 	}
 
 	orch := NewGoalOrchestrator(cfg)
@@ -495,7 +501,7 @@ func TestGoalOrchestratorCancellation(t *testing.T) {
 			ID: "plan-4", Objective: objective, Kind: GoalKindCodeChange,
 			AcceptanceCriteria: []string{"criteria"},
 			VerificationPlan:   []string{"verify"},
-			CreatedAt: time.Now(), LastUpdatedAt: time.Now(),
+			CreatedAt:          time.Now(), LastUpdatedAt: time.Now(),
 		}, nil
 	}
 	cfg.Implementer = func(ctx context.Context, plan *GoalPlan) (string, error) {

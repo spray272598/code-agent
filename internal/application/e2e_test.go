@@ -32,6 +32,7 @@ func (r *memSessRepo) Save(_ context.Context, s *sessmodel.Session) error {
 	r.byID[s.ID] = &cp
 	return nil
 }
+
 func (r *memSessRepo) FindByID(_ context.Context, id string) (*sessmodel.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -42,6 +43,7 @@ func (r *memSessRepo) FindByID(_ context.Context, id string) (*sessmodel.Session
 	cp := *s
 	return &cp, nil
 }
+
 func (r *memSessRepo) ListByUser(_ context.Context, _ string, _ int) ([]*sessmodel.Session, error) {
 	return nil, nil
 }
@@ -60,9 +62,11 @@ func (r *memMsgRepo) Save(_ context.Context, m *sessmodel.Message) error {
 	r.msgs = append(r.msgs, &cp)
 	return nil
 }
+
 func (r *memMsgRepo) ListBySession(_ context.Context, _ string, _ int) ([]*sessmodel.Message, error) {
 	return nil, nil
 }
+
 func (r *memMsgRepo) ListAsMaps(_ context.Context, _ string, _ int) ([]map[string]any, error) {
 	return nil, nil
 }
@@ -84,6 +88,7 @@ func (s *scriptedLLM) Generate(_ context.Context, _ *port.ChatRequest) (*port.Ch
 	}
 	return &port.ChatResponse{Content: c, TotalTokens: 15}, nil
 }
+
 func (s *scriptedLLM) GenerateStream(ctx context.Context, req *port.ChatRequest, _ func(port.StreamDelta)) (*port.ChatResponse, error) {
 	return s.Generate(ctx, req)
 }

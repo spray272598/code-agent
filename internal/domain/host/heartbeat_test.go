@@ -29,7 +29,7 @@ func TestHeartbeatHealthTracking(t *testing.T) {
 	bridge.Register(&HostSession{
 		DeviceID:  "device-1",
 		Workspace: "/tmp",
-		Send: func(env Envelope) error { return nil },
+		Send:      func(env Envelope) error { return nil },
 		LastSeen:  time.Now(),
 	})
 

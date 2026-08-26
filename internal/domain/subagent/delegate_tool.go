@@ -26,6 +26,7 @@ func (t *DelegateTool) Description() string {
 - maxSteps: int (optional)
 - tasks: array of {prompt, role?, tools?, isolation?, id?} for parallel run`
 }
+
 func (t *DelegateTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",

@@ -20,30 +20,30 @@ const (
 type HealthStatus string
 
 const (
-	HealthOnline      HealthStatus = "online"
-	HealthDegraded    HealthStatus = "degraded"
+	HealthOnline       HealthStatus = "online"
+	HealthDegraded     HealthStatus = "degraded"
 	HealthReconnecting HealthStatus = "reconnecting"
-	HealthOffline     HealthStatus = "offline"
-	HealthUnknown     HealthStatus = "unknown"
+	HealthOffline      HealthStatus = "offline"
+	HealthUnknown      HealthStatus = "unknown"
 )
 
 // HealthInfo contains detailed health information for a host.
 type HealthInfo struct {
-	DeviceID       string      `json:"deviceId"`
-	Status         HealthStatus `json:"status"`
-	LastSeen       time.Time   `json:"lastSeen"`
-	LastPingRTT    int64       `json:"lastPingRttMs"`
-	ConsecutiveFails int       `json:"consecutiveFails"`
-	ReconnectCount int         `json:"reconnectCount"`
-	Workspace      string      `json:"workspace"`
-	Details        string      `json:"details,omitempty"`
+	DeviceID         string       `json:"deviceId"`
+	Status           HealthStatus `json:"status"`
+	LastSeen         time.Time    `json:"lastSeen"`
+	LastPingRTT      int64        `json:"lastPingRttMs"`
+	ConsecutiveFails int          `json:"consecutiveFails"`
+	ReconnectCount   int          `json:"reconnectCount"`
+	Workspace        string       `json:"workspace"`
+	Details          string       `json:"details,omitempty"`
 }
 
 // HeartbeatConfig configures the heartbeat manager.
 type HeartbeatConfig struct {
-	Interval         time.Duration
-	SessionTimeout   time.Duration
-	MaxFails         int
+	Interval          time.Duration
+	SessionTimeout    time.Duration
+	MaxFails          int
 	ReconnectAttempts int
 	ReconnectBaseWait time.Duration
 	ReconnectMaxWait  time.Duration
@@ -51,9 +51,9 @@ type HeartbeatConfig struct {
 
 func DefaultHeartbeatConfig() HeartbeatConfig {
 	return HeartbeatConfig{
-		Interval:         DefaultHeartbeatInterval,
-		SessionTimeout:   DefaultSessionTimeout,
-		MaxFails:         3,
+		Interval:          DefaultHeartbeatInterval,
+		SessionTimeout:    DefaultSessionTimeout,
+		MaxFails:          3,
 		ReconnectAttempts: DefaultReconnectAttempts,
 		ReconnectBaseWait: DefaultReconnectBaseWait,
 		ReconnectMaxWait:  DefaultReconnectMaxWait,
@@ -73,13 +73,13 @@ type MCPServerInfo struct {
 
 // CombinedHealth aggregates host and MCP health for unified reporting.
 type CombinedHealth struct {
-	Timestamp    time.Time        `json:"timestamp"`
-	Hosts        []HealthInfo     `json:"hosts"`
-	MCPServers   []MCPServerInfo  `json:"mcpServers"`
-	OnlineHosts  int              `json:"onlineHosts"`
-	OfflineHosts int              `json:"offlineHosts"`
-	OnlineMCPs   int              `json:"onlineMcpServers"`
-	OfflineMCPs  int              `json:"offlineMcpServers"`
+	Timestamp    time.Time       `json:"timestamp"`
+	Hosts        []HealthInfo    `json:"hosts"`
+	MCPServers   []MCPServerInfo `json:"mcpServers"`
+	OnlineHosts  int             `json:"onlineHosts"`
+	OfflineHosts int             `json:"offlineHosts"`
+	OnlineMCPs   int             `json:"onlineMcpServers"`
+	OfflineMCPs  int             `json:"offlineMcpServers"`
 }
 
 // HeartbeatManager monitors host agent connections and manages reconnections.

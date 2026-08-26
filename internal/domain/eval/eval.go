@@ -9,12 +9,12 @@ import (
 type Dimension string
 
 const (
-	DimAccuracy     Dimension = "accuracy"      // Task completion accuracy
-	DimEfficiency    Dimension = "efficiency"   // Token cost, step count, latency
-	DimSafety        Dimension = "safety"        // Permission denies, security incidents
-	DimToolUsage     Dimension = "tool_usage"    // Tool call success/retry rates
+	DimAccuracy       Dimension = "accuracy"        // Task completion accuracy
+	DimEfficiency     Dimension = "efficiency"      // Token cost, step count, latency
+	DimSafety         Dimension = "safety"          // Permission denies, security incidents
+	DimToolUsage      Dimension = "tool_usage"      // Tool call success/retry rates
 	DimContextQuality Dimension = "context_quality" // Compression ratio, memory hit rate
-	DimCost          Dimension = "cost"          // Estimated monetary cost
+	DimCost           Dimension = "cost"            // Estimated monetary cost
 )
 
 // SampleType classifies the kind of measurement.
@@ -29,40 +29,40 @@ const (
 
 // Sample is a single evaluation measurement.
 type Sample struct {
-	Timestamp time.Time `json:"ts"`
-	Dimension Dimension `json:"dim"`
-	Name      string    `json:"name"`
-	Type      SampleType `json:"type"`
-	Value     float64   `json:"value"`
+	Timestamp time.Time         `json:"ts"`
+	Dimension Dimension         `json:"dim"`
+	Name      string            `json:"name"`
+	Type      SampleType        `json:"type"`
+	Value     float64           `json:"value"`
 	Labels    map[string]string `json:"labels,omitempty"`
 }
 
 // SessionMetrics holds aggregated metrics for a single agent session.
 type SessionMetrics struct {
-	SessionID     string            `json:"sessionId"`
-	UserID        string            `json:"userId,omitempty"`
-	StartedAt     time.Time         `json:"startedAt"`
-	EndedAt       time.Time         `json:"endedAt,omitempty"`
-	DurationMs    int64             `json:"durationMs"`
-	Completed     bool              `json:"completed"`
-	ErrorClass    string            `json:"errorClass,omitempty"`
+	SessionID  string    `json:"sessionId"`
+	UserID     string    `json:"userId,omitempty"`
+	StartedAt  time.Time `json:"startedAt"`
+	EndedAt    time.Time `json:"endedAt,omitempty"`
+	DurationMs int64     `json:"durationMs"`
+	Completed  bool      `json:"completed"`
+	ErrorClass string    `json:"errorClass,omitempty"`
 
 	// Accuracy
 	TaskCompleted bool `json:"taskCompleted"`
 	TaskFailed    bool `json:"taskFailed"`
 
 	// Efficiency
-	TotalTokens   int `json:"totalTokens"`
-	InputTokens   int `json:"inputTokens"`
-	OutputTokens  int `json:"outputTokens"`
-	StepCount     int `json:"stepCount"`
-	ToolCallCount int `json:"toolCallCount"`
-	LLMCallCount  int `json:"llmCallCount"`
+	TotalTokens   int   `json:"totalTokens"`
+	InputTokens   int   `json:"inputTokens"`
+	OutputTokens  int   `json:"outputTokens"`
+	StepCount     int   `json:"stepCount"`
+	ToolCallCount int   `json:"toolCallCount"`
+	LLMCallCount  int   `json:"llmCallCount"`
 	AvgLatencyMs  int64 `json:"avgLatencyMs"`
 
 	// Safety
-	PermissionDenies  int    `json:"permissionDenies"`
-	SecurityIncidents int    `json:"securityIncidents"`
+	PermissionDenies  int `json:"permissionDenies"`
+	SecurityIncidents int `json:"securityIncidents"`
 
 	// Tool Usage
 	ToolSuccesses int            `json:"toolSuccesses"`
@@ -88,10 +88,10 @@ type SessionMetrics struct {
 
 // ScoreBreakdown holds per-dimension scores (0-100) with explanations.
 type ScoreBreakdown struct {
-	Scores      map[Dimension]float64 `json:"scores"`
-	Explanations map[Dimension]string `json:"explanations"`
-	Overall     float64               `json:"overall"`
-	Grade       string                `json:"grade"`
+	Scores       map[Dimension]float64 `json:"scores"`
+	Explanations map[Dimension]string  `json:"explanations"`
+	Overall      float64               `json:"overall"`
+	Grade        string                `json:"grade"`
 }
 
 // EvalConfig controls evaluation behavior.

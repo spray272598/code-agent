@@ -113,4 +113,3 @@ func (r *MySQLMemoryRepo) scan(ctx context.Context, q string, args ...any) ([]me
 	}
 	return out, rows.Err()
 }
-

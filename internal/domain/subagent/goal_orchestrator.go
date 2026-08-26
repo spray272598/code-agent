@@ -32,19 +32,19 @@ func (k GoalKind) String() string {
 
 // GoalPlan is the structured plan written by the planner subagent.
 type GoalPlan struct {
-	ID                 string   `json:"id"`
-	Objective          string   `json:"objective"`
-	Kind               GoalKind `json:"kind"`
-	AcceptanceCriteria []string `json:"acceptanceCriteria"`
-	VerificationPlan   []string `json:"verificationPlan"`
-	NonGoals           []string `json:"nonGoals,omitempty"`
-	AssumedScope       string   `json:"assumedScope,omitempty"`
-	ImplementationNote string   `json:"implementationNote,omitempty"`
-	TaskChecklist      []string `json:"taskChecklist,omitempty"`
-	Risks              []string `json:"risks,omitempty"`
+	ID                 string    `json:"id"`
+	Objective          string    `json:"objective"`
+	Kind               GoalKind  `json:"kind"`
+	AcceptanceCriteria []string  `json:"acceptanceCriteria"`
+	VerificationPlan   []string  `json:"verificationPlan"`
+	NonGoals           []string  `json:"nonGoals,omitempty"`
+	AssumedScope       string    `json:"assumedScope,omitempty"`
+	ImplementationNote string    `json:"implementationNote,omitempty"`
+	TaskChecklist      []string  `json:"taskChecklist,omitempty"`
+	Risks              []string  `json:"risks,omitempty"`
 	CreatedAt          time.Time `json:"createdAt"`
 	LastUpdatedAt      time.Time `json:"lastUpdatedAt"`
-	CurrentStep        int      `json:"currentStep"`
+	CurrentStep        int       `json:"currentStep"`
 }
 
 // VerifierResult is a single skeptic's verdict.
@@ -185,7 +185,7 @@ func (o *GoalOrchestrator) Execute(ctx context.Context, objective, context strin
 			ID: "plan-" + tracker.ID(), Objective: objective, Kind: GoalKindCodeChange,
 			AcceptanceCriteria: []string{"deliverable matches objective"},
 			VerificationPlan:   []string{"verify against criteria"},
-			CreatedAt:           time.Now(), LastUpdatedAt: time.Now(),
+			CreatedAt:          time.Now(), LastUpdatedAt: time.Now(),
 		}
 	} else {
 		plan, err := o.cfg.Planner(ctx, objective, context)
@@ -199,7 +199,7 @@ func (o *GoalOrchestrator) Execute(ctx context.Context, objective, context strin
 				ID: "plan-" + tracker.ID(), Objective: objective, Kind: GoalKindCodeChange,
 				AcceptanceCriteria: []string{"deliverable matches objective"},
 				VerificationPlan:   []string{"verify against criteria"},
-				CreatedAt:           time.Now(), LastUpdatedAt: time.Now(),
+				CreatedAt:          time.Now(), LastUpdatedAt: time.Now(),
 			}
 		}
 		plan.ID = "plan-" + tracker.ID()
@@ -234,8 +234,10 @@ func (o *GoalOrchestrator) Execute(ctx context.Context, objective, context strin
 
 		// Execute
 		tracker.StartWorker("implementer")
-		o.emit(Progress{ID: tracker.ID(), Role: "implementer", Status: "start",
-			Message: fmt.Sprintf("execution attempt %d", verifyAttempt)})
+		o.emit(Progress{
+			ID: tracker.ID(), Role: "implementer", Status: "start",
+			Message: fmt.Sprintf("execution attempt %d", verifyAttempt),
+		})
 
 		var output string
 		if o.cfg.Implementer == nil {
@@ -253,8 +255,10 @@ func (o *GoalOrchestrator) Execute(ctx context.Context, objective, context strin
 		// Detect premature stop
 		if pattern := detector.Detect(output); pattern != "" {
 			tracker.PrematureStop(pattern)
-			o.emit(Progress{ID: tracker.ID(), Role: "implementer", Status: "warning",
-				Message: fmt.Sprintf("premature-stop pattern: %s", pattern)})
+			o.emit(Progress{
+				ID: tracker.ID(), Role: "implementer", Status: "warning",
+				Message: fmt.Sprintf("premature-stop pattern: %s", pattern),
+			})
 		}
 
 		tracker.CompleteWorker("work completed")
@@ -264,8 +268,10 @@ func (o *GoalOrchestrator) Execute(ctx context.Context, objective, context strin
 		result.PanelResults = append(result.PanelResults, panel)
 
 		if panel.Passed {
-			o.emit(Progress{ID: tracker.ID(), Role: "verifier", Status: "done",
-				Message: fmt.Sprintf("verification passed on attempt %d", verifyAttempt)})
+			o.emit(Progress{
+				ID: tracker.ID(), Role: "verifier", Status: "done",
+				Message: fmt.Sprintf("verification passed on attempt %d", verifyAttempt),
+			})
 			tracker.Complete()
 			break
 		}
@@ -295,8 +301,10 @@ func (o *GoalOrchestrator) Execute(ctx context.Context, objective, context strin
 					}
 				}
 
-				o.emit(Progress{ID: tracker.ID(), Role: "strategist", Status: "start",
-					Message: "strategist fired for stall recovery"})
+				o.emit(Progress{
+					ID: tracker.ID(), Role: "strategist", Status: "start",
+					Message: "strategist fired for stall recovery",
+				})
 				note := o.runStrategist(ctx, result.Plan, output, panel)
 				if note != "" {
 					result.StrategistNotes = append(result.StrategistNotes, note)
@@ -351,7 +359,7 @@ func (o *GoalOrchestrator) writePlanFile(trackerID string, plan *GoalPlan) strin
 		content += "- [ ] implement core requirements\n"
 	}
 
-	if err := os.WriteFile(planPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(planPath, []byte(content), 0o600); err != nil {
 		return ""
 	}
 	return planPath
@@ -359,8 +367,8 @@ func (o *GoalOrchestrator) writePlanFile(trackerID string, plan *GoalPlan) strin
 
 // runVerificationPanel spawns N parallel skeptics and aggregates verdicts.
 func (o *GoalOrchestrator) runVerificationPanel(ctx context.Context, tracker *GoalTracker,
-	plan *GoalPlan, workOutput string, attempt int) VerificationPanelResult {
-
+	plan *GoalPlan, workOutput string, attempt int,
+) VerificationPanelResult {
 	n := o.cfg.SkepticCount
 	skeptics := make([]VerifierResult, n)
 	ch := make(chan VerifierResult, n)
@@ -427,7 +435,8 @@ func (o *GoalOrchestrator) runVerificationPanel(ctx context.Context, tracker *Go
 
 // runStrategist fires the strategist to get structural restructure advice.
 func (o *GoalOrchestrator) runStrategist(_ context.Context, plan *GoalPlan, workOutput string,
-	panel VerificationPanelResult) string {
+	panel VerificationPanelResult,
+) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("## Strategist Analysis (attempt %d)\n", panel.Attempt))
 	b.WriteString(fmt.Sprintf("**Gaps:** %v\n\n", panel.Gaps))

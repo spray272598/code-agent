@@ -175,15 +175,61 @@ func (l *Loop) runToolCalls(
 		return outcomes, nil, false
 	}
 
-	allRead := true
+	// Per-path locking: write tools that target the same file serialize,
+	// writes to different files and reads run concurrently. Bash gets a
+	// global mutex (unknown side effects). This replaces the old allRead
+	// binary split which serialised the entire batch on any write tool.
+	type toolLock struct {
+		path    string // non-empty = per-file mutex; empty = no lock needed
+		useBash bool   // true = acquire bashMu (bash/global side-effect tools)
+	}
+	locks := make(map[string]*sync.Mutex)
+	var bashMu sync.Mutex
+
+	classifyTool := func(tc port.ToolCall) toolLock {
+		if tool.IsReadOnly(tc.Name) {
+			return toolLock{} // no lock
+		}
+		base := tc.Name
+		if i := strings.LastIndex(tc.Name, "__"); i >= 0 {
+			base = tc.Name[i+2:]
+		}
+		// bash and similar side-effect-heavy tools: global mutex
+		if base == "bash" || base == "delegate" || base == "ssh_command" {
+			return toolLock{useBash: true}
+		}
+		// Extract target file path from args for write tools
+		if tc.Args != nil {
+			if p, ok := tc.Args["path"].(string); ok && p != "" {
+				return toolLock{path: p}
+			}
+		}
+		// Unknown write tool: global mutex for safety
+		return toolLock{useBash: true}
+	}
+
 	for _, q := range toRun {
-		if !tool.IsReadOnly(q.tc.Name) {
-			allRead = false
-			break
+		tl := classifyTool(q.tc)
+		if tl.path != "" {
+			if _, ok := locks[tl.path]; !ok {
+				locks[tl.path] = &sync.Mutex{}
+			}
 		}
 	}
 
 	runOne := func(tc port.ToolCall) toolOutcome {
+		tl := classifyTool(tc)
+		var mu *sync.Mutex
+		if tl.useBash {
+			mu = &bashMu
+		} else if tl.path != "" {
+			mu = locks[tl.path]
+		}
+		if mu != nil {
+			mu.Lock()
+			defer mu.Unlock()
+		}
+
 		out := toolOutcome{tc: tc}
 		publish(&Event{Type: EventToolCall, SubType: tc.Name, Step: step, Content: tc.Name, Data: tc.Args, Timestamp: now()})
 		telemetry.IncToolCall()
@@ -223,8 +269,7 @@ func (l *Loop) runToolCalls(
 		return out
 	}
 
-	if allRead && len(toRun) > 1 {
-		// parallel read-only batch (preserve order of outcomes)
+	if len(toRun) > 1 {
 		results := make([]toolOutcome, len(toRun))
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, MaxParallelToolCalls)
@@ -239,10 +284,8 @@ func (l *Loop) runToolCalls(
 		}
 		wg.Wait()
 		outcomes = append(outcomes, results...)
-	} else {
-		for _, q := range toRun {
-			outcomes = append(outcomes, runOne(q.tc))
-		}
+	} else if len(toRun) == 1 {
+		outcomes = append(outcomes, runOne(toRun[0].tc))
 	}
 	return outcomes, nil, false
 }

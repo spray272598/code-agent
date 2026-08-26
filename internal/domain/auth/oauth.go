@@ -63,15 +63,15 @@ func ValidatePKCE(verifier, challenge, method string) bool {
 
 // AuthCodeRecord is a pending authorization code bound to a user + PKCE context.
 type AuthCodeRecord struct {
-	Code         string
-	UserID       string
-	Email        string
-	Role         string
-	RedirectURI  string
-	Challenge    string
+	Code          string
+	UserID        string
+	Email         string
+	Role          string
+	RedirectURI   string
+	Challenge     string
 	ChallengeMeth string
-	ExpiresAt    time.Time
-	Consumed     bool
+	ExpiresAt     time.Time
+	Consumed      bool
 }
 
 // AuthCodeStore issues and redeems one-time authorization codes.

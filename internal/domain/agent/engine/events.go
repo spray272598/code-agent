@@ -5,22 +5,22 @@ import "time"
 type EventType string
 
 const (
-	EventThought    EventType = "thought"
-	EventTextDelta  EventType = "text_delta"
-	EventToolCall   EventType = "tool_call"
-	EventToolResult EventType = "tool_result"
-	EventPermission EventType = "permission"
-	EventPlan       EventType = "plan"
-	EventPlanUpdate EventType = "plan_update" // incremental plan progress (data: *plan.PlanView)
-	EventReplan     EventType = "replan"      // plan rebuilt mid-run (data: *plan.Plan)
-	EventCompress   EventType = "compress"
-	EventAnswer     EventType = "answer"
-	EventError      EventType = "error"
-	EventDone       EventType = "done"
-	EventResume     EventType = "resume"
-	EventSkill      EventType = "skill"
-	EventSlash      EventType = "slash"
-	EventHook       EventType = "hook"
+	EventThought     EventType = "thought"
+	EventTextDelta   EventType = "text_delta"
+	EventToolCall    EventType = "tool_call"
+	EventToolResult  EventType = "tool_result"
+	EventPermission  EventType = "permission"
+	EventPlan        EventType = "plan"
+	EventPlanUpdate  EventType = "plan_update" // incremental plan progress (data: *plan.PlanView)
+	EventReplan      EventType = "replan"      // plan rebuilt mid-run (data: *plan.Plan)
+	EventCompress    EventType = "compress"
+	EventAnswer      EventType = "answer"
+	EventError       EventType = "error"
+	EventDone        EventType = "done"
+	EventResume      EventType = "resume"
+	EventSkill       EventType = "skill"
+	EventSlash       EventType = "slash"
+	EventHook        EventType = "hook"
 	EventReflect     EventType = "reflect"
 	EventReview      EventType = "review"
 	EventSubAgent    EventType = "subagent"

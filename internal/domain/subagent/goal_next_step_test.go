@@ -18,7 +18,7 @@ func TestFirstUncheckedPlanItem(t *testing.T) {
 			want:    "Implement feature X",
 		},
 		{
-			name: "mixed checked and unchecked",
+			name:    "mixed checked and unchecked",
 			content: "- [x] Step 1 done\n- [ ] Step 2 pending\n- [x] Step 3 done\n",
 			want:    "Step 2 pending",
 		},
@@ -33,12 +33,12 @@ func TestFirstUncheckedPlanItem(t *testing.T) {
 			want:    "",
 		},
 		{
-			name: "indented checkbox",
+			name:    "indented checkbox",
 			content: "  - [ ] Nested task\n",
 			want:    "Nested task",
 		},
 		{
-			name: "checkbox with leading spaces",
+			name:    "checkbox with leading spaces",
 			content: "   - [ ] Spaced task\n",
 			want:    "Spaced task",
 		},
@@ -72,7 +72,7 @@ func TestResolveGoalNextStep(t *testing.T) {
 
 	content := "# Plan\n- [x] Research phase complete\n- [ ] Implement API endpoints\n- [ ] Add tests"
 
-	if err := os.WriteFile(planPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(planPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,7 +110,7 @@ func TestResolveGoalNextStep_AllChecked(t *testing.T) {
 	planPath := filepath.Join(dir, "done_plan.md")
 
 	content := "# Plan\n- [x] Done\n"
-	if err := os.WriteFile(planPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(planPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +129,7 @@ func TestResolveGoalNextStep_LongItem(t *testing.T) {
 
 	longText := "This is a very long task description that goes on and on about implementing the highly complex distributed caching layer with Redis cluster support, including replication, failover, and client-side caching strategies for optimal performance in high-throughput production environments"
 	content := "# Plan\n- [ ] " + longText + "\n"
-	if err := os.WriteFile(planPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(planPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,7 +147,7 @@ func TestResolveGoalNextStep_SymlinkRejected(t *testing.T) {
 	realPath := filepath.Join(dir, "real_plan.md")
 	linkPath := filepath.Join(dir, "link_plan.md")
 
-	if err := os.WriteFile(realPath, []byte("- [ ] Task\n"), 0600); err != nil {
+	if err := os.WriteFile(realPath, []byte("- [ ] Task\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,7 +221,7 @@ func TestPlanBaseline(t *testing.T) {
 	planPath := filepath.Join(dir, "baseline_plan.md")
 
 	content := "# Plan\n- [ ] Task A\n"
-	if err := os.WriteFile(planPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(planPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -241,7 +241,7 @@ func TestPlanBaseline(t *testing.T) {
 		t.Error("expected integrity check to pass")
 	}
 
-	if err := os.WriteFile(planPath, []byte("# Modified\n"), 0600); err != nil {
+	if err := os.WriteFile(planPath, []byte("# Modified\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -271,7 +271,7 @@ func TestSymlinkCheck(t *testing.T) {
 	realPath := filepath.Join(dir, "real.txt")
 	linkPath := filepath.Join(dir, "link.txt")
 
-	if err := os.WriteFile(realPath, []byte("data"), 0600); err != nil {
+	if err := os.WriteFile(realPath, []byte("data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,7 +299,7 @@ func TestStrategistSnapshotManager(t *testing.T) {
 	planPath := filepath.Join(dir, "snapshot_plan.md")
 
 	content := "# Plan v1\n- [ ] Task A\n"
-	if err := os.WriteFile(planPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(planPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -323,7 +323,7 @@ func TestStrategistSnapshotManager(t *testing.T) {
 
 	t.Run("create second snapshot", func(t *testing.T) {
 		modified := "# Plan v2\n- [x] Task A\n- [ ] Task B\n"
-		if err := os.WriteFile(planPath, []byte(modified), 0600); err != nil {
+		if err := os.WriteFile(planPath, []byte(modified), 0o600); err != nil {
 			t.Fatal(err)
 		}
 
@@ -352,7 +352,7 @@ func TestStrategistSnapshotManager(t *testing.T) {
 
 	t.Run("verify integrity - mismatch", func(t *testing.T) {
 		// Modify the file without creating a snapshot
-		if err := os.WriteFile(planPath, []byte("# Unauthorized modification\n"), 0600); err != nil {
+		if err := os.WriteFile(planPath, []byte("# Unauthorized modification\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 
@@ -419,7 +419,7 @@ func TestStrategistSnapshotManager(t *testing.T) {
 
 	t.Run("max history enforcement", func(t *testing.T) {
 		content := "# Plan\n- [ ] Task\n"
-		if err := os.WriteFile(planPath, []byte(content), 0600); err != nil {
+		if err := os.WriteFile(planPath, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 

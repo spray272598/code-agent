@@ -23,14 +23,14 @@ type CheckpointEntry struct {
 }
 
 type DurableCheckpointStore struct {
-	mu      sync.RWMutex
-	dir     string
-	cap     int
-	cache   map[string][]CheckpointEntry
+	mu    sync.RWMutex
+	dir   string
+	cap   int
+	cache map[string][]CheckpointEntry
 }
 
 func NewDurableCheckpointStore(dir string, cap int) (*DurableCheckpointStore, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create checkpoint dir: %w", err)
 	}
 	s := &DurableCheckpointStore{
@@ -91,7 +91,7 @@ func (s *DurableCheckpointStore) Save(ctx context.Context, entry *CheckpointEntr
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 func (s *DurableCheckpointStore) List(ctx context.Context, sessionID string) ([]CheckpointEntry, error) {

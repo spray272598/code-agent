@@ -13,11 +13,11 @@ import (
 
 // ModelRoute is a concrete LLM endpoint selection.
 type ModelRoute struct {
-	MatchIntent string  // "normal" | "deep" | "team" | "default"
-	Provider    string  // openai-compatible provider id (informational)
-	Model       string  // model id, e.g. "deepseek-ai/DeepSeek-V3"
-	APIBase     string  // base URL (empty → SDK default)
-	APIKey      string  // may be empty → route considered unusable, fall back
+	MatchIntent string // "normal" | "deep" | "team" | "default"
+	Provider    string // openai-compatible provider id (informational)
+	Model       string // model id, e.g. "deepseek-ai/DeepSeek-V3"
+	APIBase     string // base URL (empty → SDK default)
+	APIKey      string // may be empty → route considered unusable, fall back
 	// Per-1k-token prices (USD) for cost estimation & budget control.
 	CostPer1kIn  float64
 	CostPer1kOut float64
@@ -31,9 +31,9 @@ func (r ModelRoute) Usable() bool {
 // Router selects a ModelRoute for a given intent, with default + usability
 // fallbacks.
 type Router struct {
-	routes  map[string]ModelRoute
-	def     ModelRoute
-	order   []string // match priority (intent names), default last
+	routes map[string]ModelRoute
+	def    ModelRoute
+	order  []string // match priority (intent names), default last
 }
 
 // NewRouter builds a router from explicit routes. The route whose

@@ -15,6 +15,9 @@
 | — | Workspace 六工具 + bash 进程隔离 |
 | MCP 可对接 | MCP 热装 + **一律过 Guard**（`server__tool`） |
 | — | Skill / Memory / 会话持久化 / CLI |
+| — | **LLM 重试分类器**（纯函数，429/5xx 自动重试，400 上下文溢出触发压缩） |
+| — | **工具 per-path 写锁并行**（写同文件串行，异文件/读完全并行） |
+| — | **停滞检测两级**（nudge 自纠 → 硬停） |
 
 ```
 CLI ──SSE──► Server(trigger)
@@ -117,6 +120,10 @@ llm:
 - **账号（toC）**：邮箱 + 密码注册/登录，JWT 鉴权，邮箱验证与密码重置；数据按 `user_id` 隔离（无企业/组织概念）
 - **编排**：Eino ReAct + callbacks→SSE；`/team` 并行子代理；native 自研 Loop 兜底；**计划-执行-反思**可视化 + 可中断重规划（3.5）
 - **安全**：五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流；**sandbox 三档**（readonly / workspace / strict，5.1）
+- **LLM 可靠性**：纯函数重试分类器 `ClassifyLLMError`（21 个表驱动单测）；429 指数退避±20% 抖动尊重 Retry-After；400 上下文溢出→压缩后重提交（`ErrContextOverflow`）；401/403 上抛鉴权层（`ErrAuth`）；`openai.go` `doWithRetry` 闭环（`internal/infrastructure/llm/retry.go`）
+- **工具并行**：per-path 写锁替代 allRead 二分法——写同一文件的工具调用通过 `locks[path]` 互斥串行，写不同文件 / 读操作完全并行；bash 用全局互斥（`internal/domain/agent/engine/tool_batch.go`）
+- **停滞检测**：循环内连续重复工具签名 → `same==1` 注入 nudge 提示词给模型自纠机会，`same>=3` 硬停反射+报错（`internal/domain/agent/engine/loop.go`）
+- **上下文安全**：`SelectSafeSplit` 加 `min_compactable` 下限（可压缩区 token 过少时不浪费 LLM 摘要调用）+ snap 保护（`internal/domain/contextx/compressor.go`）
 - **工具（本地 Workspace）**：read/write/edit/bash/glob/grep + `apply_patch`（结构化 diff）+ `lint`/`codecov` + `memory` + `delegate`（5.2）
 - **工具（远程 SSH）**：`ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_terminal`（交互式 PTY 终端）；连接凭据经 KMS 加密存储，仓储支持 SQLite/MySQL
 - **MCP**：stdio 热装，`server__tool` 注册，**与 core 工具同一 GuardedTool 横切**
@@ -124,6 +131,7 @@ llm:
 - **生态对接**：ACP 协议适配层（IDE 驱动，5.4）；用量监控面板 `/api/v1/usage`（5.3）；Plan 只读探索期状态机（5.5）；Headless 后台长任务（5.6）
 - **Skill / 记忆 / L0–L3 压缩 / Token 预算**
 - **存储/可观测**：SQLite | MySQL | memory；MinIO；OTLP/Prometheus；host-agent 
+- **CI/CD**：golangci-lint v2 + gofumpt 格式化门禁；CI 3 分片并行测试（domain-core / domain-rest / infra-app）+ 每分片 10 分钟超时；覆盖率自动合并报告
 
 ## 文档
 

@@ -19,15 +19,15 @@ import (
 )
 
 type OAuthConfig struct {
-	Enabled          bool   `json:"enabled"`
-	ClientID         string `json:"clientId"`
-	ClientSecret     string `json:"clientSecret,omitempty"`
-	AuthURL          string `json:"authUrl"`
-	TokenURL         string `json:"tokenUrl"`
-	RedirectURI      string `json:"redirectUri"`
-	Scopes           string `json:"scopes"`
-	UsePKCE          bool   `json:"usePkce"`
-	Provider         string `json:"provider"`
+	Enabled      bool   `json:"enabled"`
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret,omitempty"`
+	AuthURL      string `json:"authUrl"`
+	TokenURL     string `json:"tokenUrl"`
+	RedirectURI  string `json:"redirectUri"`
+	Scopes       string `json:"scopes"`
+	UsePKCE      bool   `json:"usePkce"`
+	Provider     string `json:"provider"`
 }
 
 type OAuthToken struct {
@@ -39,11 +39,11 @@ type OAuthToken struct {
 }
 
 type OAuthFlow struct {
-	config      OAuthConfig
-	tokenStore  *OAuthTokenStore
-	httpClient  *http.Client
-	mu          sync.Mutex
-	pending     map[string]*pendingRequest
+	config     OAuthConfig
+	tokenStore *OAuthTokenStore
+	httpClient *http.Client
+	mu         sync.Mutex
+	pending    map[string]*pendingRequest
 }
 
 type pendingRequest struct {

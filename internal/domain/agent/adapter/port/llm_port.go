@@ -37,8 +37,8 @@ type ToolCall struct {
 }
 
 type StreamDelta struct {
-	Type    string // text | thought | tool_call_partial
-	Text    string
+	Type     string // text | thought | tool_call_partial
+	Text     string
 	ToolCall *ToolCall
 }
 

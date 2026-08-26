@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	MaxStreamBytes     = 8 * 1024 * 1024
+	MaxStreamBytes       = 8 * 1024 * 1024
 	DefaultFlushInterval = 100 * time.Millisecond
 	MinFlushBytes        = 4096
 )
@@ -114,20 +114,20 @@ func (b *ByteBudget) Reset() {
 }
 
 type SSEStreamWriter struct {
-	w           http.ResponseWriter
-	flusher     http.Flusher
-	budget      *ByteBudget
-	slicer      *UTF8SafeSlicer
-	seq         atomic.Uint64
-	lastFlush   time.Time
-	pendingBuf  []byte
+	w            http.ResponseWriter
+	flusher      http.Flusher
+	budget       *ByteBudget
+	slicer       *UTF8SafeSlicer
+	seq          atomic.Uint64
+	lastFlush    time.Time
+	pendingBuf   []byte
 	pendingCount int
-	mu          sync.Mutex
+	mu           sync.Mutex
 }
 
 func NewSSEStreamWriter(w http.ResponseWriter, flusher http.Flusher) *SSEStreamWriter {
 	return &SSEStreamWriter{
-		w:      w,
+		w:       w,
 		flusher: flusher,
 		budget:  NewByteBudget(MaxStreamBytes),
 		slicer:  &UTF8SafeSlicer{},

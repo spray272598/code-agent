@@ -253,7 +253,7 @@ func TestVerifyPrompt(t *testing.T) {
 
 func TestAgentsMdDiscovery(t *testing.T) {
 	dir := t.TempDir()
-	err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Test Instructions\nFollow these rules."), 0644)
+	err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Test Instructions\nFollow these rules."), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}

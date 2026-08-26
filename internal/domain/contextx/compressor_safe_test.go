@@ -33,7 +33,7 @@ func TestSafeSplitNormalNoTools(t *testing.T) {
 		{"target small → last msg", 1, 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := SelectSafeSplit(history, tc.targetTokens)
+			got := SelectSafeSplit(history, tc.targetTokens, 0)
 			if got != tc.wantCut {
 				t.Errorf("SelectSafeSplit(target=%d) = %d, want %d", tc.targetTokens, got, tc.wantCut)
 			}
@@ -48,7 +48,7 @@ func TestSafeSplitSnapsOnToolResult(t *testing.T) {
 	history := []map[string]any{
 		{"role": "user", "content": "query"},
 		{"role": "assistant", "content": "Action: read_file(path=/a/b.go)"}, // tool request
-		{"role": "tool", "content": "file content result"},                    // tool result
+		{"role": "tool", "content": "file content result"},                  // tool result
 		{"role": "user", "content": "follow up"},
 		{"role": "assistant", "content": "normal reply"},
 	}
@@ -61,7 +61,7 @@ func TestSafeSplitSnapsOnToolResult(t *testing.T) {
 		t.Fatalf("calculation error: target=%d should be <= %d", target, tokens34+estimateMsg(history[2]))
 	}
 
-	got := SelectSafeSplit(history, target)
+	got := SelectSafeSplit(history, target, 0)
 
 	if got < 0 || got >= len(history) {
 		t.Fatalf("cut=%d out of range [0,%d)", got, len(history))
@@ -89,7 +89,7 @@ func TestSafeSplitSnapsOnToolRequestBoundary(t *testing.T) {
 		{"role": "assistant", "content": "normal response"},
 		{"role": "user", "content": "msg2"},
 		{"role": "assistant", "content": "Action: search_code(q=foo)"}, // tool request
-		{"role": "tool", "content": "search result lines"},                 // tool result
+		{"role": "tool", "content": "search result lines"},             // tool result
 		{"role": "user", "content": "msg5"},
 		{"role": "assistant", "content": "msg6"},
 	}
@@ -99,7 +99,7 @@ func TestSafeSplitSnapsOnToolRequestBoundary(t *testing.T) {
 	tailSum := estimateMsg(history[6]) + estimateMsg(history[5])
 	target := tailSum + 1
 
-	got := SelectSafeSplit(history, target)
+	got := SelectSafeSplit(history, target, 0)
 
 	if got > 3 {
 		t.Errorf("cut=%d splits tool pair; expected <= 3 to keep request(at 3)+result(at 4) together", got)
@@ -116,9 +116,9 @@ func TestSafeSplitMultipleConsecutiveToolResults(t *testing.T) {
 	history := []map[string]any{
 		{"role": "user", "content": "query"},
 		{"role": "assistant", "content": "tool_calls: [call1, call2, call3]"}, // tool request
-		{"role": "tool", "content": "result one"},                              // tool result 1
-		{"role": "tool", "content": "result two"},                              // tool result 2
-		{"role": "tool", "content": "result three"},                            // tool result 3
+		{"role": "tool", "content": "result one"},                             // tool result 1
+		{"role": "tool", "content": "result two"},                             // tool result 2
+		{"role": "tool", "content": "result three"},                           // tool result 3
 		{"role": "user", "content": "follow up"},
 		{"role": "assistant", "content": "final reply"},
 	}
@@ -128,7 +128,7 @@ func TestSafeSplitMultipleConsecutiveToolResults(t *testing.T) {
 	tailSum := estimateMsg(history[6]) + estimateMsg(history[5])
 	target := tailSum + 1
 
-	got := SelectSafeSplit(history, target)
+	got := SelectSafeSplit(history, target, 0)
 
 	if got > 1 {
 		t.Errorf("cut=%d does not include all tool results + request; expected <= 1", got)
@@ -149,7 +149,7 @@ func TestSafeSplitMixedMessages(t *testing.T) {
 		{"role": "assistant", "content": "a1 normal"},
 		{"role": "user", "content": "u2"},
 		{"role": "assistant", "content": "Action: grep(pattern=foo)"}, // tool request
-		{"role": "tool", "content": "grep output lines"},                // tool result
+		{"role": "tool", "content": "grep output lines"},              // tool result
 		{"role": "user", "content": "u3"},
 		{"role": "assistant", "content": "a3 normal"},
 		{"role": "user", "content": "u4"},
@@ -164,7 +164,7 @@ func TestSafeSplitMixedMessages(t *testing.T) {
 	}
 	target := tailSum + 1
 
-	got := SelectSafeSplit(history, target)
+	got := SelectSafeSplit(history, target, 0)
 
 	if got > 3 {
 		t.Errorf("cut=%d splits tool pair (request@3, result@4); expected <= 3", got)
@@ -187,14 +187,14 @@ func TestSafeSplitAllTools(t *testing.T) {
 	}
 
 	// Large targetTokens → all in recent, cut = 0
-	got := SelectSafeSplit(history, 10000)
+	got := SelectSafeSplit(history, 10000, 0)
 	if got != 0 {
 		t.Errorf("all tools, large target: got cut=%d, want 0", got)
 	}
 
 	// Small targetTokens → only last pair
 	lastPairTokens := estimateMsg(history[4]) + estimateMsg(history[5])
-	got = SelectSafeSplit(history, lastPairTokens)
+	got = SelectSafeSplit(history, lastPairTokens, 0)
 	if got < 0 || got > len(history) {
 		t.Errorf("cut=%d out of range", got)
 	}
@@ -215,11 +215,11 @@ func TestSafeSplitAllTools(t *testing.T) {
 
 // TestSafeSplitEmpty verifies empty input handling.
 func TestSafeSplitEmpty(t *testing.T) {
-	got := SelectSafeSplit(nil, 100)
+	got := SelectSafeSplit(nil, 100, 0)
 	if got != 0 {
 		t.Errorf("nil history: got %d, want 0", got)
 	}
-	got = SelectSafeSplit([]map[string]any{}, 100)
+	got = SelectSafeSplit([]map[string]any{}, 100, 0)
 	if got != 0 {
 		t.Errorf("empty history: got %d, want 0", got)
 	}
@@ -230,8 +230,8 @@ func TestSafeSplitEmpty(t *testing.T) {
 func TestSafeSplitToolRequestAtStart(t *testing.T) {
 	history := []map[string]any{
 		{"role": "assistant", "content": "Action: read_file(x)"}, // index 0: tool request
-		{"role": "tool", "content": "result"},                     // index 1: tool result
-		{"role": "user", "content": "u"},                          // index 2
+		{"role": "tool", "content": "result"},                    // index 1: tool result
+		{"role": "user", "content": "u"},                         // index 2
 	}
 
 	// Compute targetTokens so the cut lands on tool result (index 1).
@@ -243,7 +243,7 @@ func TestSafeSplitToolRequestAtStart(t *testing.T) {
 		t.Fatalf("calculation error: target=%d > %d", target, t2+t1)
 	}
 
-	got := SelectSafeSplit(history, target)
+	got := SelectSafeSplit(history, target, 0)
 
 	if got != 0 {
 		t.Errorf("expected cut=0 (tool request at start), got %d", got)

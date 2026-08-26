@@ -47,14 +47,14 @@ type AdaptiveCircuitBreaker struct {
 	denialHistory map[string][]denialRecord
 
 	// Risk assessment data sources (set by Guard on initialization)
-	getMode        func() SandboxMode
-	getRiskLevel   func(sessionID string) BehaviorRisk
-	getInjection   func(sessionID string) (totalDetections int)
+	getMode      func() SandboxMode
+	getRiskLevel func(sessionID string) BehaviorRisk
+	getInjection func(sessionID string) (totalDetections int)
 
 	// Decay parameters
-	decayDuration  time.Duration
-	minThreshold   int
-	maxThreshold   int
+	decayDuration time.Duration
+	minThreshold  int
+	maxThreshold  int
 }
 
 type denialRecord struct {
@@ -67,10 +67,10 @@ type denialRecord struct {
 func NewAdaptiveCircuitBreaker() *AdaptiveCircuitBreaker {
 	return &AdaptiveCircuitBreaker{
 		baseThresholds: map[RiskLevel]int{
-			RiskNormal:    5,
-			RiskElevated:  4,
-			RiskHigh:      3,
-			RiskCritical:  2,
+			RiskNormal:   5,
+			RiskElevated: 4,
+			RiskHigh:     3,
+			RiskCritical: 2,
 		},
 		sessionThresholds: make(map[string]int),
 		denialHistory:     make(map[string][]denialRecord),
@@ -243,13 +243,13 @@ func (acb *AdaptiveCircuitBreaker) GetSessionStats(sessionID string) CircuitBrea
 	}
 
 	return CircuitBreakerStats{
-		SessionID:      sessionID,
-		Threshold:      threshold,
-		CurrentCount:   len(history),
+		SessionID:       sessionID,
+		Threshold:       threshold,
+		CurrentCount:    len(history),
 		DenialsLast5Min: denialsLast5Min,
-		Blocked:        len(history) >= threshold,
-		LastDenialAt:   lastDenialTime(history),
-		ActiveRisks:    acb.computeRiskBreakdownLocked(sessionID),
+		Blocked:         len(history) >= threshold,
+		LastDenialAt:    lastDenialTime(history),
+		ActiveRisks:     acb.computeRiskBreakdownLocked(sessionID),
 	}
 }
 
@@ -311,13 +311,13 @@ func lastDenialTime(history []denialRecord) time.Time {
 
 // CircuitBreakerStats provides a snapshot of the circuit breaker state.
 type CircuitBreakerStats struct {
-	SessionID       string   `json:"sessionId"`
-	Threshold       int      `json:"threshold"`
-	CurrentCount    int      `json:"currentCount"`
-	DenialsLast5Min  int      `json:"denialsLast5Min"`
-	Blocked         bool     `json:"blocked"`
+	SessionID       string    `json:"sessionId"`
+	Threshold       int       `json:"threshold"`
+	CurrentCount    int       `json:"currentCount"`
+	DenialsLast5Min int       `json:"denialsLast5Min"`
+	Blocked         bool      `json:"blocked"`
 	LastDenialAt    time.Time `json:"lastDenialAt,omitempty"`
-	ActiveRisks     []string `json:"activeRisks,omitempty"`
+	ActiveRisks     []string  `json:"activeRisks,omitempty"`
 }
 
 // CleanupExpiredSessions removes sessions with no denials for the decay duration.

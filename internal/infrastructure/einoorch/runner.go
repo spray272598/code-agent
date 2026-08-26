@@ -25,8 +25,8 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/eval"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/intent"
-	"github.com/spray272598/code-agent/internal/domain/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
+	"github.com/spray272598/code-agent/internal/domain/model"
 	"github.com/spray272598/code-agent/internal/domain/orchestration"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
@@ -171,6 +171,7 @@ func (r *Runner) SetSkills(s *skill.Service) {
 		r.prompt.SetSkills(s)
 	}
 }
+
 func (r *Runner) SetMemory(m *memory.Service) {
 	r.mem = m
 	if r.prompt != nil {
@@ -185,6 +186,7 @@ func (r *Runner) SetSpecService(s SpecProvider) {
 		r.prompt.SetSpecService(s)
 	}
 }
+
 func (r *Runner) SetCompressorLLM(summarizer *contextx.Summarizer) {
 	if r.compressor != nil && summarizer != nil {
 		r.compressor.SetSummarizer(summarizer)
@@ -422,10 +424,12 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		topologyNote = "single-agent (no router)"
 	}
 
-	publish(&engine.Event{Type: engine.EventThought, SubType: "router",
+	publish(&engine.Event{
+		Type: engine.EventThought, SubType: "router",
 		Content: fmt.Sprintf("topology: %s | %s | intent=%s source=%s",
 			topologyMode.String(), topologyNote, ir.Intent.String(), ir.Source),
-		Timestamp: nowMs()})
+		Timestamp: nowMs(),
+	})
 
 	// --- Evaluation: record topology selection ---
 	if r.evalCollector != nil {
@@ -438,15 +442,19 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 
 	// --- Route to the appropriate agent topology ---
 	if r.Multi != nil && topologyMode == orchestration.ModeDeepAgent {
-		publish(&engine.Event{Type: engine.EventThought, SubType: "router",
-			Content: "router: selected DeepAgent topology for: " + truncate(ir.CleanInput, 60),
-			Timestamp: nowMs()})
+		publish(&engine.Event{
+			Type: engine.EventThought, SubType: "router",
+			Content:   "router: selected DeepAgent topology for: " + truncate(ir.CleanInput, 60),
+			Timestamp: nowMs(),
+		})
 		return r.Multi.RunDeep(ctx, session, ir.CleanInput, publish, opts)
 	}
 	if r.Multi != nil && topologyMode == orchestration.ModeTeams {
-		publish(&engine.Event{Type: engine.EventThought, SubType: "router",
-			Content: "router: selected Teams topology for: " + truncate(ir.CleanInput, 60),
-			Timestamp: nowMs()})
+		publish(&engine.Event{
+			Type: engine.EventThought, SubType: "router",
+			Content:   "router: selected Teams topology for: " + truncate(ir.CleanInput, 60),
+			Timestamp: nowMs(),
+		})
 		return r.Multi.RunParallel(ctx, session, ir.CleanInput, publish, opts)
 	}
 
@@ -747,9 +755,9 @@ func (r *Runner) loadAndCompress(ctx context.Context, session *sessmodel.Session
 		}
 
 		opts := contextx.CompressOptions{
-			Ctx:           ctx,
-			PriorSummary:  prior,
-			UseSummary:    forceCompact || len(full) > 16,
+			Ctx:            ctx,
+			PriorSummary:   prior,
+			UseSummary:     forceCompact || len(full) > 16,
 			SkipEnrichment: !forceCompact && len(full) <= 16,
 		}
 		enriched, cr := r.ctxIntegrator.Prepare(userInput, full, opts)

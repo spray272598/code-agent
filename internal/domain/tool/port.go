@@ -199,8 +199,8 @@ func parseVersion(v string) []int {
 }
 
 type ToolDependency struct {
-	Name    string
-	Version string
+	Name     string
+	Version  string
 	Required bool
 }
 
@@ -253,10 +253,10 @@ type ToolComposition struct {
 }
 
 type CompositionStep struct {
-	ToolName    string
-	Args        map[string]any
-	DependsOn   []int
-	Condition   string
+	ToolName  string
+	Args      map[string]any
+	DependsOn []int
+	Condition string
 }
 
 func (c ToolComposition) Validate() error {
@@ -289,10 +289,12 @@ const (
 	TaskCancelled = "cancelled"
 )
 
-var ErrInvalidComposition = errors.New("invalid tool composition: dependency references are out of order")
-var ErrCircularDependency = errors.New("circular tool dependency detected")
-var ErrTaskNotFound = errors.New("background task not found")
-var ErrTaskNotCancellable = errors.New("task cannot be cancelled in current state")
+var (
+	ErrInvalidComposition = errors.New("invalid tool composition: dependency references are out of order")
+	ErrCircularDependency = errors.New("circular tool dependency detected")
+	ErrTaskNotFound       = errors.New("background task not found")
+	ErrTaskNotCancellable = errors.New("task cannot be cancelled in current state")
+)
 
 // Registry is the minimal interface expected by external tool registration
 // helpers (e.g. sshtool.RegisterAll). MapRegistry satisfies this.

@@ -17,16 +17,16 @@ const (
 )
 
 type SessionSummary struct {
-	mu            sync.RWMutex
-	titles        map[string]string
-	refreshWater  map[string]int
+	mu             sync.RWMutex
+	titles         map[string]string
+	refreshWater   map[string]int
 	completionMark map[string]bool
 }
 
 func NewSessionSummary() *SessionSummary {
 	return &SessionSummary{
-		titles:        make(map[string]string),
-		refreshWater:  make(map[string]int),
+		titles:         make(map[string]string),
+		refreshWater:   make(map[string]int),
 		completionMark: make(map[string]bool),
 	}
 }
@@ -128,8 +128,8 @@ func truncateTitle(title string) string {
 }
 
 type TitleGenerator struct {
-	summary    *SessionSummary
-	memSvc     *Service
+	summary *SessionSummary
+	memSvc  *Service
 }
 
 func NewTitleGenerator(summary *SessionSummary, memSvc *Service) *TitleGenerator {
@@ -151,7 +151,7 @@ func (tg *TitleGenerator) Update(ctx context.Context, sessionID, userID, project
 				_ = tg.memSvc.Save(ctx, &memport.MemoryItem{
 					UserID: userID, ProjectID: projectID,
 					Scope: memport.ScopeProject, Category: "session_title",
-					Content: fmt.Sprintf("Session %s: %s", sessionID, newTitle),
+					Content:    fmt.Sprintf("Session %s: %s", sessionID, newTitle),
 					Importance: 30, Source: "title_gen",
 				})
 			}

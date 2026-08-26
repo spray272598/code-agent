@@ -19,10 +19,10 @@ import (
 // ownership. The bootstrap layer builds the factory and hands it to the
 // application layer via dependency injection.
 type UserFactory struct {
-	mu      sync.RWMutex
-	byUser  map[string]*Manager
-	build   func(userID string) *Manager
-	metric  FactoryMetric // optional observability hook
+	mu     sync.RWMutex
+	byUser map[string]*Manager
+	build  func(userID string) *Manager
+	metric FactoryMetric // optional observability hook
 }
 
 // FactoryMetric captures the per-user create/reuse events so audit/observability

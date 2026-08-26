@@ -128,11 +128,11 @@ type LLMConfig struct {
 
 // ModelRouteConfig is the YAML/Env representation of a model route.
 type ModelRouteConfig struct {
-	MatchIntent string  `yaml:"match_intent"` // normal | deep | team | default
-	Provider    string  `yaml:"provider"`
-	Model       string  `yaml:"model"`
-	APIBase     string  `yaml:"api_base"`
-	APIKey      string  `yaml:"api_key"`
+	MatchIntent  string  `yaml:"match_intent"` // normal | deep | team | default
+	Provider     string  `yaml:"provider"`
+	Model        string  `yaml:"model"`
+	APIBase      string  `yaml:"api_base"`
+	APIKey       string  `yaml:"api_key"`
 	CostPer1kIn  float64 `yaml:"cost_per_1k_in"`
 	CostPer1kOut float64 `yaml:"cost_per_1k_out"`
 }
@@ -208,8 +208,8 @@ type RateLimitConfig struct {
 }
 
 type TokenQuotaConfig struct {
-	Enabled        bool `yaml:"enabled"`
-	PerUserPerDay  int  `yaml:"per_user_per_day"`
+	Enabled       bool `yaml:"enabled"`
+	PerUserPerDay int  `yaml:"per_user_per_day"`
 }
 
 type StorageConfig struct {
@@ -235,7 +235,7 @@ type SecurityConfig struct {
 	DefaultConfirmWrite bool     `yaml:"default_confirm_write"`
 	// SandboxMode selects the enforcement tier: "workspace" (default),
 	// "readonly", or "strict". Mirrors Grok Build's kernel-enforced sandbox.
-	SandboxMode         string `yaml:"sandbox_mode"`
+	SandboxMode string `yaml:"sandbox_mode"`
 	// CORSOrigins allowlist; empty = same-origin only (no ACAO). Use ["*"] only for local demos.
 	CORSOrigins []string `yaml:"cors_origins"`
 	// MaxBodyBytes request body limit (default 2MiB)
@@ -251,7 +251,7 @@ type MCPConfig struct {
 
 type SkillsConfig struct {
 	Enabled   bool   `yaml:"enabled"`
-	Dir       string `yaml:"dir"`       // installed/local skills root
+	Dir       string `yaml:"dir"`        // installed/local skills root
 	MarketDir string `yaml:"market_dir"` // marketplace catalog root (browse-only)
 }
 
@@ -305,8 +305,8 @@ func Default() *Config {
 			Name: "Code-Agent", MaxSteps: 20, TimeoutSec: 180,
 			TokenBudget: 32000, WorkspaceRoot: "./workspace",
 			// Primary: CloudWeGo Eino ReAct. Falls back to native when mock/no API key.
-			Orchestrator: "eino",
-			EinoStream:   false,
+			Orchestrator:          "eino",
+			EinoStream:            false,
 			CompactThresholdRatio: 0.8,
 		},
 		LLM: LLMConfig{UseMock: true, Model: "deepseek-ai/DeepSeek-V3"},
@@ -334,9 +334,9 @@ func Default() *Config {
 		Logging:  LoggingConfig{Level: "info"},
 		Teams:    TeamsConfig{Enabled: true, File: "./teams/default.yaml"},
 		SubAgent: SubAgentConfig{Enabled: true, MaxConcurrent: 3, DefaultSteps: 8},
-		Host: HostConfig{Mode: "server", PreferHost: false},
-		Vector: VectorConfig{Provider: "mem", Collection: "codeagent"},
-		OTLP: OTLPConfig{Enabled: false, Endpoint: "localhost:4318", Insecure: true, Service: "code-agent"},
+		Host:     HostConfig{Mode: "server", PreferHost: false},
+		Vector:   VectorConfig{Provider: "mem", Collection: "codeagent"},
+		OTLP:     OTLPConfig{Enabled: false, Endpoint: "localhost:4318", Insecure: true, Service: "code-agent"},
 		Auth: AuthConfig{
 			VerificationURI:       "http://localhost:3000/devices/verify",
 			DeviceCodeTTLSec:      300,

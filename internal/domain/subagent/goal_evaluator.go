@@ -170,18 +170,18 @@ type GoalEvaluator interface {
 
 // LLMGoalEvaluator implements GoalEvaluator using an LLM.
 type LLMGoalEvaluator struct {
-	LLM        port.ILLMPort
-	Model      string
-	MaxTokens  int
+	LLM         port.ILLMPort
+	Model       string
+	MaxTokens   int
 	Temperature float64
 }
 
 // NewLLMGoalEvaluator creates a new LLM-based goal evaluator.
 func NewLLMGoalEvaluator(llm port.ILLMPort) *LLMGoalEvaluator {
 	return &LLMGoalEvaluator{
-		LLM:        llm,
-		Model:      "",
-		MaxTokens:  1024,
+		LLM:         llm,
+		Model:       "",
+		MaxTokens:   1024,
 		Temperature: 0.0,
 	}
 }

@@ -28,11 +28,13 @@ func (t *ApplyPatchTool) Description() string {
 	return "Apply a unified diff to one or more files. Args: patch (string, unified diff text). " +
 		"More robust than write_file for targeted edits. Paths are sandbox-checked."
 }
+
 func (t *ApplyPatchTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"patch": map[string]any{"type": "string", "description": "unified diff; supports one or more file sections"},
 	}, "required": []string{"patch"}}
 }
+
 func (t *ApplyPatchTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	patch, _ := args["patch"].(string)
 	if strings.TrimSpace(patch) == "" {
@@ -80,8 +82,10 @@ type hunk struct {
 	added                                  []bool   // true if line is added (+), false if context/removed
 }
 
-var reFileDiff = regexp.MustCompile(`(?m)^diff --git a/(.+?) b/(.+)$`)
-var reNewFile = regexp.MustCompile(`(?m)^new file`)
+var (
+	reFileDiff = regexp.MustCompile(`(?m)^diff --git a/(.+?) b/(.+)$`)
+	reNewFile  = regexp.MustCompile(`(?m)^new file`)
+)
 
 func parseUnifiedDiff(patch string) ([]patchFile, error) {
 	scanner := bufio.NewScanner(strings.NewReader(patch))
@@ -261,12 +265,14 @@ func (t *LintTool) Description() string {
 	return "Run static analysis on a path or file. Args: path? (default workspace root), strict?(bool). " +
 		"Prefers golangci-lint, falls back to `go vet`."
 }
+
 func (t *LintTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"path":   map[string]any{"type": "string", "description": "file or dir; default workspace root"},
 		"strict": map[string]any{"type": "boolean", "description": "treat warnings as errors"},
 	}, "required": []string{}}
 }
+
 func (t *LintTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	root := t.ws.EffectiveRoot(tool.SessionIDFrom(ctx))
 	p, _ := args["path"].(string)
@@ -297,12 +303,14 @@ func (t *CodecovTool) Description() string {
 	return "Run tests with coverage and report a summary + optional min threshold. " +
 		"Args: path?(default ./...), min?(float 0-100, fail below)."
 }
+
 func (t *CodecovTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"path": map[string]any{"type": "string"},
 		"min":  map[string]any{"type": "number", "description": "minimum coverage percent"},
 	}, "required": []string{}}
 }
+
 func (t *CodecovTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	root := t.ws.EffectiveRoot(tool.SessionIDFrom(ctx))
 	p, _ := args["path"].(string)
@@ -348,8 +356,8 @@ type WebSearcher interface {
 
 // WebResult is a single search hit.
 type WebResult struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Title   string `json:"title"`
+	URL     string `json:"url"`
 	Snippet string `json:"snippet"`
 }
 
@@ -384,7 +392,7 @@ func (s *HTTPWebSearcher) Search(ctx context.Context, query string, max int) ([]
 }
 
 type WebSearchTool struct {
-	ws   *Workspace
+	ws       *Workspace
 	searcher WebSearcher
 }
 
@@ -398,12 +406,14 @@ func (t *WebSearchTool) Name() string { return "web_search" }
 func (t *WebSearchTool) Description() string {
 	return "Search the web for current info (docs, APIs, errors). Args: query, max?(int, default 5)"
 }
+
 func (t *WebSearchTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"query": map[string]any{"type": "string"},
 		"max":   map[string]any{"type": "integer"},
 	}, "required": []string{"query"}}
 }
+
 func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (tool.Result, error) {
 	q, _ := args["query"].(string)
 	if strings.TrimSpace(q) == "" {

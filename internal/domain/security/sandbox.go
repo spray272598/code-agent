@@ -22,15 +22,15 @@ type platformSandbox interface {
 }
 
 type OSLevelSandbox struct {
-	mu       sync.Mutex
-	active   bool
-	profile  *ProfileConfig
-	workspace string
+	mu         sync.Mutex
+	active     bool
+	profile    *ProfileConfig
+	workspace  string
 	denyEngine *DenyEngine
-	audit    *AuditLogger
-	platform string
-	applied  bool
-	impl     platformSandbox
+	audit      *AuditLogger
+	platform   string
+	applied    bool
+	impl       platformSandbox
 }
 
 func NewOSLevelSandbox(audit *AuditLogger) *OSLevelSandbox {
@@ -219,19 +219,19 @@ type SandboxError struct {
 func (e *SandboxError) Error() string { return "sandbox: " + e.Msg }
 
 type SandboxManager struct {
-	mu          sync.RWMutex
-	enforcers   map[string]*OSLevelSandbox
+	mu           sync.RWMutex
+	enforcers    map[string]*OSLevelSandbox
 	configLoader *ConfigLoader
-	workspace   string
-	audit       *AuditLogger
+	workspace    string
+	audit        *AuditLogger
 }
 
 func NewSandboxManager(workspace string, configLoader *ConfigLoader, audit *AuditLogger) *SandboxManager {
 	return &SandboxManager{
-		enforcers:   make(map[string]*OSLevelSandbox),
+		enforcers:    make(map[string]*OSLevelSandbox),
 		configLoader: configLoader,
-		workspace:   workspace,
-		audit:       audit,
+		workspace:    workspace,
+		audit:        audit,
 	}
 }
 

@@ -12,10 +12,10 @@ import (
 
 // MemoryCoreRepo in-memory store with inverted index + importance/LRU eviction.
 type MemoryCoreRepo struct {
-	mu      sync.RWMutex
-	seq     atomic.Int64
-	data    []memItem
-	index   map[string]map[int64]struct{} // token -> set of ids
+	mu       sync.RWMutex
+	seq      atomic.Int64
+	data     []memItem
+	index    map[string]map[int64]struct{} // token -> set of ids
 	maxItems int
 }
 

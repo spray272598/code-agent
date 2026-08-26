@@ -23,6 +23,7 @@ func (t *ExecTool) Name() string { return "ssh_exec" }
 func (t *ExecTool) Description() string {
 	return "Execute a shell command on a remote SSH server. Args: connection (required, name of SSH connection), command (required), timeout_ms (optional, default 60000)"
 }
+
 func (t *ExecTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"connection": map[string]any{"type": "string", "description": "SSH connection name"},
@@ -66,6 +67,7 @@ func (t *ReadFileTool) Name() string { return "ssh_read_file" }
 func (t *ReadFileTool) Description() string {
 	return "Read a file from a remote SSH server via SFTP. Args: connection (required), path (required)"
 }
+
 func (t *ReadFileTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"connection": map[string]any{"type": "string"},
@@ -98,6 +100,7 @@ func (t *WriteFileTool) Name() string { return "ssh_write_file" }
 func (t *WriteFileTool) Description() string {
 	return "Write content to a file on a remote SSH server via SFTP. Args: connection (required), path (required), content (required)"
 }
+
 func (t *WriteFileTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"connection": map[string]any{"type": "string"},
@@ -131,6 +134,7 @@ func (t *ListDirTool) Name() string { return "ssh_list_dir" }
 func (t *ListDirTool) Description() string {
 	return "List directory contents on a remote SSH server via SFTP. Args: connection (required), path (required)"
 }
+
 func (t *ListDirTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"connection": map[string]any{"type": "string"},
@@ -178,7 +182,7 @@ func (t *TerminalTool) Description() string {
 
 func (t *TerminalTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"action":    map[string]any{"type": "string", "description": "open|send|read|run|resize|close"},
+		"action":     map[string]any{"type": "string", "description": "open|send|read|run|resize|close"},
 		"connection": map[string]any{"type": "string", "description": "SSH connection name (open/run)"},
 		"session_id": map[string]any{"type": "string", "description": "Terminal session id from open (send/read/resize/close)"},
 		"data":       map[string]any{"type": "string", "description": "Raw input to send (send)"},

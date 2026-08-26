@@ -34,10 +34,10 @@ func TestIsSafeToolName(t *testing.T) {
 
 func TestFirstSafeCandidate(t *testing.T) {
 	tests := []struct {
-		name        string
-		candidates  []string
-		def         string
-		wantResult  string
+		name       string
+		candidates []string
+		def        string
+		wantResult string
 	}{
 		{
 			name:       "picks first safe candidate",

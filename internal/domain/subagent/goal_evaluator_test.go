@@ -93,7 +93,7 @@ func TestGoalEvaluatorVerdictValidation(t *testing.T) {
 
 func TestValidBlockerKey(t *testing.T) {
 	tests := []struct {
-		key  string
+		key   string
 		valid bool
 	}{
 		{"missing_access", true},
@@ -188,9 +188,9 @@ func TestParseGoalEvaluatorVerdict(t *testing.T) {
 
 func TestExtractJSON(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input string
-		want string
+		want  string
 	}{
 		{
 			name:  "plain JSON",
@@ -335,28 +335,28 @@ func TestContainsAny(t *testing.T) {
 
 func TestGoalEvaluatorJSONSchema(t *testing.T) {
 	schema := EvaluatorJSONSchema()
-	
+
 	if schema["type"] != "object" {
 		t.Error("schema type should be object")
 	}
-	
+
 	props, ok := schema["properties"].(map[string]interface{})
 	if !ok {
 		t.Fatal("properties should be a map")
 	}
-	
+
 	decision, ok := props["decision"].(map[string]interface{})
 	if !ok {
 		t.Fatal("decision property should be a map")
 	}
-	
+
 	enum, ok := decision["enum"].([]string)
 	if !ok {
 		t.Fatal("decision enum should be []string")
 	}
-	
+
 	expected := map[string]bool{
-		"continue":          false,
+		"continue":           false,
 		"candidate_complete": false,
 		"blocked":            false,
 	}

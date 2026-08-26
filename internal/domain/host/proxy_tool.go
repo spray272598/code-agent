@@ -29,6 +29,7 @@ func (t *ProxyTool) Description() string {
 	}
 	return t.ToolName + " (host proxy)"
 }
+
 func (t *ProxyTool) InputSchema() map[string]any {
 	if t.Schema != nil {
 		return t.Schema

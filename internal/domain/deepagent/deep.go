@@ -59,7 +59,7 @@ func ComparisonDoc() string {
 	return strings.TrimSpace(`
 # DeepAgent vs Teams
 
-| Dimension | DeepAgent (` + "`/deep`" + `) | Teams (` + "`/team`" + ` / parallel) |
+| Dimension | DeepAgent (`+"`/deep`"+`) | Teams (`+"`/team`"+` / parallel) |
 |-----------|-------------------------------|--------------------------------------|
 | Topology | **Sequential** Plan → Act → Reflect | **Parallel** explore ‖ verify → merge |
 | Strength | Depth, consistency, fewer race edits | Breadth, multi-angle coverage |

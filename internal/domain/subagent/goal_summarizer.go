@@ -58,12 +58,12 @@ func (r GoalSummarizerFailReason) String() string {
 
 // SummarizerInput holds the inputs for running the goal summarizer.
 type SummarizerInput struct {
-	Objective    string
-	Plan         *GoalPlan
-	WorkOutput   string
-	Attempt      int
-	ModelID      string
-	MaxChars     int
+	Objective  string
+	Plan       *GoalPlan
+	WorkOutput string
+	Attempt    int
+	ModelID    string
+	MaxChars   int
 }
 
 // GoalSummarizer is the interface for post-completion summarization.
@@ -73,8 +73,8 @@ type GoalSummarizer interface {
 
 // LLMSummarizer implements GoalSummarizer using an LLM.
 type LLMSummarizer struct {
-	LLM    port.ILLMPort
-	Model  string
+	LLM       port.ILLMPort
+	Model     string
 	MaxTokens int
 }
 

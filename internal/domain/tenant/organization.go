@@ -60,13 +60,13 @@ type Member struct {
 
 // Org represents an organization (tenant) with workspaces.
 type Org struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	OwnerID     string    `json:"ownerId"`
-	CreatedAt   time.Time `json:"createdAt"`
-	MaxWorkspaces int     `json:"maxWorkspaces"`
-	MaxMembers  int       `json:"maxMembers"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	OwnerID       string    `json:"ownerId"`
+	CreatedAt     time.Time `json:"createdAt"`
+	MaxWorkspaces int       `json:"maxWorkspaces"`
+	MaxMembers    int       `json:"maxMembers"`
 }
 
 // Workspace represents a scoped workspace within an organization.
@@ -82,11 +82,11 @@ type Workspace struct {
 
 // OrgManager manages organizations, members, and workspace access.
 type OrgManager struct {
-	mu          sync.RWMutex
-	orgs        map[string]*Org
-	members     map[string]map[string]*Member       // orgID -> userID -> Member
-	workspaces  map[string]map[string]*Workspace     // orgID -> workspaceID -> Workspace
-	access      map[string]map[string]WorkspaceAccess // orgID:workspaceID -> userID -> Access
+	mu         sync.RWMutex
+	orgs       map[string]*Org
+	members    map[string]map[string]*Member         // orgID -> userID -> Member
+	workspaces map[string]map[string]*Workspace      // orgID -> workspaceID -> Workspace
+	access     map[string]map[string]WorkspaceAccess // orgID:workspaceID -> userID -> Access
 }
 
 // NewOrgManager creates a new OrgManager.

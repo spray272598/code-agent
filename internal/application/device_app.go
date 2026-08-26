@@ -260,10 +260,10 @@ func normalizeUserCode(raw string) string {
 }
 
 var (
-	ErrDeviceNotFound         = errors.New("device authorization not found")
-	ErrDeviceExpired          = errors.New("device authorization expired")
-	ErrDeviceAlreadyApproved  = errors.New("device authorization already approved")
-	ErrDeviceCodeRequired     = errors.New("user_code required")
-	ErrDeviceUserRequired     = errors.New("authenticated user required")
-	ErrDeviceCodeUnavailable  = errors.New("failed to generate a unique user code")
+	ErrDeviceNotFound        = errors.New("device authorization not found")
+	ErrDeviceExpired         = errors.New("device authorization expired")
+	ErrDeviceAlreadyApproved = errors.New("device authorization already approved")
+	ErrDeviceCodeRequired    = errors.New("user_code required")
+	ErrDeviceUserRequired    = errors.New("authenticated user required")
+	ErrDeviceCodeUnavailable = errors.New("failed to generate a unique user code")
 )

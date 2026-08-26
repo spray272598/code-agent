@@ -181,8 +181,10 @@ func (l *Loader) loadTasks() []Task {
 	return tasks
 }
 
-var taskLineRe = regexp.MustCompile(`^\s*[-*]\s+\[([ xX→!])\]\s*(.+)$`)
-var taskNumberedRe = regexp.MustCompile(`^\s*(\d+)\.\s*(.+)$`)
+var (
+	taskLineRe     = regexp.MustCompile(`^\s*[-*]\s+\[([ xX→!])\]\s*(.+)$`)
+	taskNumberedRe = regexp.MustCompile(`^\s*(\d+)\.\s*(.+)$`)
+)
 
 func parseTaskLine(line string) (Task, bool) {
 	if m := taskLineRe.FindStringSubmatch(line); m != nil {

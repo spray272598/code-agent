@@ -11,7 +11,7 @@ const (
 	IdleHeartbeatInterval   = 30 * time.Second
 	ActiveHeartbeatInterval = 5 * time.Second
 	MaxMissedHeartbeats     = 3
-	DefaultSessionTimeout  = 30 * time.Minute
+	DefaultSessionTimeout   = 30 * time.Minute
 	HeartbeatCheckInterval  = 1 * time.Second
 )
 

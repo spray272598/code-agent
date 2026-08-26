@@ -34,7 +34,7 @@ type StructuredEvent struct {
 	Content   string          `json:"content,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 	Completed bool            `json:"completed,omitempty"`
-	Reasoning *ReasoningMeta   `json:"reasoning,omitempty"`
+	Reasoning *ReasoningMeta  `json:"reasoning,omitempty"`
 	Usage     *TokenUsage     `json:"usage,omitempty"`
 	Truncated bool            `json:"truncated,omitempty"`
 	Timestamp int64           `json:"timestamp"`

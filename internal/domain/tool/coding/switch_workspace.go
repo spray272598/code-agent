@@ -29,6 +29,7 @@ func (t *SwitchWorkspaceTool) Description() string {
 		"Use this when the user asks to work on a project outside the current workspace. " +
 		"Args: path (absolute directory path)"
 }
+
 func (t *SwitchWorkspaceTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",

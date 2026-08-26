@@ -14,10 +14,10 @@ type Client struct {
 	rdb     *redis.Client
 	enabled bool
 	// memory fallback rate limit
-	mu       sync.Mutex
-	hits     map[string][]time.Time
-	lastGC   time.Time
-	maxKeys  int
+	mu      sync.Mutex
+	hits    map[string][]time.Time
+	lastGC  time.Time
+	maxKeys int
 }
 
 func New(cfg config.RedisConfig) *Client {

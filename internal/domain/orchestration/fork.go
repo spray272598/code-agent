@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"time"
 
-	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
+	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 )
 
 // ForkRequest describes how to fork a session for a sub-agent.

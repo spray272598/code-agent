@@ -25,9 +25,9 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/intent"
 	"github.com/spray272598/code-agent/internal/domain/kms"
 	"github.com/spray272598/code-agent/internal/domain/llmkey"
-	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 	mcpcache "github.com/spray272598/code-agent/internal/domain/mcp/cache"
 	mcphealth "github.com/spray272598/code-agent/internal/domain/mcp/health"
+	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
@@ -43,48 +43,48 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
-	"github.com/spray272598/code-agent/internal/domain/worktree"
 	vectordomain "github.com/spray272598/code-agent/internal/domain/vector"
+	"github.com/spray272598/code-agent/internal/domain/worktree"
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
 	"github.com/spray272598/code-agent/internal/infrastructure/einoorch"
+	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
 	"github.com/spray272598/code-agent/internal/infrastructure/llm"
 	inframcp "github.com/spray272598/code-agent/internal/infrastructure/mcp"
 	"github.com/spray272598/code-agent/internal/infrastructure/mysql"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
+	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
+	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
+	"github.com/spray272598/code-agent/internal/infrastructure/storage"
 	vectorinfra "github.com/spray272598/code-agent/internal/infrastructure/vector"
 	"github.com/spray272598/code-agent/internal/infrastructure/vector/qdrant"
-	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
-	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
-	"github.com/spray272598/code-agent/internal/infrastructure/storage"
-	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
 	"github.com/spray272598/code-agent/internal/observability"
 	wshub "github.com/spray272598/code-agent/internal/trigger/ws"
 )
 
 type App struct {
-	Config  *config.Config
-	Chat    *application.ChatApp
-	Tools   *tool.MapRegistry
-	Perm    *security.Guard
-	Redis   *redisx.Client
-	MCP     *inframcp.UserFactory
-	MCPHealth *mcphealth.MCPHealthMonitor
-	Skills  *skill.Service
-	Memory  *memory.Service
-	Hooks   *hook.Bus
-	KMS     kms.CryptoSealer
-	LLMKey  llmkey.Repository
-	Blobs   blob.Store
-	Index   *codeindex.Index
-	CKStore checkpoint.Store
-	Runs    *checkpoint.RunRegistry
-	Host    host.Executor
-	Bridge  *host.Bridge
-	HostHub *wshub.HostHub
+	Config         *config.Config
+	Chat           *application.ChatApp
+	Tools          *tool.MapRegistry
+	Perm           *security.Guard
+	Redis          *redisx.Client
+	MCP            *inframcp.UserFactory
+	MCPHealth      *mcphealth.MCPHealthMonitor
+	Skills         *skill.Service
+	Memory         *memory.Service
+	Hooks          *hook.Bus
+	KMS            kms.CryptoSealer
+	LLMKey         llmkey.Repository
+	Blobs          blob.Store
+	Index          *codeindex.Index
+	CKStore        checkpoint.Store
+	Runs           *checkpoint.RunRegistry
+	Host           host.Executor
+	Bridge         *host.Bridge
+	HostHub        *wshub.HostHub
 	SSHTerminalHub *wshub.SSHTerminalHub
-	SSHPool *sshinfra.Pool
+	SSHPool        *sshinfra.Pool
 
 	// Account repos (Sprint 1.1)
 	UserRepo    auth.UserRepository
@@ -565,11 +565,11 @@ func Build(cfg *config.Config) (*App, error) {
 		er := einoorch.NewRunner(einoorch.Config{
 			APIKey: cfg.LLM.APIKey, APIBase: cfg.LLM.APIBase, Model: cfg.LLM.Model,
 			MaxSteps: cfg.Agent.MaxSteps, UseStream: cfg.Agent.EinoStream,
-			TokenBudget:        cfg.Agent.TokenBudget,
+			TokenBudget:           cfg.Agent.TokenBudget,
 			CompactThresholdRatio: cfg.Agent.CompactThresholdRatio,
-			GraphResume:        cfg.EinoGraphResumeEnabled(),
-			GraphCheckPointDir: cfg.Agent.EinoCheckPointDir,
-			Router:             cfg.LLM.ToRoutes(),
+			GraphResume:           cfg.EinoGraphResumeEnabled(),
+			GraphCheckPointDir:    cfg.Agent.EinoCheckPointDir,
+			Router:                cfg.LLM.ToRoutes(),
 		}, reg, perm, sessionRepo, messageRepo)
 		er.SetHooks(hooks)
 		er.SetAudit(auditRepo)
@@ -688,12 +688,12 @@ func Build(cfg *config.Config) (*App, error) {
 		Blobs: blobStore, Index: codeIdx, CKStore: ckStore, Runs: runReg,
 		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
 		SSHTerminalHub: sshTermHub,
-		SSHPool:       sshPool,
-		UserRepo:    userRepo,
-		DeviceRepo:  deviceRepo,
-		RefreshRepo: refreshRepo,
-		KMS:    sealer,
-		LLMKey: llmKeyRepo,
+		SSHPool:        sshPool,
+		UserRepo:       userRepo,
+		DeviceRepo:     deviceRepo,
+		RefreshRepo:    refreshRepo,
+		KMS:            sealer,
+		LLMKey:         llmKeyRepo,
 		Closer: func() {
 			if mcpHealth != nil {
 				mcpHealth.Stop()

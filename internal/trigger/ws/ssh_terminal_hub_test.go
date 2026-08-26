@@ -28,12 +28,14 @@ func (f *fakeTerm) OpenTerminal(connName string, cols, rows int) (*sshmodel.Term
 	f.mu.Unlock()
 	return &sshmodel.TerminalSession{ID: "s1", ConnectionID: connName, Cols: cols, Rows: rows, Active: true}, nil
 }
+
 func (f *fakeTerm) Write(sessionID string, data []byte) error {
 	f.mu.Lock()
 	f.writes = append(f.writes, string(data))
 	f.mu.Unlock()
 	return nil
 }
+
 func (f *fakeTerm) Read(sessionID string, clear bool) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -43,12 +45,14 @@ func (f *fakeTerm) Read(sessionID string, clear bool) (string, error) {
 	}
 	return out, nil
 }
+
 func (f *fakeTerm) Close(sessionID string) error {
 	f.mu.Lock()
 	f.closed = true
 	f.mu.Unlock()
 	return nil
 }
+
 func (f *fakeTerm) Resize(sessionID string, cols, rows int) error {
 	f.mu.Lock()
 	f.resized = true

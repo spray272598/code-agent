@@ -23,9 +23,9 @@ type JournalStorage interface {
 // FileJournalStorage stores journal entries as append-only JSONL files.
 // This is the default backend, suitable for single-instance deployments.
 type FileJournalStorage struct {
-	mu    sync.Mutex
-	path  string
-	file  *os.File
+	mu   sync.Mutex
+	path string
+	file *os.File
 }
 
 // NewFileJournalStorage opens (or creates) a journal file at dir/runID/journal.jsonl.
