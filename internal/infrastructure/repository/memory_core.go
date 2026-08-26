@@ -45,11 +45,13 @@ func (r *MemoryCoreRepo) Save(_ context.Context, item *memport.MemoryItem) error
 	if item.ID == 0 {
 		item.ID = r.seq.Add(1)
 	}
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = time.Now()
+	}
 	cp := *item
 	if len(cp.Embedding) > 0 {
 		cp.Embedding = append([]float32(nil), cp.Embedding...)
 	}
-	// upsert
 	for i := range r.data {
 		if r.data[i].item.ID == cp.ID {
 			r.unindex(r.data[i].item)

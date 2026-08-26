@@ -600,20 +600,23 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		}
 
 		// Active token budget via TokenManager
-		if l.tokens != nil && l.tokens.Pressure(totalTokens, messages, sys) {
-			publish(&Event{Type: EventCompress, Content: fmt.Sprintf("token budget pressure used=%d budget=%d", totalTokens, l.tokenBudget), Timestamp: now()})
-			if l.hooks != nil {
-				l.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
-			}
-			if len(messages) > 10 {
-				messages = l.tokens.TrimMessages(messages, 6)
-				telemetry.IncCompress()
-				auditLog("compress", "", "mid_loop_budget", "ok", 0)
-			}
-			if l.tokens.Exhausted(totalTokens) {
-				final = fmt.Sprintf("stopped: token budget exhausted (used=%d budget=%d)", totalTokens, l.tokenBudget)
-				publish(&Event{Type: EventError, SubType: "budget", Content: final, Completed: true, Timestamp: now()})
-				break
+		if l.tokens != nil {
+			if l.tokens.Pressure(totalTokens, messages, sys) {
+				bs := l.tokens.State()
+				publish(&Event{Type: EventCompress, Content: fmt.Sprintf("token budget pressure used=%d budget=%d remaining=%d reserved=%d", totalTokens, l.tokenBudget, bs.Remaining, bs.Reserved), Timestamp: now()})
+				if l.hooks != nil {
+					l.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
+				}
+				if len(messages) > 10 {
+					messages = l.tokens.TrimMessages(messages, 6)
+					telemetry.IncCompress()
+					auditLog("compress", "", "mid_loop_budget", "ok", 0)
+				}
+				if l.tokens.Exhausted(totalTokens) {
+					final = fmt.Sprintf("stopped: token budget exhausted (used=%d budget=%d)", totalTokens, l.tokenBudget)
+					publish(&Event{Type: EventError, SubType: "budget", Content: final, Completed: true, Timestamp: now()})
+					break
+				}
 			}
 		}
 
@@ -714,8 +717,40 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		saveMsg(am)
 
 		// Batch tools: parallel read-only, serial writes; validate + skill + hook abort + permission
+		// Reserve estimated budget for tool batch results before parallel execution
+		var reservedEstimate int
+		if l.tokens != nil && len(calls) > 0 {
+			reservedEstimate = len(calls) * 200
+			if reservedEstimate > l.tokens.Remaining() {
+				reservedEstimate = l.tokens.Remaining()
+			}
+			if reservedEstimate > 0 {
+				if !l.tokens.Reserve(reservedEstimate) {
+					bs := l.tokens.State()
+					telemetry.Warnf("budget reserve failed: want=%d remaining=%d used=%d", reservedEstimate, bs.Remaining, bs.Used)
+					reservedEstimate = 0
+				} else if l.tokens.IsDeterministic() {
+					telemetry.Warnf("deterministic mode: budget reserved=%d step=%d", reservedEstimate, step)
+				}
+			}
+		}
+
 		outcomes, p, needBreak := l.runToolCalls(ctx, session, step, calls, skillForTools, opts.AutoApprove, publish, auditLog)
 		totalTools += len(outcomes)
+
+		// Commit or release reserved budget after tool execution
+		if l.tokens != nil && reservedEstimate > 0 {
+			actualTokens := 0
+			for _, o := range outcomes {
+				actualTokens += common.EstimateTokens(o.text)
+			}
+			if actualTokens > reservedEstimate {
+				actualTokens = reservedEstimate
+			}
+			l.tokens.Commit(actualTokens)
+			l.tokens.Release(reservedEstimate - actualTokens)
+		}
+
 		if p != nil {
 			pending = p
 			final = fmt.Sprintf("CONFIRM required tool=%s id=%s", p.Tool, p.ID)
@@ -756,6 +791,14 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		publish(&Event{Type: EventError, SubType: "persist", Content: "session save failed: " + err.Error(), Timestamp: now()})
 	}
 	telemetry.AddTokens(int64(totalTokens))
+	if l.tokens != nil {
+		bs := l.tokens.State()
+		telemetry.TraceEvent(map[string]any{
+			"event": "budget_state", "session": session.ID,
+			"total": bs.Total, "spent": bs.Spent, "reserved": bs.Reserved,
+			"used": bs.Used, "remaining": bs.Remaining,
+		})
+	}
 	if droppedEvents > 0 {
 		telemetry.Warnf("session=%s sse dropped_events=%d", session.ID, droppedEvents)
 	}

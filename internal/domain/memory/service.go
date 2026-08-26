@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +81,9 @@ func (s *Service) Save(ctx context.Context, item *memport.MemoryItem) error {
 	if item.Source == "" {
 		item.Source = "manual"
 	}
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = time.Now()
+	}
 	// compute embedding when enabled and not already present
 	if s.embedder != nil && len(item.Embedding) == 0 {
 		if vecs, err := s.embedder.Embed(ctx, []string{item.Content}); err == nil && len(vecs) == 1 {
@@ -105,6 +108,48 @@ func (s *Service) Save(ctx context.Context, item *memport.MemoryItem) error {
 // dupThreshold is the cosine similarity above which a new memory is treated as
 // an update to an existing one (not a new memory).
 const dupThreshold = 0.88
+
+const (
+	halfLifeDays = 30.0
+
+	sourceWeightGlobal   = 1.2
+	sourceWeightProject  = 1.0
+	sourceWeightSession  = 0.8
+	sourceWeightDefault  = 1.0
+)
+
+var evergreenSources = map[string]bool{
+	"global":  true,
+	"project": true,
+}
+
+func SourceWeight(source string) float64 {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "global":
+		return sourceWeightGlobal
+	case "project":
+		return sourceWeightProject
+	case "session":
+		return sourceWeightSession
+	default:
+		return sourceWeightDefault
+	}
+}
+
+func IsEvergreen(source string) bool {
+	return evergreenSources[strings.ToLower(strings.TrimSpace(source))]
+}
+
+func TemporalDecay(createdAt time.Time, source string) float64 {
+	if IsEvergreen(source) || createdAt.IsZero() {
+		return 1.0
+	}
+	ageDays := time.Since(createdAt).Hours() / 24.0
+	if ageDays < 0 {
+		ageDays = 0
+	}
+	return math.Exp(-math.Ln2 / halfLifeDays * ageDays)
+}
 
 // findDuplicate returns the ID of the most semantically similar existing memory
 // (within user+project scope) when its similarity exceeds dupThreshold.
@@ -213,21 +258,32 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 	if limit <= 0 {
 		limit = 10
 	}
-	// no embedder → pure keyword search (unchanged behavior)
+
+	expandedQuery := ExpandQuery(query)
+
 	if s.embedder == nil || query == "" {
-		return s.repo.Search(ctx, userID, projectID, query, limit)
+		keywordQuery := expandedQuery
+		if keywordQuery == "" {
+			keywordQuery = query
+		}
+		return s.repo.Search(ctx, userID, projectID, keywordQuery, limit)
 	}
 
-	// hybrid: keyword recall (candidates) + vector-indexed rerank
 	qvecs, err := s.embedder.Embed(ctx, []string{query})
 	if err != nil || len(qvecs) != 1 || len(qvecs[0]) == 0 {
-		// embedding unavailable → graceful keyword fallback
-		return s.repo.Search(ctx, userID, projectID, query, limit)
+		keywordQuery := expandedQuery
+		if keywordQuery == "" {
+			keywordQuery = query
+		}
+		return s.repo.Search(ctx, userID, projectID, keywordQuery, limit)
 	}
 	qvec := qvecs[0]
 
-	// recall a wider candidate set via keyword, then list all as fallback
-	candidates, err := s.repo.Search(ctx, userID, projectID, query, limit*4)
+	recallQuery := expandedQuery
+	if recallQuery == "" {
+		recallQuery = query
+	}
+	candidates, err := s.repo.Search(ctx, userID, projectID, recallQuery, limit*4)
 	if err != nil {
 		candidates, _ = s.repo.List(ctx, userID, projectID, "", limit*4)
 	}
@@ -235,9 +291,6 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		return nil, nil
 	}
 
-	// Sprint 1.10: ask the backend to rank with a strict user_id payload filter.
-	// The vector index CANNOT return cross-tenant results; the score is only
-	// used to boost the existing candidate ordering.
 	var idOrder map[int64]float32
 	if s.vector != nil && s.collection != "" && userID != "" {
 		filter := map[string]any{"user_id": userID}
@@ -254,9 +307,6 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		}
 	}
 
-	// score = cosine similarity (+ small importance boost); vector hits add a
-	// tiny boost so an item that the backend says is relevant floats to the top,
-	// even if its in-process cosine is slightly lower than another's.
 	type scored struct {
 		it    memport.MemoryItem
 		score float64
@@ -267,17 +317,27 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		if len(it.Embedding) > 0 {
 			sim = memport.CosineSimilarity(qvec, it.Embedding)
 		}
-		score := sim + float64(it.Importance)/10000
+		decay := TemporalDecay(it.CreatedAt, it.Source)
+		sw := SourceWeight(it.Source)
+		score := sim * decay * sw + float64(it.Importance)/10000
 		if v, ok := idOrder[it.ID]; ok {
-			score += float64(v) + 0.001 // backend hint dominates in-process score
+			score += float64(v) + 0.001
 		}
 		ranked = append(ranked, scored{it: it, score: score})
 	}
-	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+
+	items := make([]memport.MemoryItem, len(ranked))
+	scores := make([]float64, len(ranked))
+	for i, r := range ranked {
+		items[i] = r.it
+		scores[i] = r.score
+	}
+
+	mmrItems := MMRReRank(items, scores, defaultMMRLambda)
 
 	out := make([]memport.MemoryItem, 0, limit)
-	for i := 0; i < len(ranked) && i < limit; i++ {
-		out = append(out, ranked[i].it)
+	for i := 0; i < len(mmrItems) && i < limit; i++ {
+		out = append(out, mmrItems[i])
 	}
 	return out, nil
 }

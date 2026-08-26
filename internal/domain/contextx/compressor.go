@@ -144,6 +144,15 @@ func (c *Compressor) CompressLevels(ctx context.Context, history []map[string]an
 	if cut < 0 {
 		cut = 0
 	}
+	// Use SelectSafeSplit to find a boundary that does not split tool pairs.
+	// Estimate the token count of the intended "recent" section as target.
+	if cut < len(trimmed) {
+		recentTokens := estimateHistory(trimmed[cut:])
+		safeCut := SelectSafeSplit(trimmed, recentTokens)
+		if safeCut < cut {
+			cut = safeCut
+		}
+	}
 	middle := trimmed[:cut]
 	recent := trimmed[cut:]
 
@@ -308,6 +317,79 @@ func copyMap(m map[string]any) map[string]any {
 
 func containsErr(s string) bool {
 	return len(s) > 0 && (containsFold(s, "error") || containsFold(s, "失败") || containsFold(s, "failed") || containsFold(s, "DENIED"))
+}
+
+// isToolRequest checks if a message is an assistant tool-request message.
+// Tool requests are assistant messages that contain tool indicators such as
+// "Action:", "tool_calls", or JSON-like content starting with '{'.
+func isToolRequest(m map[string]any) bool {
+	role, _ := m["role"].(string)
+	if role != "assistant" {
+		return false
+	}
+	content, _ := m["content"].(string)
+	if strings.Contains(content, "Action:") ||
+		strings.Contains(content, "tool_calls") ||
+		strings.Contains(content, "{") {
+		return true
+	}
+	return false
+}
+
+// isToolResult checks if a message is a tool result (role == "tool").
+func isToolResult(m map[string]any) bool {
+	role, _ := m["role"].(string)
+	return role == "tool"
+}
+
+// findToolGroupEnd finds the end index of consecutive tool messages starting
+// from startIdx. Returns the index after the last consecutive tool message.
+func findToolGroupEnd(history []map[string]any, startIdx int) int {
+	i := startIdx
+	for i < len(history) && isToolResult(history[i]) {
+		i++
+	}
+	return i
+}
+
+// SelectSafeSplit finds a safe split index for chat history that does not
+// cut through tool-request/tool-result pairs.
+//
+// It accumulates token estimates from the newest to the oldest message until
+// reaching targetTokens. If the resulting cut point lands on a tool-result
+// message, it snaps backward to include all consecutive tool-result messages
+// and the preceding assistant tool-request message in the same partition.
+//
+// Returns the safe split index where history[:idx] is the older "middle"
+// section and history[idx:] is the newer "recent" section.
+func SelectSafeSplit(history []map[string]any, targetTokens int) int {
+	if len(history) == 0 {
+		return 0
+	}
+
+	tokens := 0
+	cut := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		content, _ := history[i]["content"].(string)
+		tokens += common.EstimateTokens(content)
+		if tokens >= targetTokens {
+			cut = i
+			break
+		}
+	}
+
+	if cut < len(history) && isToolResult(history[cut]) {
+		snapCut := cut
+		for snapCut > 0 && isToolResult(history[snapCut-1]) {
+			snapCut--
+		}
+		if snapCut > 0 && isToolRequest(history[snapCut-1]) {
+			snapCut--
+		}
+		cut = snapCut
+	}
+
+	return cut
 }
 
 func containsFold(s, sub string) bool {

@@ -26,6 +26,8 @@ type MemoryItem struct {
 	Content    string
 	Importance int
 	Source     string
+	// CreatedAt is the creation time for temporal decay scoring.
+	CreatedAt time.Time
 	// Embedding is the semantic vector of Content (nil when not computed).
 	Embedding []float32
 }
