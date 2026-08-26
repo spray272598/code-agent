@@ -26,6 +26,8 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/kms"
 	"github.com/spray272598/code-agent/internal/domain/llmkey"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
+	mcpcache "github.com/spray272598/code-agent/internal/domain/mcp/cache"
+	mcphealth "github.com/spray272598/code-agent/internal/domain/mcp/health"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
@@ -67,6 +69,7 @@ type App struct {
 	Perm    *security.Guard
 	Redis   *redisx.Client
 	MCP     *inframcp.UserFactory
+	MCPHealth *mcphealth.MCPHealthMonitor
 	Skills  *skill.Service
 	Memory  *memory.Service
 	Hooks   *hook.Bus
@@ -372,7 +375,18 @@ func Build(cfg *config.Config) (*App, error) {
 	if cfg.Skills.Enabled {
 		skillSvc = skill.NewService(cfg.Skills.Dir)
 		skillSvc.SetMarketplace(skill.NewLocalMarketplace(cfg.Skills.MarketDir))
-		log.Printf("[bootstrap] skills=%d dir=%s market=%s\n", len(skillSvc.List()), skillSvc.RootDir(), cfg.Skills.MarketDir)
+		// Register skill tools into the agent registry so skills become
+		// directly invocable as tools (e.g. skill_deploy, skill_review).
+		if skillTools := skillSvc.BuildSkillTools(); len(skillTools) > 0 {
+			for _, st := range skillTools {
+				reg.Register(st)
+			}
+			log.Printf("[bootstrap] skills=%d dir=%s market=%s tools_registered=%d\n",
+				len(skillSvc.List()), skillSvc.RootDir(), cfg.Skills.MarketDir, len(skillTools))
+		} else {
+			log.Printf("[bootstrap] skills=%d dir=%s market=%s\n",
+				len(skillSvc.List()), skillSvc.RootDir(), cfg.Skills.MarketDir)
+		}
 	}
 
 	// spec-driven development: load spec.md/tasks.md/checklist.md/CLAUDE.md from workspace root
@@ -453,15 +467,37 @@ func Build(cfg *config.Config) (*App, error) {
 	// authenticated /api/v1/mcp/servers endpoint.
 	var mcpFactory *inframcp.UserFactory
 	var mcpBridge *mcpsvc.ToolBridge
+	var mcpHealth *mcphealth.MCPHealthMonitor
 	if cfg.MCP.Enabled {
 		mcpFactory = inframcp.NewUserFactory(func(userID string) *inframcp.Manager {
 			return inframcp.NewUserManager(userID)
 		})
 		// system manager: bootstrap-loaded servers (cfg.MCP.ConfigFile, demo)
 		sysMgr := inframcp.NewUserManager("")
-		mcpBridge = mcpsvc.NewToolBridgeWithFactory(mcpFactory, reg)
+		// ToolCache with 30s TTL / 256 entries for deduplicating read-only MCP calls.
+		mcpCache := mcpcache.NewToolCache(30*time.Second, 256)
+		mcpBridge = mcpsvc.NewToolBridgeWithFactory(mcpFactory, reg).WithCache(mcpCache)
+		// Health monitor with background PING checks every 15s.
+		mcpHealth = mcphealth.NewMCPHealthMonitor(15*time.Second, func(ctx context.Context, name string) error {
+			mgr, err := mcpFactory.ForUserID("")
+			if err != nil {
+				return err
+			}
+			if mgr.IsOnline(name) {
+				return nil
+			}
+			return fmt.Errorf("server %s offline", name)
+		})
 		sysMgr.OnToolsChanged(func(defs []model.ToolDef) {
 			mcpBridge.ApplyDefs(defs)
+			// Update per-server tool counts for observability.
+			byServer := map[string]int{}
+			for _, d := range defs {
+				byServer[d.ServerName]++
+			}
+			for name, count := range byServer {
+				mcpHealth.UpdateToolCount(name, count)
+			}
 		})
 		// prime the cache with the system manager under the "" key so
 		// ForUserID("") returns the seeded one
@@ -480,6 +516,7 @@ func Build(cfg *config.Config) (*App, error) {
 						log.Printf("[bootstrap] mcp server %s: %v\n", sc.Name, err)
 					} else {
 						log.Printf("[bootstrap] mcp server loaded: %s (transport=%s)\n", sc.Name, sc.Transport)
+						mcpHealth.RegisterServer(sc)
 					}
 				}
 			}
@@ -487,15 +524,27 @@ func Build(cfg *config.Config) (*App, error) {
 		// auto-load demo if present
 		if demo := findMCPDemo(); demo != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err := sysMgr.AddOrUpdate(ctx, model.ServerConfig{
+			demoCfg := model.ServerConfig{
 				Name: "demo", Transport: "stdio", Command: demo, Enabled: true, TimeoutSec: 30,
-			})
+			}
+			err := sysMgr.AddOrUpdate(ctx, demoCfg)
 			cancel()
 			if err != nil {
 				log.Printf("[bootstrap] mcp demo: %v\n", err)
 			} else {
 				log.Printf("[bootstrap] mcp demo loaded from %s\n", demo)
+				mcpHealth.RegisterServer(demoCfg)
 			}
+		}
+		// Start MCP health monitoring in background.
+		go mcpHealth.Start(context.Background())
+		log.Printf("[bootstrap] mcp health monitor started (interval=15s)\n")
+		// Wire MCP health into host heartbeat for combined monitoring.
+		if hostBridge.HeartbeatManager() != nil {
+			hostBridge.SetMCPHealthReporter(mcpHealth)
+			log.Printf("[bootstrap] mcp health → heartbeat integration active\n")
+		} else {
+			log.Printf("[bootstrap] mcp health → heartbeat skipped (no heartbeat manager)\n")
 		}
 	}
 
@@ -634,7 +683,7 @@ func Build(cfg *config.Config) (*App, error) {
 
 	return &App{
 		Config: cfg, Chat: chat, Tools: reg, Perm: perm, Redis: rdb,
-		MCP: mcpFactory, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
+		MCP: mcpFactory, MCPHealth: mcpHealth, Skills: skillSvc, Memory: memSvc, Hooks: hooks,
 		Blobs: blobStore, Index: codeIdx, CKStore: ckStore, Runs: runReg,
 		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
 		SSHTerminalHub: sshTermHub,
@@ -645,6 +694,9 @@ func Build(cfg *config.Config) (*App, error) {
 		KMS:    sealer,
 		LLMKey: llmKeyRepo,
 		Closer: func() {
+			if mcpHealth != nil {
+				mcpHealth.Stop()
+			}
 			if mcpFactory != nil {
 				mcpFactory.ResetAll()
 			}

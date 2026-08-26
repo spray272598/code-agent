@@ -60,6 +60,28 @@ func DefaultHeartbeatConfig() HeartbeatConfig {
 	}
 }
 
+// MCPServerInfo represents the health of a single MCP server.
+type MCPServerInfo struct {
+	Name      string `json:"name"`
+	Online    bool   `json:"online"`
+	Transport string `json:"transport"`
+	ToolCount int    `json:"toolCount"`
+	LastError string `json:"lastError,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	State     string `json:"state"`
+}
+
+// CombinedHealth aggregates host and MCP health for unified reporting.
+type CombinedHealth struct {
+	Timestamp    time.Time        `json:"timestamp"`
+	Hosts        []HealthInfo     `json:"hosts"`
+	MCPServers   []MCPServerInfo  `json:"mcpServers"`
+	OnlineHosts  int              `json:"onlineHosts"`
+	OfflineHosts int              `json:"offlineHosts"`
+	OnlineMCPs   int              `json:"onlineMcpServers"`
+	OfflineMCPs  int              `json:"offlineMcpServers"`
+}
+
 // HeartbeatManager monitors host agent connections and manages reconnections.
 type HeartbeatManager struct {
 	mu        sync.RWMutex
@@ -69,6 +91,16 @@ type HeartbeatManager struct {
 	failures  map[string]int
 	cancel    context.CancelFunc
 	connected bool
+	// mcpHealth optionally provides MCP server health for combined reporting.
+	mcpHealth MCPHealthReporter
+	// mcpSnapshot caches the latest MCP health snapshot for reporting.
+	mcpSnapshot []MCPServerInfo
+}
+
+// MCPHealthReporter is a minimal interface for querying MCP server health.
+// Using map[string]any avoids cross-package type coupling.
+type MCPHealthReporter interface {
+	SnapshotMap() []map[string]any
 }
 
 // NewHeartbeatManager creates a new heartbeat manager.
@@ -79,6 +111,14 @@ func NewHeartbeatManager(bridge *Bridge, cfg HeartbeatConfig) *HeartbeatManager 
 		statuses: make(map[string]*HealthInfo),
 		failures: make(map[string]int),
 	}
+}
+
+// SetMCPHealthReporter injects an optional MCP health reporter for combined
+// host + MCP health snapshots.
+func (hm *HeartbeatManager) SetMCPHealthReporter(r MCPHealthReporter) {
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+	hm.mcpHealth = r
 }
 
 // Start begins the heartbeat monitoring loop.
@@ -161,7 +201,8 @@ func (hm *HeartbeatManager) loop(ctx context.Context) {
 	}
 }
 
-// checkAll checks the health of all connected host sessions.
+// checkAll checks the health of all connected host sessions and refreshes
+// the MCP health snapshot when an MCPHealthReporter is available.
 func (hm *HeartbeatManager) checkAll(ctx context.Context) {
 	sessions := hm.bridge.ListSessions()
 	now := time.Now()
@@ -193,6 +234,135 @@ func (hm *HeartbeatManager) checkAll(ctx context.Context) {
 	}
 
 	hm.cleanupStaleSessions(now)
+	hm.refreshMCPHealth()
+}
+
+// refreshMCPHealth fetches the latest MCP server health snapshot from the
+// registered MCPHealthReporter. Safe to call when no reporter is configured.
+func (hm *HeartbeatManager) refreshMCPHealth() {
+	hm.mu.RLock()
+	reporter := hm.mcpHealth
+	hm.mu.RUnlock()
+	if reporter == nil {
+		return
+	}
+	snap := reporter.SnapshotMap()
+	servers := make([]MCPServerInfo, 0, len(snap))
+	for _, raw := range snap {
+		srv := MCPServerInfo{
+			Name:      strVal(raw, "name"),
+			Online:    boolVal(raw, "online"),
+			Transport: strVal(raw, "transport"),
+			ToolCount: intVal(raw, "tool_count"),
+			LastError: strVal(raw, "last_error"),
+			Enabled:   boolVal(raw, "enabled"),
+			State:     strVal(raw, "state"),
+		}
+		servers = append(servers, srv)
+	}
+	hm.mu.Lock()
+	hm.mcpSnapshot = servers
+	hm.mu.Unlock()
+}
+
+// GetCombinedHealth returns a combined host + MCP health snapshot for unified
+// monitoring dashboards and status endpoints.
+func (hm *HeartbeatManager) GetCombinedHealth() CombinedHealth {
+	hm.mu.RLock()
+	defer hm.mu.RUnlock()
+
+	hosts := make([]HealthInfo, 0, len(hm.statuses))
+	onlineHosts, offlineHosts := 0, 0
+	for _, info := range hm.statuses {
+		hosts = append(hosts, *info)
+		if info.Status == HealthOnline || info.Status == HealthDegraded {
+			onlineHosts++
+		} else {
+			offlineHosts++
+		}
+	}
+
+	onlineMCPs, offlineMCPs := 0, 0
+	for _, s := range hm.mcpSnapshot {
+		if s.Online {
+			onlineMCPs++
+		} else {
+			offlineMCPs++
+		}
+	}
+
+	return CombinedHealth{
+		Timestamp:    time.Now(),
+		Hosts:        hosts,
+		MCPServers:   hm.mcpSnapshot,
+		OnlineHosts:  onlineHosts,
+		OfflineHosts: offlineHosts,
+		OnlineMCPs:   onlineMCPs,
+		OfflineMCPs:  offlineMCPs,
+	}
+}
+
+// MCPHealthSnapshot returns the cached MCP server health snapshot.
+func (hm *HeartbeatManager) MCPHealthSnapshot() []MCPServerInfo {
+	hm.mu.RLock()
+	defer hm.mu.RUnlock()
+	out := make([]MCPServerInfo, len(hm.mcpSnapshot))
+	copy(out, hm.mcpSnapshot)
+	return out
+}
+
+// FormatCombinedHealth returns a human-readable summary of combined health.
+func (hm *HeartbeatManager) FormatCombinedHealth() string {
+	ch := hm.GetCombinedHealth()
+	var b []byte
+	b = append(b, []byte(fmt.Sprintf("[host] online=%d offline=%d | [mcp] online=%d offline=%d\n",
+		ch.OnlineHosts, ch.OfflineHosts, ch.OnlineMCPs, ch.OfflineMCPs))...)
+	for _, h := range ch.Hosts {
+		b = append(b, []byte(fmt.Sprintf("  host=%s status=%s rtt=%dms\n",
+			h.DeviceID, h.Status, h.LastPingRTT))...)
+	}
+	for _, s := range ch.MCPServers {
+		errInfo := ""
+		if s.LastError != "" {
+			errInfo = " err=" + s.LastError
+		}
+		b = append(b, []byte(fmt.Sprintf("  mcp=%s online=%v state=%s tools=%d%s\n",
+			s.Name, s.Online, s.State, s.ToolCount, errInfo))...)
+	}
+	return string(b)
+}
+
+// Helper functions to safely extract typed values from map[string]any.
+func strVal(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func boolVal(m map[string]any, key string) bool {
+	if v, ok := m[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return false
+}
+
+func intVal(m map[string]any, key string) int {
+	if v, ok := m[key]; ok {
+		switch n := v.(type) {
+		case int:
+			return n
+		case int64:
+			return int(n)
+		case float64:
+			return int(n)
+		}
+	}
+	return 0
 }
 
 // pingDevice sends a ping to a specific device.

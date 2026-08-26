@@ -25,6 +25,14 @@ func (DomainBridge) IncBlobOffload()    { Current().AddBlobOffload(1) }
 func (DomainBridge) IncCompress()       { Current().AddCompress(1) }
 func (DomainBridge) IncReflect()        { Current().AddReflect(1) }
 func (DomainBridge) AddTokens(n int64)  { Current().AddTokens(n) }
+func (DomainBridge) IncMCPCacheHit()    { Current().AddMCPCacheHits(1) }
+func (DomainBridge) IncMCPCacheMiss()   { Current().AddMCPCacheMisses(1) }
+func (DomainBridge) IncMCPToolSuccess() { Current().AddMCPToolSuccess(1) }
+func (DomainBridge) IncMCPToolError()   { Current().AddMCPToolErrors(1) }
+func (DomainBridge) IncCircuitBreakerStateTransition() { Current().AddCircuitBreakerTransitions(1) }
+func (DomainBridge) SetCircuitBreakerState(server, state string) {
+	Current().SetCircuitBreakerState(server, state)
+}
 func (DomainBridge) ObserveLLM(d time.Duration) {
 	Current().ObserveLLM(d)
 }

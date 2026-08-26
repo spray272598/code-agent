@@ -20,6 +20,14 @@ type Sink interface {
 	IncReflect()
 	AddTokens(n int64)
 
+	// MCP-specific counters
+	IncMCPCacheHit()
+	IncMCPCacheMiss()
+	IncMCPToolSuccess()
+	IncMCPToolError()
+	IncCircuitBreakerStateTransition()
+	SetCircuitBreakerState(server, state string)
+
 	ObserveLLM(d time.Duration)
 	ObserveTool(d time.Duration)
 
@@ -70,6 +78,12 @@ func IncBlobOffload()            { Current().IncBlobOffload() }
 func IncCompress()               { Current().IncCompress() }
 func IncReflect()                { Current().IncReflect() }
 func AddTokens(n int64)          { Current().AddTokens(n) }
+func IncMCPCacheHit()            { Current().IncMCPCacheHit() }
+func IncMCPCacheMiss()           { Current().IncMCPCacheMiss() }
+func IncMCPToolSuccess()         { Current().IncMCPToolSuccess() }
+func IncMCPToolError()           { Current().IncMCPToolError() }
+func IncCircuitBreakerStateTransition() { Current().IncCircuitBreakerStateTransition() }
+func SetCircuitBreakerState(server, state string) { Current().SetCircuitBreakerState(server, state) }
 func ObserveLLM(d time.Duration) { Current().ObserveLLM(d) }
 func ObserveTool(d time.Duration) {
 	Current().ObserveTool(d)
@@ -96,6 +110,12 @@ func (Nop) IncBlobOffload()                              {}
 func (Nop) IncCompress()                                 {}
 func (Nop) IncReflect()                                  {}
 func (Nop) AddTokens(int64)                              {}
+func (Nop) IncMCPCacheHit()                              {}
+func (Nop) IncMCPCacheMiss()                             {}
+func (Nop) IncMCPToolSuccess()                           {}
+func (Nop) IncMCPToolError()                             {}
+func (Nop) IncCircuitBreakerStateTransition()            {}
+func (Nop) SetCircuitBreakerState(server, state string)  {}
 func (Nop) ObserveLLM(time.Duration)                     {}
 func (Nop) ObserveTool(time.Duration)                    {}
 func (Nop) TraceEvent(map[string]any)                    {}

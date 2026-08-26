@@ -57,6 +57,15 @@ func (b *Bridge) HeartbeatManager() *HeartbeatManager {
 	return b.hbMgr
 }
 
+// SetMCPHealthReporter wires an MCP health reporter into the heartbeat
+// manager so combined host+MCP health snapshots are available via
+// HeartbeatManager.GetCombinedHealth().
+func (b *Bridge) SetMCPHealthReporter(r MCPHealthReporter) {
+	if b.hbMgr != nil {
+		b.hbMgr.SetMCPHealthReporter(r)
+	}
+}
+
 func (b *Bridge) Register(s *HostSession) {
 	b.mu.Lock()
 	b.sessions[s.DeviceID] = s

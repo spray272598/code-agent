@@ -18,6 +18,7 @@ import (
 	ub "github.com/cloudwego/eino/utils/callbacks"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
+	"github.com/spray272598/code-agent/internal/domain/eval"
 )
 
 // EventSink publishes engine events (SSE).
@@ -63,6 +64,11 @@ func (s *runStats) addUsage(u *model.TokenUsage) {
 
 // agentOptions builds compose callbacks that map Eino model/tool lifecycle → SSE events.
 func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
+	return agentOptionsWithEval(publish, stats, "", nil)
+}
+
+// agentOptionsWithEval builds compose callbacks with optional eval tracking.
+func agentOptionsWithEval(publish EventSink, stats *runStats, sessionID string, evalCollector *eval.Collector) agent.AgentOption {
 	if publish == nil {
 		publish = func(*engine.Event) {}
 	}
@@ -202,8 +208,13 @@ func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
 			if output != nil {
 				resp = output.Response
 			}
-			if looksError(resp) {
+			toolSuccess := !looksError(resp)
+			if !toolSuccess {
 				stats.toolErrs.Add(1)
+			}
+			// --- Evaluation: track tool result ---
+			if evalCollector != nil && sessionID != "" {
+				evalCollector.AddToolBreakdown(sessionID, name, toolSuccess)
 			}
 			// permission events
 			if stringsHasPrefix(resp, "CONFIRM") {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/spray272598/code-agent/internal/domain/audit"
+	"github.com/spray272598/code-agent/internal/domain/eval"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	domtool "github.com/spray272598/code-agent/internal/domain/tool"
 )
@@ -16,6 +17,7 @@ const (
 	ctxEventSink
 	ctxUserID
 	ctxCrossCut
+	ctxEvalCollector
 )
 
 // CrossCut holds optional domain services injected into GuardedTool (security + business).
@@ -33,6 +35,8 @@ type RunContext struct {
 	AutoApprove bool
 	Publish     EventSink
 	Cross       *CrossCut
+	// EvalCollector tracks per-session evaluation metrics.
+	EvalCollector *eval.Collector
 }
 
 // WithRunContext packs session, approve, user, events, cross-cuts into ctx.
@@ -51,6 +55,9 @@ func WithRunContext(ctx context.Context, rc RunContext) context.Context {
 			rc.Cross.UserID = rc.UserID
 		}
 		ctx = context.WithValue(ctx, ctxCrossCut, rc.Cross)
+	}
+	if rc.EvalCollector != nil {
+		ctx = context.WithValue(ctx, ctxEvalCollector, rc.EvalCollector)
 	}
 	return ctx
 }
@@ -78,6 +85,11 @@ func crossFrom(ctx context.Context) *CrossCut {
 func sinkFrom(ctx context.Context) EventSink {
 	s, _ := ctx.Value(ctxEventSink).(EventSink)
 	return s
+}
+
+func evalCollectorFrom(ctx context.Context) *eval.Collector {
+	c, _ := ctx.Value(ctxEvalCollector).(*eval.Collector)
+	return c
 }
 
 // WithSession puts permission context (compat helper).

@@ -1,5 +1,7 @@
 package skill
 
+import "errors"
+
 // Skill package metadata + body (SKILL.md).
 type Skill struct {
 	ID          string   `json:"id"`
@@ -15,7 +17,24 @@ type Skill struct {
 	Path        string   `json:"path,omitempty"`
 	Source      string   `json:"source,omitempty"` // "installed" | "market" | "draft"
 	Enabled     bool     `json:"enabled"`
+
+	// New fields (T4 enhancement):
+	ArgumentHint     string   `json:"argumentHint,omitempty"`     // e.g. "file path"
+	UserInvocable    *bool    `json:"userInvocable,omitempty"`   // allow /skill by user
+	DisableModelInv  *bool    `json:"disableModelInvoc,omitempty"` // block LLM invocation
+	Model            string   `json:"model,omitempty"`            // preferred LLM model
+	Effort           string   `json:"effort,omitempty"`           // low | medium | high
+	License          string   `json:"license,omitempty"`          // e.g. "MIT"
+	Compatibility    string   `json:"compatibility,omitempty"`    // required deps description
+	Metadata         map[string]string `json:"metadata,omitempty"` // arbitrary KV
 }
+
+// Errors returned by the skill system.
+var (
+	ErrSkillNotFound = errors.New("skill not found")
+	ErrSkillCycle    = errors.New("skill dependency cycle detected")
+	ErrInvalidVersion = errors.New("invalid skill version")
+)
 
 // SkillListing is a marketplace catalog entry (metadata only, decoupled from
 // whether it is installed locally). Used by the skill marketplace (3.2).

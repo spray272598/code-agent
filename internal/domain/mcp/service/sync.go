@@ -7,7 +7,9 @@ import (
 	"sync"
 
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
+	mcpcache "github.com/spray272598/code-agent/internal/domain/mcp/cache"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
+	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 )
 
@@ -21,6 +23,7 @@ type ToolBridge struct {
 	factory  mcpport.IUserMCPManagerFactory
 	registry *tool.MapRegistry
 	mcpNames map[string]bool
+	cache    *mcpcache.ToolCache
 }
 
 func NewToolBridge(manager mcpport.IMCPManagerPort, registry *tool.MapRegistry) *ToolBridge {
@@ -33,6 +36,13 @@ func NewToolBridge(manager mcpport.IMCPManagerPort, registry *tool.MapRegistry) 
 // MCPTool.Execute can resolve the right Manager for the authenticated tenant.
 func NewToolBridgeWithFactory(f mcpport.IUserMCPManagerFactory, registry *tool.MapRegistry) *ToolBridge {
 	return &ToolBridge{factory: f, registry: registry, mcpNames: map[string]bool{}}
+}
+
+// WithCache attaches a ToolCache to the bridge. Cacheable(def) is evaluated
+// at apply-time so the bridge only caches safe read-only tools.
+func (b *ToolBridge) WithCache(c *mcpcache.ToolCache) *ToolBridge {
+	b.cache = c
+	return b
 }
 
 // Sync replaces MCP tools in registry from manager.ListTools.
@@ -60,17 +70,19 @@ func (b *ToolBridge) apply(defs []model.ToolDef) {
 	}
 	b.mcpNames = map[string]bool{}
 	for _, d := range defs {
-		// Prefer factory resolution (per-user) when available; fall back to the
-		// system manager for tools the bootstrap registered before the factory
-		// existed (e.g. test setups that bypass bootstrap).
 		var mcpTool IToolResolver = directResolver{mgr: b.manager}
 		if b.factory != nil {
 			mcpTool = factoryResolver{f: b.factory}
 		}
-		b.registry.Register(NewMCPTool(d, mcpTool))
+		cacheable := mcpcache.Cacheable(d)
+		tool := NewMCPTool(d, mcpTool, b.cache, cacheable)
+		b.registry.Register(tool)
 		b.mcpNames[d.Name] = true
 	}
-	log.Printf("[mcp-bridge] synced %d tools\n", len(defs))
+	if b.cache != nil {
+		b.cache.Invalidate("")
+	}
+	log.Printf("[mcp-bridge] synced %d tools (cache=%v)\n", len(defs), b.cache != nil)
 }
 
 // IToolResolver abstracts where MCPTool.Execute obtains a Manager. The
@@ -94,12 +106,14 @@ func (f factoryResolver) Resolve(ctx context.Context) (mcpport.IMCPManagerPort, 
 
 // MCPTool adapts model.ToolDef to tool.ITool via the resolver.
 type MCPTool struct {
-	def     model.ToolDef
-	resolve IToolResolver
+	def        model.ToolDef
+	resolve    IToolResolver
+	cache      *mcpcache.ToolCache
+	cacheable  bool
 }
 
-func NewMCPTool(def model.ToolDef, resolve IToolResolver) *MCPTool {
-	return &MCPTool{def: def, resolve: resolve}
+func NewMCPTool(def model.ToolDef, resolve IToolResolver, cache *mcpcache.ToolCache, cacheable bool) *MCPTool {
+	return &MCPTool{def: def, resolve: resolve, cache: cache, cacheable: cacheable}
 }
 
 func (t *MCPTool) Name() string { return t.def.Name }
@@ -122,21 +136,37 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) (tool.Result
 	if args == nil {
 		args = map[string]any{}
 	}
-	// Schema pre-check when available (security: fail closed on bad shape)
 	if t.def.InputSchema != nil {
 		if err := tool.ValidateArgs(t.def.InputSchema, args); err != nil {
 			return tool.Result{Text: "mcp validation: " + err.Error(), IsError: true}, nil
 		}
 	}
+	serverName := t.def.ServerName
+
+	// Cache lookup for cacheable tools.
+	if t.cacheable && t.cache != nil {
+		if hit, ok := t.cache.Get(serverName, t.def.Name, args); ok {
+			telemetry.IncMCPCacheHit()
+			return tool.Result{Text: hit}, nil
+		}
+	}
+
 	mgr, err := t.resolve.Resolve(ctx)
 	if err != nil || mgr == nil {
 		return tool.Result{Text: "mcp manager unavailable: " + errString(err), IsError: true}, nil
 	}
-	// Manager routes by registered name (server__tool)
 	text, err := mgr.CallTool(ctx, t.def.Name, args)
 	if err != nil {
+		telemetry.IncMCPToolError()
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}
+
+	// Cache write for cacheable tools on success.
+	if t.cacheable && t.cache != nil {
+		t.cache.Put(serverName, t.def.Name, args, text)
+		telemetry.IncMCPCacheMiss()
+	}
+	telemetry.IncMCPToolSuccess()
 	return tool.Result{Text: text}, nil
 }
 

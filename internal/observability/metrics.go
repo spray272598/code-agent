@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -21,6 +22,14 @@ type CounterRegistry interface {
 	AddEmbeddingCalls(n int64)
 	AddEmbeddingErrors(n int64)
 	AddQuotaDeny(n int64)
+	// MCP-specific counters
+	AddMCPCacheHits(n int64)
+	AddMCPCacheMisses(n int64)
+	AddMCPToolSuccess(n int64)
+	AddMCPToolErrors(n int64)
+	AddCircuitBreakerTransitions(n int64)
+	// Per-server circuit breaker state
+	SetCircuitBreakerState(server, state string)
 	ObserveLLM(d time.Duration)
 	ObserveTool(d time.Duration)
 	Snapshot() map[string]any
@@ -42,6 +51,16 @@ type Metrics struct {
 	EmbeddingErrs  atomic.Int64
 	QuotaDeny      atomic.Int64
 
+	MCPCacheHits        atomic.Int64
+	MCPCacheMisses      atomic.Int64
+	MCPToolSuccesses    atomic.Int64
+	MCPToolErrors       atomic.Int64
+	CircuitBreakerTrans atomic.Int64
+
+	// cbStates tracks per-server circuit breaker current state for Prometheus gauges.
+	cbStatesMu sync.RWMutex
+	cbStates   map[string]string
+
 	LLMLatencySumMs  atomic.Int64
 	LLMLatencyCount  atomic.Int64
 	ToolLatencySumMs atomic.Int64
@@ -49,7 +68,11 @@ type Metrics struct {
 }
 
 // NewMetrics returns an empty metrics registry (useful in tests).
-func NewMetrics() *Metrics { return &Metrics{} }
+func NewMetrics() *Metrics {
+	return &Metrics{
+		cbStates: map[string]string{},
+	}
+}
 
 func (m *Metrics) AddChatTotal(n int64)      { m.ChatTotal.Add(n) }
 func (m *Metrics) AddChatErrors(n int64)     { m.ChatErrors.Add(n) }
@@ -64,6 +87,38 @@ func (m *Metrics) AddBlobOffload(n int64)    { m.BlobOffload.Add(n) }
 func (m *Metrics) AddEmbeddingCalls(n int64) { m.EmbeddingCalls.Add(n) }
 func (m *Metrics) AddEmbeddingErrors(n int64) { m.EmbeddingErrs.Add(n) }
 func (m *Metrics) AddQuotaDeny(n int64)       { m.QuotaDeny.Add(n) }
+func (m *Metrics) AddMCPCacheHits(n int64)    { m.MCPCacheHits.Add(n) }
+func (m *Metrics) AddMCPCacheMisses(n int64)  { m.MCPCacheMisses.Add(n) }
+func (m *Metrics) AddMCPToolSuccess(n int64)  { m.MCPToolSuccesses.Add(n) }
+func (m *Metrics) AddMCPToolErrors(n int64)   { m.MCPToolErrors.Add(n) }
+func (m *Metrics) AddCircuitBreakerTransitions(n int64) { m.CircuitBreakerTrans.Add(n) }
+
+// SetCircuitBreakerState records the current circuit breaker state for a
+// specific MCP server. This is used by Prometheus to expose per-server
+// circuit breaker state as a gauge metric.
+func (m *Metrics) SetCircuitBreakerState(server, state string) {
+	if m == nil {
+		return
+	}
+	m.cbStatesMu.Lock()
+	m.cbStates[server] = state
+	m.cbStatesMu.Unlock()
+}
+
+// CircuitBreakerStates returns a copy of the current per-server circuit
+// breaker states for Prometheus exposition.
+func (m *Metrics) CircuitBreakerStates() map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	m.cbStatesMu.RLock()
+	defer m.cbStatesMu.RUnlock()
+	out := make(map[string]string, len(m.cbStates))
+	for k, v := range m.cbStates {
+		out[k] = v
+	}
+	return out
+}
 
 func (m *Metrics) ObserveLLM(d time.Duration) {
 	if m == nil {
@@ -102,6 +157,9 @@ func (m *Metrics) Snapshot() map[string]any {
 		"compress_total": m.CompressTotal.Load(), "blob_offload_total": m.BlobOffload.Load(),
 		"embedding_calls": m.EmbeddingCalls.Load(), "embedding_errors": m.EmbeddingErrs.Load(),
 		"quota_deny_total": m.QuotaDeny.Load(),
+		"mcp_cache_hits": m.MCPCacheHits.Load(), "mcp_cache_misses": m.MCPCacheMisses.Load(),
+		"mcp_tool_success": m.MCPToolSuccesses.Load(), "mcp_tool_errors": m.MCPToolErrors.Load(),
+		"circuit_breaker_transitions": m.CircuitBreakerTrans.Load(),
 		"llm_latency_avg_ms": llmAvg, "llm_latency_count": llmN,
 		"tool_latency_avg_ms": toolAvg, "tool_latency_count": toolN,
 	}

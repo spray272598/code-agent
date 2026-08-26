@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/tool"
 )
 
 type Service struct {
@@ -332,20 +333,81 @@ func (s *Service) Compose(sk *Skill) []*Skill {
 	if sk == nil {
 		return nil
 	}
-	seen := map[string]bool{}
 	var out []*Skill
+	visiting := map[string]bool{}
+	visited := map[string]bool{}
+	var walk func(*Skill) bool
+	walk = func(cur *Skill) bool {
+		if cur == nil {
+			return false
+		}
+		if visiting[cur.ID] {
+			return true // cycle detected – stop recursion, already visiting
+		}
+		if visited[cur.ID] {
+			return false
+		}
+		visiting[cur.ID] = true
+		hasCycle := false
+		for _, dep := range cur.Depends {
+			if walk(s.Get(dep)) {
+				hasCycle = true
+			}
+		}
+		visiting[cur.ID] = false
+		visited[cur.ID] = true
+		out = append(out, cur)
+		return hasCycle
+	}
+	walk(sk)
+	return out
+}
+
+// ComposeWithCycleCheck returns the composed skill list plus a bool
+// indicating whether a cycle was detected.
+func (s *Service) ComposeWithCycleCheck(sk *Skill) ([]*Skill, bool) {
+	if sk == nil {
+		return nil, false
+	}
+	var out []*Skill
+	visiting := map[string]bool{}
+	visited := map[string]bool{}
+	cycle := false
 	var walk func(*Skill)
 	walk = func(cur *Skill) {
-		if cur == nil || seen[cur.ID] {
+		if cur == nil {
 			return
 		}
-		seen[cur.ID] = true
-		out = append(out, cur)
+		if visiting[cur.ID] {
+			cycle = true
+			return
+		}
+		if visited[cur.ID] {
+			return
+		}
+		visiting[cur.ID] = true
 		for _, dep := range cur.Depends {
 			walk(s.Get(dep))
 		}
+		visiting[cur.ID] = false
+		visited[cur.ID] = true
+		out = append(out, cur)
 	}
 	walk(sk)
+	return out, cycle
+}
+
+// BuildSkillTools returns the given skills wrapped as tool.ITool
+// implementations suitable for registration into a tool registry.
+// Disabled skills are skipped.
+func (s *Service) BuildSkillTools() []tool.ITool {
+	var out []tool.ITool
+	for _, sk := range s.List() {
+		if !sk.Enabled {
+			continue
+		}
+		out = append(out, s.NewExecutableSkill(sk))
+	}
 	return out
 }
 
@@ -454,6 +516,35 @@ func parseSkillDir(dir string) (*Skill, error) {
 	if v := meta["dependencies"]; v != "" {
 		sk.Depends = append(sk.Depends, splitCSV(v)...)
 	}
+	if v := meta["argument-hint"]; v != "" {
+		sk.ArgumentHint = v
+	}
+	if v := meta["allowed-tools"]; v != "" {
+		sk.Tools = append(sk.Tools, splitCSV(v)...)
+	}
+	if v := meta["license"]; v != "" {
+		sk.License = v
+	}
+	if v := meta["compatibility"]; v != "" {
+		sk.Compatibility = v
+	}
+	if v := meta["model"]; v != "" {
+		sk.Model = v
+	}
+	if v := meta["effort"]; v != "" {
+		sk.Effort = v
+	}
+	if v := meta["user-invocable"]; v != "" {
+		b := v == "true" || v == "yes"
+		sk.UserInvocable = &b
+	}
+	if v := meta["disable-model-invocation"]; v != "" {
+		b := v == "true" || v == "yes"
+		sk.DisableModelInv = &b
+	}
+	if v := meta["metadata"]; v != "" {
+		sk.Metadata = parseMetadataMap(v)
+	}
 	return sk, nil
 }
 
@@ -513,6 +604,25 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// parseMetadataMap parses a simple "key=val,key2=val2" metadata string.
+func parseMetadataMap(s string) map[string]string {
+	m := map[string]string{}
+	if s == "" {
+		return m
+	}
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 {
+			m[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+		}
+	}
+	return m
 }
 
 func sanitize(id string) string {

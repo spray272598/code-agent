@@ -22,10 +22,12 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/contextx"
 	"github.com/spray272598/code-agent/internal/domain/deepagent"
+	"github.com/spray272598/code-agent/internal/domain/eval"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/intent"
 	"github.com/spray272598/code-agent/internal/domain/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
+	"github.com/spray272598/code-agent/internal/domain/orchestration"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
@@ -53,6 +55,9 @@ type Config struct {
 	// Router enables M3/3.1 multi-model routing: when non-nil, the model
 	// endpoint is selected per intent before each model call.
 	Router *model.Router
+	// TeamConfigFile is the YAML path for team role configuration.
+	// Empty → uses default "teams/default.yaml" (with fallback to hardcoded defaults).
+	TeamConfigFile string
 	// CompactThresholdRatio triggers a background predictive summarize at this
 	// window occupancy ratio (0,1]. Default 0.8.
 	CompactThresholdRatio float64
@@ -78,11 +83,23 @@ type Runner struct {
 	tokens       *engine.TokenManager
 	intentRouter intent.Router
 
+	// skillToolNames tracks skill-derived tool names for cleanup on re-assignment.
+	skillToolNames map[string]bool
+
 	// optional in-graph interrupt resume
 	graphStore compose.CheckPointStore
 	graphMu    sync.Mutex
 	// sessionID → last interrupt context id (process-local; durable via graph store)
 	graphIntr map[string]string
+
+	// evalCollector gathers per-session evaluation metrics (nil = disabled).
+	evalCollector *eval.Collector
+	// sloMonitor tracks SLO compliance (latency, error rate, availability).
+	sloMonitor *observability.SLOMonitor
+	// ctxIntegrator coordinates budget/compression/memory enrichment (nil = uses compressor directly).
+	ctxIntegrator *contextx.ContextIntegrator
+	// budgetMgr enables dynamic token budget allocation (nil = uses static budget).
+	budgetMgr *contextx.BudgetManager
 }
 
 func NewRunner(
@@ -126,7 +143,7 @@ func NewRunner(
 			r.graphStore = NewMemoryCheckPointStore()
 		}
 	}
-	r.Multi = NewMultiAgent(r)
+	r.Multi = NewMultiAgent(r, cfg.TeamConfigFile)
 	return r
 }
 
@@ -134,7 +151,22 @@ func (r *Runner) SetHooks(h *hook.Bus)                         { r.hooks = h }
 func (r *Runner) SetAudit(a audit.Repository)                  { r.audit = a }
 func (r *Runner) SetSummaryRepo(s sessrepo.ISummaryRepository) { r.summaries = s }
 func (r *Runner) SetSkills(s *skill.Service) {
+	// Cleanup previously registered skill tools.
+	for name := range r.skillToolNames {
+		r.tools.Unregister(name)
+	}
+	r.skillToolNames = map[string]bool{}
+
 	r.skills = s
+	if s != nil {
+		if tools := s.BuildSkillTools(); len(tools) > 0 {
+			for _, st := range tools {
+				r.tools.Register(st)
+				r.skillToolNames[st.Name()] = true
+			}
+			log.Printf("[runner] registered %d skill tools: %v\n", len(tools), r.skillToolNames)
+		}
+	}
 	if r.prompt != nil {
 		r.prompt.SetSkills(s)
 	}
@@ -171,6 +203,34 @@ func (r *Runner) SetGraphStore(store compose.CheckPointStore) {
 	}
 	r.graphStore = store
 	r.cfg.GraphResume = store != nil
+}
+
+// SetEvalCollector injects the evaluation metrics collector (nil = disabled).
+func (r *Runner) SetEvalCollector(c *eval.Collector) {
+	r.evalCollector = c
+}
+
+// SetSLOMonitor injects the SLO compliance monitor (nil = disabled).
+func (r *Runner) SetSLOMonitor(m *observability.SLOMonitor) {
+	r.sloMonitor = m
+}
+
+// SetContextIntegrator injects the context coordination engine (nil = disabled).
+func (r *Runner) SetContextIntegrator(ci *contextx.ContextIntegrator) {
+	r.ctxIntegrator = ci
+}
+
+// SetBudgetManager injects the dynamic token budget manager (nil = disabled).
+func (r *Runner) SetBudgetManager(bm *contextx.BudgetManager) {
+	r.budgetMgr = bm
+}
+
+// SetJournalConfig configures the journal persistence backend for DeepAgent runs.
+// Supports file (default), MySQL, Redis, and in-memory storage.
+func (r *Runner) SetJournalConfig(cfg orchestration.JournalStorageConfig) {
+	if r.Multi != nil {
+		r.Multi.SetJournalConfig(cfg)
+	}
 }
 
 func (r *Runner) Permission() *security.Guard { return r.perm }
@@ -234,6 +294,13 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	}
 
 	publish(&engine.Event{Type: engine.EventThought, Content: "Eino ReAct + security cross-cuts", Timestamp: nowMs()})
+
+	// --- Evaluation: begin session metrics collection ---
+	if r.evalCollector != nil {
+		_ = r.evalCollector.BeginSession(session.ID, session.UserID)
+	}
+	// --- SLO monitoring: record agent latency start ---
+	agentStart := time.Now()
 
 	// --- HITL resume (prefer in-graph when CheckPointStore + interrupt id available) ---
 	if r.perm != nil && isContinue(userInput) {
@@ -316,7 +383,9 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		}
 	}
 
-	// 意图路由（带跨轮指代消解：从近期消息提取最近实体）
+	// --- Topology selection: use Orchestrator Router as the primary decision maker ---
+	// The intent classifier handles continue detection and entity extraction;
+	// Router handles all topology decisions (single/teams/deep).
 	var ir intent.Result
 	if r.intentRouter != nil {
 		var ec *intent.EntityContext
@@ -333,15 +402,51 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	} else {
 		ir = intent.Result{Intent: intent.IntentNormal, CleanInput: userInput}
 	}
-	publish(&engine.Event{Type: engine.EventThought, SubType: "intent", Content: "intent: " + ir.Intent.String() + " (source: " + ir.Source + ")", Timestamp: nowMs()})
+
+	// Extract explicit topology hint from intent (for backward-compatible prefixes).
+	explicitMode := orchestration.ModeSingleAgent
+	if ir.Intent == intent.IntentDeep {
+		explicitMode = orchestration.ModeDeepAgent
+	} else if ir.Intent == intent.IntentTeam {
+		explicitMode = orchestration.ModeTeams
+	}
+
+	// Router decides the topology (explicit hint takes priority, then auto-detection).
+	var topologyMode orchestration.OrchestratorMode
+	var topologyNote string
+	if r.Multi != nil && r.Multi.Router() != nil {
+		topologyMode = r.Multi.Router().Decide(ir.CleanInput, explicitMode)
+		topologyNote = r.Multi.Router().Describe(ir.CleanInput, topologyMode)
+	} else {
+		topologyMode = explicitMode
+		topologyNote = "single-agent (no router)"
+	}
+
+	publish(&engine.Event{Type: engine.EventThought, SubType: "router",
+		Content: fmt.Sprintf("topology: %s | %s | intent=%s source=%s",
+			topologyMode.String(), topologyNote, ir.Intent.String(), ir.Source),
+		Timestamp: nowMs()})
+
+	// --- Evaluation: record topology selection ---
+	if r.evalCollector != nil {
+		topology := topologyMode.String()
+		r.evalCollector.SetTopology(session.ID, topology)
+	}
 
 	// M3/3.1: per-intent model routing (before any model init).
 	r.applyRoute(ir.Intent.String())
 
-	if r.Multi != nil && ir.Intent == intent.IntentDeep {
+	// --- Route to the appropriate agent topology ---
+	if r.Multi != nil && topologyMode == orchestration.ModeDeepAgent {
+		publish(&engine.Event{Type: engine.EventThought, SubType: "router",
+			Content: "router: selected DeepAgent topology for: " + truncate(ir.CleanInput, 60),
+			Timestamp: nowMs()})
 		return r.Multi.RunDeep(ctx, session, ir.CleanInput, publish, opts)
 	}
-	if r.Multi != nil && ir.Intent == intent.IntentTeam {
+	if r.Multi != nil && topologyMode == orchestration.ModeTeams {
+		publish(&engine.Event{Type: engine.EventThought, SubType: "router",
+			Content: "router: selected Teams topology for: " + truncate(ir.CleanInput, 60),
+			Timestamp: nowMs()})
 		return r.Multi.RunParallel(ctx, session, ir.CleanInput, publish, opts)
 	}
 
@@ -397,6 +502,7 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	tctx := WithRunContext(ctx, RunContext{
 		SessionID: session.ID, UserID: session.UserID, AutoApprove: opts.AutoApprove,
 		Publish: publish, Cross: cross,
+		EvalCollector: r.evalCollector,
 	})
 
 	cpID := DefaultGraphCheckPointID(session.ID)
@@ -408,7 +514,7 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		Timestamp: nowMs(),
 	})
 
-	cbOpt := agentOptions(publish, stats)
+	cbOpt := agentOptionsWithEval(publish, stats, session.ID, r.evalCollector)
 	genOpts := []agent.AgentOption{cbOpt}
 	if graphOn {
 		// new user turn: force new run unless we are mid-graph-resume (handled separately)
@@ -428,8 +534,27 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		}
 	}
 	llmSpan.End()
-	observability.Current().ObserveLLM(time.Since(tLLM))
+	llmLatency := time.Since(tLLM)
+	observability.Current().ObserveLLM(llmLatency)
 	observability.Current().AddChatTotal(1)
+
+	// --- Evaluation: record LLM call metrics ---
+	if r.evalCollector != nil {
+		r.evalCollector.AddSample(session.ID, eval.Sample{
+			Dimension: eval.DimEfficiency, Name: "llm_calls",
+			Type: eval.SampleCounter, Value: 1,
+		})
+		if llmLatency > 0 {
+			r.evalCollector.AddSample(session.ID, eval.Sample{
+				Dimension: eval.DimEfficiency, Name: "llm_latency_ms",
+				Type: eval.SampleHistogram, Value: float64(llmLatency.Milliseconds()),
+			})
+		}
+	}
+	// --- SLO: record LLM latency ---
+	if r.sloMonitor != nil {
+		r.sloMonitor.RecordLatency("llm_call_latency", llmLatency, genErr)
+	}
 
 	if genErr != nil {
 		if isInterruptErr(genErr) {
@@ -449,6 +574,17 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 					Type: engine.EventPermission, SubType: "confirm", Content: msg,
 					Data: pending, Completed: true, Timestamp: nowMs(),
 				})
+				// --- Evaluation: record permission deny ---
+				if r.evalCollector != nil {
+					r.evalCollector.AddSample(session.ID, eval.Sample{
+						Dimension: eval.DimSafety, Name: "permission_deny",
+						Type: eval.SampleCounter, Value: 1,
+					})
+					r.evalCollector.EndSession(session.ID, false, "permission")
+				}
+				if r.sloMonitor != nil {
+					r.sloMonitor.RecordError("agent_latency")
+				}
 			}
 			r.persistAssistant(ctx, session, msg)
 			tok := stats.TokenUsed()
@@ -463,6 +599,17 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 			}, nil
 		}
 		observability.Current().AddChatErrors(1)
+		// --- Evaluation: record LLM error ---
+		if r.evalCollector != nil {
+			r.evalCollector.AddSample(session.ID, eval.Sample{
+				Dimension: eval.DimEfficiency, Name: "llm_error",
+				Type: eval.SampleCounter, Value: 1,
+			})
+			r.evalCollector.EndSession(session.ID, false, "llm")
+		}
+		if r.sloMonitor != nil {
+			r.sloMonitor.RecordError("llm_call_latency")
+		}
 		publish(&engine.Event{Type: engine.EventError, Content: genErr.Error(), Completed: true, Timestamp: nowMs()})
 		return &engine.Result{SessionID: session.ID, Response: "eino generate: " + genErr.Error(), ErrorClass: "eino"}, nil
 	}
@@ -489,6 +636,57 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		}
 	}
 	observability.Current().AddTokens(int64(tokenUsed))
+
+	// --- Evaluation: record token and step metrics ---
+	if r.evalCollector != nil {
+		r.evalCollector.AddSample(session.ID, eval.Sample{
+			Dimension: eval.DimEfficiency, Name: "tokens_total",
+			Type: eval.SampleCounter, Value: float64(tokenUsed),
+		})
+		promptTokens := int(stats.promptTokens.Load())
+		completionTokens := int(stats.completionTokens.Load())
+		if promptTokens > 0 {
+			r.evalCollector.AddSample(session.ID, eval.Sample{
+				Dimension: eval.DimEfficiency, Name: "tokens_input",
+				Type: eval.SampleCounter, Value: float64(promptTokens),
+			})
+		}
+		if completionTokens > 0 {
+			r.evalCollector.AddSample(session.ID, eval.Sample{
+				Dimension: eval.DimEfficiency, Name: "tokens_output",
+				Type: eval.SampleCounter, Value: float64(completionTokens),
+			})
+		}
+		tcVal := int(stats.toolCalls.Load())
+		if tcVal > 0 {
+			r.evalCollector.AddSample(session.ID, eval.Sample{
+				Dimension: eval.DimEfficiency, Name: "tool_calls",
+				Type: eval.SampleCounter, Value: float64(tcVal),
+			})
+		}
+		// Record compression quality.
+		if compressNote != "" {
+			r.evalCollector.AddSample(session.ID, eval.Sample{
+				Dimension: eval.DimContextQuality, Name: "compression_applied",
+				Type: eval.SampleBool, Value: 1,
+			})
+		}
+	}
+
+	// --- SLO: record agent latency ---
+	if r.sloMonitor != nil {
+		r.sloMonitor.RecordLatency("agent_latency", time.Since(agentStart), nil)
+	}
+
+	// --- Evaluation: end session with final metrics ---
+	if r.evalCollector != nil {
+		completed := true
+		errorClass := ""
+		if needPerm {
+			errorClass = "permission"
+		}
+		r.evalCollector.EndSession(session.ID, completed, errorClass)
+	}
 
 	tc := int(stats.toolCalls.Load())
 	publish(&engine.Event{Type: engine.EventAnswer, Content: final, Completed: true, Timestamp: nowMs()})
@@ -527,7 +725,52 @@ func (r *Runner) loadAndCompress(ctx context.Context, session *sessmodel.Session
 		}
 	}
 	note := ""
-	if needCompress && r.compressor != nil {
+
+	// --- ContextIntegrator path: budget-aware + memory-enriched compression ---
+	if r.ctxIntegrator != nil {
+		if r.hooks != nil {
+			r.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
+		}
+		prior := ""
+		if r.summaries != nil {
+			var gerr error
+			prior, gerr = r.summaries.Get(ctx, session.ID)
+			if gerr != nil {
+				observability.LogError("get session summary", gerr)
+			}
+		}
+
+		// Wire MemoryEnricher if memory.Service is available and not already wired.
+		if r.mem != nil && r.ctxIntegrator.SessionID() == "" {
+			r.ctxIntegrator.SetSessionID(session.ID)
+			r.ctxIntegrator.SetUserID(session.UserID)
+		}
+
+		opts := contextx.CompressOptions{
+			Ctx:           ctx,
+			PriorSummary:  prior,
+			UseSummary:    forceCompact || len(full) > 16,
+			SkipEnrichment: !forceCompact && len(full) <= 16,
+		}
+		enriched, cr := r.ctxIntegrator.Prepare(userInput, full, opts)
+		full = enriched
+
+		if cr.Level != "none" {
+			if cr.Summary != "" && r.summaries != nil {
+				if err := r.summaries.Save(ctx, session.ID, cr.Summary, common.EstimateTokens(cr.Summary)); err != nil {
+					observability.LogError("save session summary", err)
+				}
+			}
+			observability.Current().AddCompress(1)
+			note = fmt.Sprintf("ci compress %s saved~%d", cr.Level, cr.Saved)
+			if cr.Summary != "" {
+				full = append([]map[string]any{{
+					"role": "user", "content": "[SESSION_SUMMARY]\n" + cr.Summary, "priority": 5,
+				}}, full...)
+			}
+		}
+	} else if needCompress && r.compressor != nil {
+		// --- Legacy compressor path (no ContextIntegrator) ---
 		if r.hooks != nil {
 			r.hooks.Emit(ctx, hook.Event{Point: hook.PreCompact, SessionID: session.ID})
 		}
@@ -650,9 +893,10 @@ func (r *Runner) tryGraphResume(
 	rctx = WithRunContext(rctx, RunContext{
 		SessionID: session.ID, UserID: session.UserID, AutoApprove: true,
 		Publish: publish, Cross: cross,
+		EvalCollector: r.evalCollector,
 	})
 	cpID := DefaultGraphCheckPointID(session.ID)
-	cbOpt := agentOptions(publish, stats)
+	cbOpt := agentOptionsWithEval(publish, stats, session.ID, r.evalCollector)
 	genOpts := append([]agent.AgentOption{cbOpt}, graphResumeOpts(cpID, false)...)
 
 	t0 := time.Now()
