@@ -25,6 +25,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
+	"github.com/spray272598/code-agent/internal/domain/workflow"
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
@@ -57,6 +58,8 @@ type Loop struct {
 	// system prompt cache (tools + skill id)
 	sysCacheKey string
 	sysCacheVal string
+	skillInterceptor *skill.BlockInterceptor
+	workflowBridge   *workflow.LoopBridge
 }
 
 func NewLoop(
@@ -93,6 +96,8 @@ func (l *Loop) SetMemory(svc *memory.Service, mc *coding.MemoryContext) {
 	l.memSvc = svc
 	l.memCtx = mc
 }
+func (l *Loop) SetSkillInterceptor(interceptor *skill.BlockInterceptor) { l.skillInterceptor = interceptor }
+func (l *Loop) SetWorkflowBridge(bridge *workflow.LoopBridge) { l.workflowBridge = bridge }
 func (l *Loop) SetAudit(a audit.Repository)                  { l.audit = a }
 func (l *Loop) SetSummaryRepo(s sessrepo.ISummaryRepository) { l.summaries = s }
 func (l *Loop) SetSubRunner(r *subagent.Runner) {

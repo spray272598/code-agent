@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
@@ -36,6 +37,65 @@ type ConversationTurn struct {
 	Role    string
 	Content string
 	Time    time.Time
+}
+
+type FlushState struct {
+	mu             sync.RWMutex
+	enabled        bool
+	flushLock      sync.Mutex
+	flushCount     int64
+	lastFlushTime  time.Time
+	failedAttempts int64
+}
+
+func NewFlushState() *FlushState {
+	return &FlushState{enabled: true}
+}
+
+func (f *FlushState) IsEnabled() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.enabled
+}
+
+func (f *FlushState) SetEnabled(enabled bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enabled = enabled
+}
+
+func (f *FlushState) Toggle() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enabled = !f.enabled
+	return f.enabled
+}
+
+func (f *FlushState) TryLock() bool {
+	return f.flushLock.TryLock()
+}
+
+func (f *FlushState) Unlock() {
+	f.flushLock.Unlock()
+}
+
+func (f *FlushState) RecordFlush(count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flushCount++
+	f.lastFlushTime = time.Now()
+}
+
+func (f *FlushState) RecordFailure() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failedAttempts++
+}
+
+func (f *FlushState) Stats() (count int64, lastTime time.Time, failures int64) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.flushCount, f.lastFlushTime, f.failedAttempts
 }
 
 func (s *Service) FlushConversation(ctx context.Context, userID, projectID string, turns []ConversationTurn, cfg FlushConfig) (*FlushResult, error) {

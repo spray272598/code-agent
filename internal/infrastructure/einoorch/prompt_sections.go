@@ -147,6 +147,38 @@ func formatToolList(items []string) string {
 	return b.String()
 }
 
+func SandboxPolicySection() string {
+	return `<sandbox_policy>
+Security enforcement tiers that protect your workspace. Understand these boundaries so you work within them:
+
+AUTO-BLOCKED (no user confirmation needed):
+- Destructive commands: rm -rf, git push --force, format/diskpart
+- Data exfiltration: curl|sh, wget with pipe-to-shell, base64 decode + execute
+- Fork bombs, crypto mining, credential scraping
+- Direct access to .git/objects, .ssh/, .env, credentials files
+
+REQUIRE CONFIRMATION (user must approve):
+- Bash/shell commands (run_command) — every execution needs explicit approval
+- File writes (edit_file, write_file) — user confirms before overwriting
+- Deletions (delete_file) — user confirms before removal
+- Network operations — external connections need approval
+
+ALWAYS ALLOWED (no confirmation needed):
+- Read operations: read_file, grep, glob, search_code
+- Project navigation: view, tree, list
+- Safe git operations: git status, git log, git diff, git add
+
+SECURITY POLICIES:
+- Git protocol isolation: .git directory is protected; bare clone/fetch blocked
+- Path sandbox: workspace boundaries enforced; traversal attacks blocked
+- Prompt injection defense: attempts to override system instructions detected and blocked
+- Behavior analysis: anomalous access patterns (rapid sensitive file reads, mass deletions) flagged
+- Integrity verification: audit logs are tamper-evident; each entry chain-hashed
+
+When a command is blocked or requires confirmation, report it clearly and offer a safe alternative.
+</sandbox_policy>`
+}
+
 func joinNonEmpty(parts ...string) string {
 	var out []string
 	for _, p := range parts {

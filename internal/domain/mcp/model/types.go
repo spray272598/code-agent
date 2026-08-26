@@ -10,6 +10,23 @@ type ServerConfig struct {
 	URL        string
 	Enabled    bool
 	TimeoutSec int
+	// OAuth configuration for MCP servers that require authentication.
+	OAuth *OAuthConfig `json:"oauth,omitempty"`
+	// Bearer token for simple token-based auth.
+	BearerToken string `json:"bearerToken,omitempty"`
+}
+
+// OAuthConfig MCP server OAuth 2.0 configuration.
+type OAuthConfig struct {
+	Enabled      bool   `json:"enabled"`
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret,omitempty"`
+	AuthURL      string `json:"authUrl"`
+	TokenURL     string `json:"tokenUrl"`
+	RedirectURI  string `json:"redirectUri"`
+	Scopes       string `json:"scopes"`
+	UsePKCE      bool   `json:"usePkce"`
+	Provider     string `json:"provider"`
 }
 
 // ToolDef MCP tool definition.

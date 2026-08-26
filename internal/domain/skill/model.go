@@ -27,6 +27,7 @@ type Skill struct {
 	License          string   `json:"license,omitempty"`          // e.g. "MIT"
 	Compatibility    string   `json:"compatibility,omitempty"`    // required deps description
 	Metadata         map[string]string `json:"metadata,omitempty"` // arbitrary KV
+	BlockTools       *BlockedToolsConfig `json:"blockTools,omitempty"` // hard-block tools when skill active
 }
 
 // Errors returned by the skill system.

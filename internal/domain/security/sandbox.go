@@ -2,7 +2,6 @@ package security
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -17,23 +16,31 @@ type SandboxEnforcer interface {
 	Execute(cmd *exec.Cmd) error
 }
 
+type platformSandbox interface {
+	apply(profile ProfileConfig, workspace string) error
+	execute(cmd *exec.Cmd) error
+}
+
 type OSLevelSandbox struct {
-	mu          sync.Mutex
-	active      bool
-	profile     *ProfileConfig
-	workspace   string
-	denyEngine  *DenyEngine
-	audit       *AuditLogger
-	platform    string
-	applied     bool
+	mu       sync.Mutex
+	active   bool
+	profile  *ProfileConfig
+	workspace string
+	denyEngine *DenyEngine
+	audit    *AuditLogger
+	platform string
+	applied  bool
+	impl     platformSandbox
 }
 
 func NewOSLevelSandbox(audit *AuditLogger) *OSLevelSandbox {
 	platform := runtime.GOOS
-	return &OSLevelSandbox{
+	s := &OSLevelSandbox{
 		platform: platform,
 		audit:    audit,
 	}
+	s.impl = newPlatformSandbox(platform, s)
+	return s
 }
 
 func (s *OSLevelSandbox) ApplyProfile(profile ProfileConfig, workspace string) error {
@@ -43,8 +50,10 @@ func (s *OSLevelSandbox) ApplyProfile(profile ProfileConfig, workspace string) e
 	s.profile = &profile
 	s.workspace = workspace
 
-	if err := s.applyPlatformSpecific(profile, workspace); err != nil {
-		return fmt.Errorf("sandbox apply: %w", err)
+	if s.impl != nil {
+		if err := s.impl.apply(profile, workspace); err != nil {
+			return fmt.Errorf("sandbox apply: %w", err)
+		}
 	}
 
 	cfg := DenyConfig{
@@ -58,73 +67,6 @@ func (s *OSLevelSandbox) ApplyProfile(profile ProfileConfig, workspace string) e
 	s.active = true
 	s.applied = true
 	return nil
-}
-
-func (s *OSLevelSandbox) applyPlatformSpecific(profile ProfileConfig, workspace string) error {
-	switch s.platform {
-	case "linux":
-		return s.applyLinux(profile, workspace)
-	case "darwin":
-		return s.applyMacOS(profile, workspace)
-	case "windows":
-		return s.applyWindows(profile, workspace)
-	default:
-		return ErrSandboxUnsupported
-	}
-}
-
-func (s *OSLevelSandbox) applyLinux(profile ProfileConfig, workspace string) error {
-	if err := exec.Command("bwrap", "--version").Run(); err != nil {
-		if s.audit != nil {
-			s.audit.Warn(CategorySandbox, "sandbox", "bwrap not found, using in-process enforcement")
-		}
-		return nil
-	}
-	return nil
-}
-
-func (s *OSLevelSandbox) applyMacOS(profile ProfileConfig, workspace string) error {
-	profilePath := filepath.Join(os.TempDir(), "code-agent-sandbox.sbpl")
-	content := generateSeatbeltProfile(profile, workspace)
-	if err := os.WriteFile(profilePath, []byte(content), 0600); err != nil {
-		if s.audit != nil {
-			s.audit.Warn(CategorySandbox, "sandbox", "seatbelt profile write failed, using in-process enforcement")
-		}
-		return nil
-	}
-	return nil
-}
-
-func (s *OSLevelSandbox) applyWindows(profile ProfileConfig, workspace string) error {
-	if s.audit != nil {
-		s.audit.Info(CategorySandbox, "sandbox", "Windows sandbox: using Job Object + in-process enforcement")
-	}
-	return nil
-}
-
-func generateSeatbeltProfile(profile ProfileConfig, workspace string) string {
-	var sb strings.Builder
-	sb.WriteString(`(version 1.0)
-(allow default)
-`)
-	if len(profile.ReadOnly) > 0 {
-		sb.WriteString(`(allow file-read-only (subpath "/usr"))`)
-	}
-	if len(profile.ReadWrite) > 0 {
-		for _, p := range profile.ReadWrite {
-			expanded := strings.ReplaceAll(p, "${workspace}", workspace)
-			sb.WriteString(fmt.Sprintf(`(allow file-read* (subpath "%s"))`+"\n", expanded))
-			sb.WriteString(fmt.Sprintf(`(allow file-write* (subpath "%s"))`+"\n", expanded))
-		}
-	}
-	for _, deny := range profile.Deny {
-		expanded := strings.ReplaceAll(deny, "${workspace}", workspace)
-		sb.WriteString(fmt.Sprintf(`(deny file-write* (subpath "%s"))`+"\n", expanded))
-	}
-	if profile.NetworkBlock {
-		sb.WriteString("(deny network-outbound)\n")
-	}
-	return sb.String()
 }
 
 func (s *OSLevelSandbox) IsActive() bool {
@@ -141,23 +83,26 @@ func (s *OSLevelSandbox) LogViolation(target, operation string) {
 
 func (s *OSLevelSandbox) Execute(cmd *exec.Cmd) error {
 	s.mu.Lock()
-	deny := s.denyEngine
-	profile := s.profile
-	workspace := s.workspace
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	if deny != nil && cmd.Dir != "" {
-		if deny.IsDenied(cmd.Dir) {
+	if s.impl != nil {
+		return s.impl.execute(cmd)
+	}
+	return s.executeInProcess(cmd)
+}
+
+func (s *OSLevelSandbox) executeInProcess(cmd *exec.Cmd) error {
+	if s.denyEngine != nil && cmd.Dir != "" {
+		if s.denyEngine.IsDenied(cmd.Dir) {
 			s.LogViolation(cmd.Dir, "execute")
 			return ErrSandboxDenied
 		}
-		if !isUnderWorkspace(cmd.Dir, workspace) {
+		if !isUnderWorkspace(cmd.Dir, s.workspace) {
 			s.LogViolation(cmd.Dir, "outside_workspace")
 			return ErrSandboxDenied
 		}
 	}
-
-	if profile != nil && profile.NetworkBlock {
+	if s.profile != nil && s.profile.NetworkBlock {
 		for _, arg := range cmd.Args {
 			if looksNetworkCmd(cmd.Path, arg) {
 				s.LogViolation(arg, "network_blocked")
@@ -169,7 +114,6 @@ func (s *OSLevelSandbox) Execute(cmd *exec.Cmd) error {
 			return ErrSandboxNetworkBlocked
 		}
 	}
-
 	return cmd.Run()
 }
 

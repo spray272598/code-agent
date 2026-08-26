@@ -71,6 +71,14 @@ type Guard struct {
 	netEnforcer   *NetworkEnforcer
 	sandboxMgr    *SandboxManager
 	configLoader  *ConfigLoader
+	// Advanced security: prompt injection detection
+	injectionDetector *PromptInjectionDetector
+	// Advanced security: behavior analysis & anomaly detection
+	behaviorTracker   *BehaviorTracker
+	// Advanced security: tamper-evident integrity chain
+	integrityChain    *IntegrityChain
+	// Advanced security: adaptive circuit breaker
+	adaptiveBreaker   *AdaptiveCircuitBreaker
 }
 
 // SandboxMode selects the enforcement tier applied to tool execution.
@@ -83,6 +91,8 @@ const (
 	ModeReadonly
 	// ModeStrict confines bash to the workspace and blocks network egress.
 	ModeStrict
+	// ModeDevbox allows network and full read/write within workspace.
+	ModeDevbox
 )
 
 func (m SandboxMode) String() string {
@@ -91,6 +101,8 @@ func (m SandboxMode) String() string {
 		return "readonly"
 	case ModeStrict:
 		return "strict"
+	case ModeDevbox:
+		return "devbox"
 	default:
 		return "workspace"
 	}
@@ -103,6 +115,8 @@ func ParseSandboxMode(s string) SandboxMode {
 		return ModeReadonly
 	case "strict":
 		return ModeStrict
+	case "devbox":
+		return ModeDevbox
 	default:
 		return ModeWorkspace
 	}
@@ -159,6 +173,21 @@ func (g *Guard) initExtendedSecurity(workspace string) {
 		g.denyEngine = engine
 	}
 	g.sandboxMgr = NewSandboxManager(workspace, g.configLoader, g.audit)
+
+	// Advanced security components
+	g.injectionDetector = NewPromptInjectionDetector()
+	g.behaviorTracker = NewBehaviorTracker()
+	g.behaviorTracker.SetDeletionBurstThreshold(10*time.Minute, 3)
+	g.behaviorTracker.SetRapidAccessThreshold(5*time.Minute, 3)
+	g.integrityChain = NewIntegrityChain()
+	g.adaptiveBreaker = NewAdaptiveCircuitBreaker()
+
+	// Wire risk data sources for adaptive circuit breaker
+	g.adaptiveBreaker.SetRiskSources(
+		g.Mode,
+		g.behaviorTracker.GetSessionRisk,
+		g.injectionDetector.GetTotalDetectionsForAdaptive,
+	)
 }
 
 func (g *Guard) DenyEngine() *DenyEngine        { return g.denyEngine }
@@ -167,6 +196,10 @@ func (g *Guard) Audit() *AuditLogger            { return g.audit }
 func (g *Guard) NetworkEnforcer() *NetworkEnforcer { return g.netEnforcer }
 func (g *Guard) SandboxManager() *SandboxManager  { return g.sandboxMgr }
 func (g *Guard) ConfigLoader() *ConfigLoader     { return g.configLoader }
+func (g *Guard) InjectionDetector() *PromptInjectionDetector { return g.injectionDetector }
+func (g *Guard) BehaviorTracker() *BehaviorTracker { return g.behaviorTracker }
+func (g *Guard) IntegrityChain() *IntegrityChain { return g.integrityChain }
+func (g *Guard) AdaptiveBreaker() *AdaptiveCircuitBreaker { return g.adaptiveBreaker }
 
 // Mode returns the active sandbox tier.
 func (g *Guard) Mode() SandboxMode { return g.mode }
@@ -213,6 +246,17 @@ func (g *Guard) initRules() {
 		{"curl_pipe_sh", "pipe remote script", []string{
 			`(?i)\b(curl|wget).*\|\s*(ba)?sh\b`,
 			`(?i)\b(curl|wget).*\|\s*bash\b`,
+		}},
+		{"git_protocol_leak", "git protocol data exfiltration", []string{
+			`(?i)\bgit\s+clone\s+.*--bare`,
+			`(?i)\bgit\s+fetch\s+.*refs`,
+			`(?i)\bgit\s+archive\b`,
+			`(?i)\bgit\s+bundle\b`,
+		}},
+		{"git_object_exfil", "direct git object access", []string{
+			`(?i)\bgit\s+cat-file\b`,
+			`(?i)\bgit\s+rev-list\b`,
+			`(?i)\.git/objects/`,
 		}},
 	}
 	for _, d := range denies {
@@ -290,9 +334,74 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	summary := tool + ": " + fmt.Sprint(args)
 	tool = strings.TrimSpace(tool)
 
-	// L5 circuit
+	// L0 Prompt Injection Detection: analyze command content for injection patterns
+	if g.injectionDetector != nil {
+		cmd := extract(tool, args)
+		if cmd != "" {
+			report := g.injectionDetector.CheckWithSession(sessionID, cmd)
+			if report.Detected && report.ShouldBlock(InjectionHigh) {
+				g.auditDeny(CategoryDenied, "prompt_injection", tool,
+					fmt.Sprintf("injection detected: %d matches, score=%.2f", len(report.Matches), report.Score),
+					sessionID)
+				if g.integrityChain != nil {
+					g.integrityChain.Append("prompt_injection_blocked", sessionID, "",
+						fmt.Sprintf("tool=%s matches=%d", tool, len(report.Matches)),
+						map[string]any{"score": report.Score, "matches": len(report.Matches)})
+				}
+				return Decision{
+					Action:  ActionDeny,
+					Layer:   "L0-injection",
+					RuleID:  "prompt_injection",
+					Reason:  "prompt injection detected in tool arguments",
+					Tool:    tool,
+					Summary: summary,
+				}
+			}
+		}
+	}
+
+	// L0 Behavior Tracking: record event and detect anomalies
+	if g.behaviorTracker != nil {
+		target := ""
+		if p, ok := args["path"].(string); ok {
+			target = p
+		} else if c, ok := args["command"].(string); ok {
+			target = truncateStr(c, 100)
+		} else {
+			target = extract(tool, args)
+		}
+		anomalies := g.behaviorTracker.Track(BehaviorEvent{
+			Time:      time.Now(),
+			SessionID: sessionID,
+			Tool:      tool,
+			Target:    target,
+			Category:  toolCategory(tool),
+		})
+		if len(anomalies) > 0 {
+			severeAnomalies := 0
+			for _, a := range anomalies {
+				if a.Severity >= BehaviorHigh {
+					severeAnomalies++
+				}
+			}
+			if severeAnomalies > 0 {
+				g.auditWarn(CategoryDenied, tool,
+					fmt.Sprintf("%d behavioral anomalies detected (severity>=high)", severeAnomalies),
+					sessionID)
+			}
+		}
+	}
+
+	// L5 circuit (adaptive threshold)
 	g.mu.RLock()
 	streak := g.denyStreak[sessionID]
+	threshold := g.circuitLimit
+	if g.adaptiveBreaker != nil {
+		adaptiveThreshold := g.adaptiveBreaker.GetThreshold(sessionID)
+		if adaptiveThreshold < threshold {
+			threshold = adaptiveThreshold
+		}
+	}
 	if g.sessionAllow[sessionID] != nil {
 		if g.sessionAllow[sessionID]["*"] {
 			g.mu.RUnlock()
@@ -306,8 +415,15 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 	}
 	g.mu.RUnlock()
-	if streak >= g.circuitLimit {
-		g.auditDeny(CategoryTool, "circuit_breaker", tool, "too many denials", sessionID)
+	if streak >= threshold {
+		g.auditDeny(CategoryTool, "circuit_breaker", tool,
+			fmt.Sprintf("too many denials (streak=%d threshold=%d)", streak, threshold),
+			sessionID)
+		if g.integrityChain != nil {
+			g.integrityChain.Append("circuit_breaker", sessionID, "",
+				fmt.Sprintf("tool=%s streak=%d threshold=%d", tool, streak, threshold),
+				map[string]any{"streak": streak, "threshold": threshold})
+		}
 		return Decision{Action: ActionDeny, Layer: "L5", RuleID: "circuit", Reason: "too many denials", Tool: tool, Summary: summary}
 	}
 
@@ -594,6 +710,12 @@ func sensitivePath(p string) bool {
 		strings.Contains(lp, "secret") || strings.Contains(lp, "wallet") {
 		return true
 	}
+	if strings.Contains(lp, "/.git/") || strings.HasSuffix(lp, "/.git") {
+		return true
+	}
+	if strings.Contains(lp, ".git/objects") || strings.Contains(lp, ".git/config") {
+		return true
+	}
 	if strings.HasSuffix(lp, ".pem") || strings.HasSuffix(lp, ".key") ||
 		strings.HasSuffix(lp, ".p12") || strings.HasSuffix(lp, ".pfx") ||
 		strings.HasSuffix(lp, ".pub") {
@@ -717,7 +839,51 @@ func (g *Guard) ExportPending(id string) *PendingConfirm {
 func (g *Guard) incDeny(sessionID string) {
 	g.mu.Lock()
 	g.denyStreak[sessionID]++
+	count := g.denyStreak[sessionID]
 	g.mu.Unlock()
+
+	// Record in adaptive circuit breaker
+	if g.adaptiveBreaker != nil {
+		g.adaptiveBreaker.RecordDenial(sessionID, "", "security_denied")
+	}
+
+	// Record in integrity chain
+	if g.integrityChain != nil {
+		g.integrityChain.Append("deny_incremented", sessionID, "",
+			fmt.Sprintf("deny_count=%d", count),
+			map[string]any{"count": count})
+	}
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func toolCategory(tool string) string {
+	base := toolBaseName(tool)
+	switch {
+	case strings.Contains(base, "read") || strings.Contains(base, "search") || strings.Contains(base, "glob") || strings.Contains(base, "grep"):
+		return "read"
+	case strings.Contains(base, "write") || strings.Contains(base, "edit") || strings.Contains(base, "delete") || strings.Contains(base, "remove"):
+		return "write"
+	case strings.Contains(base, "bash") || strings.Contains(base, "command") || strings.Contains(base, "run"):
+		return "execute"
+	case strings.Contains(base, "curl") || strings.Contains(base, "ssh") || strings.Contains(base, "http"):
+		return "network"
+	case strings.Contains(base, "mcp") || strings.Contains(base, "server") || strings.Contains(base, "__"):
+		return "mcp"
+	default:
+		return "other"
+	}
+}
+
+func (g *Guard) auditWarn(category AuditCategory, target, detail string, sessionID ...string) {
+	if g.audit != nil {
+		g.audit.Warn(category, target, detail)
+	}
 }
 
 func extract(tool string, args map[string]any) string {

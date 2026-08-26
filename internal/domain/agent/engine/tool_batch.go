@@ -99,6 +99,16 @@ func (l *Loop) runToolCalls(
 			continue
 		}
 
+		if l.skillInterceptor != nil {
+			if err := l.skillInterceptor.Intercept(ctx, tc.Name, tc.Args); err != nil {
+				msg := fmt.Sprintf("HARD_BLOCKED by skill: %s", err.Error())
+				queue = append(queue, ready{tc: tc, block: msg})
+				publish(&Event{Type: EventObservation, SubType: tc.Name, Content: msg, Step: step, Timestamp: now()})
+				telemetry.IncPermissionDeny()
+				continue
+			}
+		}
+
 		// schema validation
 		if t := l.tools.Get(tc.Name); t != nil {
 			if err := tool.ValidateArgs(t.InputSchema(), tc.Args); err != nil {

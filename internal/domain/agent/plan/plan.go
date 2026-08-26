@@ -48,28 +48,124 @@ func BuildRulePlan(goal string) *Plan {
 	if goal == "" {
 		return nil
 	}
-	signals := []string{"然后", "接着", "并且", "and then", "after", "先", "再", "完整", "step"}
-	hit := len([]rune(goal)) > 60
-	lower := strings.ToLower(goal)
-	for _, s := range signals {
-		if strings.Contains(lower, s) || strings.Contains(goal, s) {
-			hit = true
-			break
+
+	analysis := analyzeComplexity(goal)
+
+	if !analysis.isComplex {
+		return &Plan{
+			Goal:   goal,
+			Source: "rule",
+			Steps: []Step{
+				{Index: 1, Title: "Understand task and gather context", Status: "pending"},
+				{Index: 2, Title: "Implement solution", Status: "pending"},
+				{Index: 3, Title: "Verify and summarize", Status: "pending"},
+			},
 		}
 	}
-	if !hit {
-		return nil
-	}
+
+	steps := generateDynamicSteps(goal, analysis)
+
 	return &Plan{
 		Goal:   goal,
 		Source: "rule",
-		Steps: []Step{
-			{Index: 1, Title: "Explore codebase (glob/grep/read)", Status: "pending"},
-			{Index: 2, Title: "Apply changes (edit/write)", Status: "pending"},
-			{Index: 3, Title: "Verify (bash/test or re-read)", Status: "pending"},
-			{Index: 4, Title: "Summarize result", Status: "pending"},
-		},
+		Steps:  steps,
 	}
+}
+
+type complexityAnalysis struct {
+	isComplex   bool
+	hasSearch   bool
+	hasEdit     bool
+	hasTest     bool
+	hasDeploy   bool
+	keywords    []string
+}
+
+func analyzeComplexity(goal string) complexityAnalysis {
+	lower := strings.ToLower(goal)
+	a := complexityAnalysis{}
+
+	signals := []string{"然后", "接着", "并且", "and then", "after", "先", "再", "完整", "step", "实现", "开发", "创建", "build", "implement", "create", "develop"}
+	for _, s := range signals {
+		if strings.Contains(lower, s) || strings.Contains(goal, s) {
+			a.isComplex = true
+			a.keywords = append(a.keywords, s)
+		}
+	}
+
+	if len([]rune(goal)) > 60 {
+		a.isComplex = true
+	}
+
+	searchSignals := []string{"搜索", "查找", "找到", "search", "find", "locate", "grep"}
+	for _, s := range searchSignals {
+		if strings.Contains(lower, s) {
+			a.hasSearch = true
+			break
+		}
+	}
+
+	editSignals := []string{"修改", "编辑", "更新", "添加", "创建", "实现", "fix", "change", "edit", "update", "add", "implement"}
+	for _, s := range editSignals {
+		if strings.Contains(lower, s) {
+			a.hasEdit = true
+			break
+		}
+	}
+
+	testSignals := []string{"测试", "验证", "test", "verify", "check", "确保"}
+	for _, s := range testSignals {
+		if strings.Contains(lower, s) {
+			a.hasTest = true
+			break
+		}
+	}
+
+	deploySignals := []string{"部署", "推送", "发布", "deploy", "push", "release", "build"}
+	for _, s := range deploySignals {
+		if strings.Contains(lower, s) {
+			a.hasDeploy = true
+			break
+		}
+	}
+
+	return a
+}
+
+func generateDynamicSteps(goal string, a complexityAnalysis) []Step {
+	var steps []Step
+	idx := 1
+
+	if a.hasSearch {
+		steps = append(steps, Step{Index: idx, Title: "Explore codebase (glob/grep/read)", Status: "pending"})
+		idx++
+	}
+
+	if a.hasEdit {
+		steps = append(steps, Step{Index: idx, Title: "Plan changes and implement", Status: "pending"})
+		idx++
+	}
+
+	if a.hasTest {
+		steps = append(steps, Step{Index: idx, Title: "Test and verify", Status: "pending"})
+		idx++
+	}
+
+	if a.hasDeploy {
+		steps = append(steps, Step{Index: idx, Title: "Build and deploy", Status: "pending"})
+		idx++
+	}
+
+	if len(steps) == 0 {
+		steps = []Step{
+			{Index: 1, Title: "Explore and understand", Status: "pending"},
+			{Index: 2, Title: "Implement changes", Status: "pending"},
+			{Index: 3, Title: "Verify and summarize", Status: "pending"},
+		}
+	}
+
+	steps = append(steps, Step{Index: idx, Title: "Summarize results", Status: "pending"})
+	return steps
 }
 
 // BuildFromSpec creates a plan from SpecData (spec-driven development).

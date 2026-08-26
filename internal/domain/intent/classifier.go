@@ -66,35 +66,59 @@ func (c *Classifier) classifyOnly(userInput string) Result {
 		return Result{Intent: IntentContinue, CleanInput: trimmed, Confidence: 1.0, Source: "keyword"}
 	}
 
-	// 2. Deep 前缀检测
+	// 2. QA 问答检测
+	if isQA(low) {
+		return Result{Intent: IntentQA, CleanInput: trimmed, Confidence: 0.9, Source: "keyword"}
+	}
+
+	// 3. Explain 解释检测
+	if isExplain(low) {
+		return Result{Intent: IntentExplain, CleanInput: trimmed, Confidence: 0.9, Source: "keyword"}
+	}
+
+	// 4. Review 审查检测
+	if isReview(low) {
+		return Result{Intent: IntentReview, CleanInput: trimmed, Confidence: 0.9, Source: "keyword"}
+	}
+
+	// 5. Explore 探索检测
+	if isExplore(low) {
+		return Result{Intent: IntentExplore, CleanInput: trimmed, Confidence: 0.85, Source: "keyword"}
+	}
+
+	// 6. Deep 前缀检测
 	if deepagent.LooksDeep(trimmed) {
 		clean := deepagent.StripPrefix(trimmed)
 		return Result{Intent: IntentDeep, CleanInput: clean, Confidence: 1.0, Source: "prefix"}
 	}
 
-	// 3. Team 前缀检测
+	// 7. Team 前缀检测
 	if looksMulti(low) {
 		clean := stripMultiPrefix(trimmed)
 		return Result{Intent: IntentTeam, CleanInput: clean, Confidence: 1.0, Source: "prefix"}
 	}
 
-	// 4. LLM 语义兜底：识别规则覆盖不到的长尾自然语言
+	// 8. LLM 语义兜底：识别规则覆盖不到的长尾自然语言
 	if c.llm != nil {
 		if it, conf := c.classifyLLM(trimmed); it != IntentNormal && conf >= 0.7 {
 			return Result{Intent: it, CleanInput: trimmed, Confidence: conf, Source: "llm"}
 		}
 	}
 
-	// 5. 默认：普通对话
+	// 9. 默认：普通对话
 	return Result{Intent: IntentNormal, CleanInput: trimmed, Confidence: 0.5, Source: "default"}
 }
 
 const intentSystemPrompt = `Classify the user's intent into ONE of:
 - "deep": a complex multi-step coding/implementation task needing plan→act→reflect
 - "team": a task that benefits from parallel multi-agent roles (research/explore in parallel)
+- "qa": a simple question or answer request, quick fact lookup
+- "explain": code explanation, architecture walkthrough, or concept breakdown
+- "review": code review, bug analysis, or quality assessment
+- "explore": codebase exploration, finding files/functions, understanding structure
 - "normal": ordinary single-turn conversation or a simple task
 
-Reply with STRICT JSON: {"intent":"<deep|team|normal>"}`
+Reply with STRICT JSON: {"intent":"<deep|team|qa|explain|review|explore|normal>"}`
 
 func (c *Classifier) classifyLLM(userInput string) (Intent, float64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -113,6 +137,14 @@ func (c *Classifier) classifyLLM(userInput string) (Intent, float64) {
 		return IntentDeep, 0.8
 	case "team":
 		return IntentTeam, 0.8
+	case "qa":
+		return IntentQA, 0.85
+	case "explain":
+		return IntentExplain, 0.85
+	case "review":
+		return IntentReview, 0.8
+	case "explore":
+		return IntentExplore, 0.8
 	default:
 		return IntentNormal, 0
 	}
@@ -144,6 +176,50 @@ func parseIntent(content string) string {
 
 func isContinue(low string) bool {
 	return low == "继续" || low == "continue" || low == "ok" || low == "y" || low == "yes" || low == "继续执行"
+}
+
+func isQA(low string) bool {
+	qaSignals := []string{"是什么意思", "请问", "能否", "可以问", "why does", "how to", "what is the", "what's"}
+	hasQuestion := strings.HasSuffix(strings.TrimSpace(low), "?") || strings.HasSuffix(strings.TrimSpace(low), "？")
+	if hasQuestion && len(low) < 30 {
+		return true
+	}
+	for _, s := range qaSignals {
+		if strings.Contains(low, s) && len(low) < 50 {
+			return true
+		}
+	}
+	return false
+}
+
+func isExplain(low string) bool {
+	explainSignals := []string{"解释", "说明", "讲解", "分析", "explain", "explain", "walk through", "怎么工作", "how does", "原理", "机制"}
+	for _, s := range explainSignals {
+		if strings.Contains(low, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func isReview(low string) bool {
+	reviewSignals := []string{"审查", "review", "检查代码", "代码检查", "代码审计", "code review", "检查bug", "优化建议", "重构建议"}
+	for _, s := range reviewSignals {
+		if strings.Contains(low, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func isExplore(low string) bool {
+	exploreSignals := []string{"找到", "查找", "搜索", "搜索文件", "搜索函数", "find", "search", "locate", "结构", "架构", "目录结构", "代码结构"}
+	for _, s := range exploreSignals {
+		if strings.Contains(low, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksMulti(low string) bool {

@@ -8,6 +8,10 @@ const (
 	IntentDeep                   // 深度模式（Plan→Act→Reflect）
 	IntentTeam                   // 团队并行模式
 	IntentContinue               // 继续执行（恢复中断）
+	IntentQA                     // 问答模式（快速问答、解释）
+	IntentExplain                // 解释模式（代码解释、架构说明）
+	IntentReview                 // 代码审查模式
+	IntentExplore                // 探索模式（代码库探索）
 )
 
 // String 返回意图名称
@@ -19,6 +23,14 @@ func (i Intent) String() string {
 		return "team"
 	case IntentContinue:
 		return "continue"
+	case IntentQA:
+		return "qa"
+	case IntentExplain:
+		return "explain"
+	case IntentReview:
+		return "review"
+	case IntentExplore:
+		return "explore"
 	default:
 		return "normal"
 	}
@@ -29,7 +41,7 @@ type Result struct {
 	Intent     Intent
 	CleanInput string  // 去除路由前缀后的输入
 	Confidence float64 // 置信度 0-1
-	Source     string  // 识别来源（"prefix"、"keyword"、"default"）
+	Source     string  // 识别来源（"prefix"、"keyword"、"llm"、"default"）
 }
 
 // Router 意图路由接口

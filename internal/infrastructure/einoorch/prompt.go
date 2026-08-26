@@ -118,7 +118,11 @@ func (p *PromptBuilder) buildStatic(catalog ToolCatalog, activeSkill *skill.Skil
 	if p.ctx.Audience == AudiencePrimary {
 		b.WriteString("\n")
 		b.WriteString(WorkPolicySection())
-		b.WriteString("\n\n")
+
+		b.WriteString("\n")
+		b.WriteString(SandboxPolicySection())
+
+		b.WriteString("\n")
 		b.WriteString(catalog.ToolCallingSection())
 		b.WriteString(catalog.BackgroundTasksSection())
 		b.WriteString(catalog.TaskManagementSection())
