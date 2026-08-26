@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/contextx"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	"github.com/spray272598/code-agent/internal/domain/tool"
@@ -14,6 +15,16 @@ import (
 )
 
 // --- mocks ---
+
+// noopSummarizer is a Summarizer that never calls the LLM.
+// It prevents the compressor from consuming the test LLM queue.
+type noopSummarizer struct {
+	*contextx.Summarizer
+}
+
+func newNoopSummarizer() *contextx.Summarizer {
+	return &contextx.Summarizer{}
+}
 
 type scriptedLLM struct {
 	mu    sync.Mutex
@@ -114,7 +125,8 @@ func setupLoop(t *testing.T, llm port.ILLMPort, confirmWrite bool) (*Loop, *secu
 	reg.Register(coding.NewGlob(ws))
 	reg.Register(echoTool{})
 	perm := security.NewGuard(dir, true, confirmWrite)
-	loop := NewLoop(llm, reg, newMemSessionRepo(), &memMsgRepo{}, perm, 8, 8000)
+	// Use noop summarizer to avoid consuming the test LLM queue
+	loop := NewLoopWithSummarizer(llm, reg, newMemSessionRepo(), &memMsgRepo{}, perm, 8, 8000, newNoopSummarizer())
 	return loop, perm
 }
 

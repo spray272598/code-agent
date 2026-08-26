@@ -77,7 +77,8 @@ func NewLoop(
 		tokenBudget = DefaultTokenBudget
 	}
 	comp := contextx.NewCompressor(tokenBudget / 2)
-	comp.SetSummarizer(contextx.NewSummarizer(llm))
+	summarizer := contextx.NewSummarizer(llm)
+	comp.SetSummarizer(summarizer)
 	return &Loop{
 		llm: llm, tools: tools, sessions: sessions, messages: messages,
 		perm: perm, compressor: comp,
@@ -87,6 +88,24 @@ func NewLoop(
 		tokens:       NewTokenManager(tokenBudget),
 		histLoader:   NewHistoryLoader(messages, comp),
 	}
+}
+
+// NewLoopWithSummarizer creates a Loop with a custom summarizer.
+// Use this in tests to avoid consuming the main LLM queue.
+func NewLoopWithSummarizer(
+	llm port.ILLMPort,
+	tools *tool.MapRegistry,
+	sessions sessrepo.ISessionRepository,
+	messages sessrepo.IMessageRepository,
+	perm *security.Guard,
+	maxRounds, tokenBudget int,
+	summarizer *contextx.Summarizer,
+) *Loop {
+	loop := NewLoop(llm, tools, sessions, messages, perm, maxRounds, tokenBudget)
+	if summarizer != nil {
+		loop.compressor.SetSummarizer(summarizer)
+	}
+	return loop
 }
 
 func (l *Loop) SetSkills(s *skill.Service)   { l.skills = s }
@@ -668,7 +687,14 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 			if taskPlan != nil {
 				pass, gaps := taskPlan.Review()
 				if !pass && step < l.maxRounds {
-					msg := "Plan review: incomplete steps �?" + strings.Join(gaps, "; ") +
+					// If LLM explicitly returned a Final Answer, accept it as final
+					// rather than forcing another round. This handles cases where
+					// the LLM decides the task is complete despite plan gaps.
+					if react.FinalAnswer != "" {
+						publish(&Event{Type: EventReview, Content: "plan review: gaps but LLM returned final answer", Data: taskPlan, Timestamp: now()})
+						break
+					}
+					msg := "Plan review: incomplete steps — " + strings.Join(gaps, "; ") +
 						". Emit Thought then Action for remaining work, or Final Answer explaining why skipped."
 					publish(&Event{Type: EventReview, Content: msg, Data: taskPlan, Timestamp: now()})
 					auditLog("review", "", msg, "retry", 0)

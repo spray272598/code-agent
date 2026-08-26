@@ -93,6 +93,23 @@ func WritePrometheus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// SSE connection pool metrics are emitted via a callback to avoid import cycle.
+	for _, counter := range sseCountersSnapshot() {
+		b.WriteString("# HELP ")
+		b.WriteString(counter.Name)
+		b.WriteString(" ")
+		b.WriteString(counter.Help)
+		b.WriteString("\n# TYPE ")
+		b.WriteString(counter.Name)
+		b.WriteString(" ")
+		b.WriteString(counter.Type)
+		b.WriteString("\n")
+		b.WriteString(counter.Name)
+		b.WriteString(" ")
+		b.WriteString(fmt.Sprint(counter.Value))
+		b.WriteString("\n")
+	}
+
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	if _, err := w.Write([]byte(b.String())); err != nil {
 		LogError("prometheus write", err)

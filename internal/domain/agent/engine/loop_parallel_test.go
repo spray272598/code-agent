@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/contextx"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 )
@@ -39,6 +40,11 @@ func (s *slowEcho) Execute(ctx context.Context, args map[string]any) (tool.Resul
 	return tool.Result{Text: "ok:" + t}, nil
 }
 
+// newNoopSummarizer returns a Summarizer that never calls the LLM.
+func newNoopLoop(llm port.ILLMPort, reg *tool.MapRegistry, maxRounds, tokenBudget int) *Loop {
+	return NewLoopWithSummarizer(llm, reg, newMemSessionRepo(), &memMsgRepo{}, nil, maxRounds, tokenBudget, &contextx.Summarizer{})
+}
+
 func TestLoopParallelReadOnlyTools(t *testing.T) {
 	var concurrent, maxC atomic.Int32
 	reg := tool.NewRegistry()
@@ -52,7 +58,7 @@ Action: [{"name":"read_a","args":{"text":"a"}},{"name":"read_b","args":{"text":"
 		`Thought: done
 Final Answer: parallel ok`,
 	}}
-	loop := NewLoop(llm, reg, newMemSessionRepo(), &memMsgRepo{}, nil, 5, 8000)
+	loop := newNoopLoop(llm, reg, 5, 8000)
 	sess := sessmodel.NewSession("sp", "u", "p", "t", "")
 	res, err := loop.Run(context.Background(), sess, "parallel", nil, RunOptions{AutoApprove: true})
 	if err != nil {
@@ -81,7 +87,7 @@ Final Answer: validated`,
 	reg := tool.NewRegistry()
 	var n, m atomic.Int32
 	reg.Register(&slowEcho{name: "read_x", n: &n, max: &m})
-	loop := NewLoop(llm, reg, newMemSessionRepo(), &memMsgRepo{}, nil, 5, 4000)
+	loop := newNoopLoop(llm, reg, 5, 4000)
 	sess := sessmodel.NewSession("sv", "u", "p", "t", "")
 	res, err := loop.Run(context.Background(), sess, "val", nil, RunOptions{AutoApprove: true})
 	if err != nil {
@@ -102,7 +108,7 @@ func TestLoopTokenBudgetStop(t *testing.T) {
 	reg := tool.NewRegistry()
 	var n, m atomic.Int32
 	reg.Register(&slowEcho{name: "read_x", n: &n, max: &m})
-	loop := NewLoop(llm2, reg, newMemSessionRepo(), &memMsgRepo{}, nil, 10, 15)
+	loop := newNoopLoop(llm2, reg, 10, 15)
 	sess := sessmodel.NewSession("sb", "u", "p", "t", "")
 	res, err := loop.Run(context.Background(), sess, "budget", nil, RunOptions{AutoApprove: true})
 	if err != nil {

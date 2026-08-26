@@ -58,6 +58,7 @@ import (
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
+	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
 	"github.com/spray272598/code-agent/internal/observability"
 	wshub "github.com/spray272598/code-agent/internal/trigger/ws"
 )
@@ -709,6 +710,20 @@ func Build(cfg *config.Config) (*App, error) {
 			}
 		},
 	}, nil
+}
+
+func init() {
+	observability.RegisterSSESnapshot(func() []observability.SSECounter {
+		return []observability.SSECounter{
+			{Name: "code_agent_sse_active_connections", Help: "Currently active SSE connections", Type: "gauge", Value: sseinfra.SSEActiveConnections()},
+			{Name: "code_agent_sse_total_connections", Help: "Total SSE connections since start", Type: "counter", Value: sseinfra.SSETotalConnections()},
+			{Name: "code_agent_sse_total_events", Help: "Total SSE events emitted", Type: "counter", Value: sseinfra.SSETotalEvents()},
+			{Name: "code_agent_sse_total_bytes", Help: "Total SSE bytes sent", Type: "counter", Value: sseinfra.SSETotalBytes()},
+			{Name: "code_agent_sse_total_dropped", Help: "Total SSE events dropped due to backpressure", Type: "counter", Value: sseinfra.SSETotalDropped()},
+			{Name: "code_agent_sse_heartbeats_sent", Help: "Total SSE heartbeats sent", Type: "counter", Value: sseinfra.SSEHeartbeatsSent()},
+			{Name: "code_agent_sse_doom_loop_detected", Help: "Total SSE doom loop detections", Type: "counter", Value: sseinfra.SSEDoomLoopDetected()},
+		}
+	})
 }
 
 func findMCPDemo() string {
