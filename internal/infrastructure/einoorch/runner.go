@@ -114,7 +114,7 @@ func NewRunner(
 		persona:    defaultPersona(),
 		cache:      tool.NewResultCache(DefaultToolCacheTTL, DefaultToolCacheSize),
 		compressor: comp,
-		prompt:     NewPromptBuilder(defaultPersona(), tools),
+		prompt:     NewPromptBuilder(NewPromptContext(), tools),
 		tokens:     engine.NewTokenManager(cfg.TokenBudget),
 		graphIntr:  make(map[string]string),
 	}
@@ -634,7 +634,7 @@ func (r *Runner) tryGraphResume(
 		ToolCallingModel: cm,
 		ToolsConfig:      compose.ToolsNodeConfig{Tools: einoTools},
 		MaxStep:          r.cfg.MaxSteps,
-		MessageModifier:  react.NewPersonaModifier(defaultPersona()),
+		MessageModifier:  r.prompt.MessageModifier(ctx, session.UserID, session.ProjectID, "", nil, r.cfg.TokenBudget),
 		GraphName:        DefaultGraphName,
 	}, r.graphStore)
 	if err != nil || handle == nil || handle.run == nil {
@@ -879,19 +879,15 @@ func jsonMarshal(v any) (string, error) {
 }
 
 func defaultPersona() string {
-	return `You are Code-Agent on Eino ReAct orchestration.
-Sandboxed workspace. Use tools for file/shell. Prefer edit_file.
-If a tool returns DENIED or CONFIRM, explain what the user must approve.
-For multi-step independent research, you may use the delegate tool when available.
-Prefer code_search for symbol/file discovery before blind glob.
-For deep multi-step implementation use prefix /deep ; for parallel roles use /team .
-
-## Workspace switching
-If the user asks to work on a project outside the current workspace, call switch_workspace first:
-{"name":"switch_workspace","args":{"path":"D:/some/project"}}
-After switching, all file tools operate in the new workspace. Do NOT attempt to access paths outside the workspace without switching.
-
-Be concise.`
+	return NewPromptContext().Header() + "\n\n" +
+		WorkPolicySection() + "\n\n" +
+		`<tool_calling>
+- Use specialized tools instead of bash when possible. Prefer dedicated file tools for read/edit over shell commands.
+- Reserve shell commands exclusively for actual system operations.
+- NEVER use bash echo to communicate with the user. Output all communication in your response text.
+</tool_calling>` + "\n\n" +
+		CommunicationSection() + "\n\n" +
+		FormattingSection()
 }
 
 func isContinue(s string) bool {

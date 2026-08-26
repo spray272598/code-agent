@@ -26,6 +26,45 @@ func (echoT) Execute(_ context.Context, args map[string]any) (tool.Result, error
 	return tool.Result{Text: "echo:" + t}, nil
 }
 
+type readT struct{}
+
+func (readT) Name() string        { return "read_file" }
+func (readT) Description() string { return "Read file contents" }
+func (readT) InputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path": map[string]any{"type": "string"},
+	}}
+}
+func (readT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
+	return tool.Result{Text: "file content"}, nil
+}
+
+type editT struct{}
+
+func (editT) Name() string        { return "edit_file" }
+func (editT) Description() string { return "Edit file contents" }
+func (editT) InputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path": map[string]any{"type": "string"},
+	}}
+}
+func (editT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
+	return tool.Result{Text: "edited"}, nil
+}
+
+type grepT struct{}
+
+func (grepT) Name() string        { return "code_search" }
+func (grepT) Description() string { return "Search code patterns" }
+func (grepT) InputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"pattern": map[string]any{"type": "string"},
+	}}
+}
+func (grepT) Execute(_ context.Context, _ map[string]any) (tool.Result, error) {
+	return tool.Result{Text: "matches"}, nil
+}
+
 type bashT struct{}
 
 func (bashT) Name() string        { return "bash" }
