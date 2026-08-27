@@ -94,6 +94,8 @@ type Runner struct {
 	ctxIntegrator *contextx.ContextIntegrator
 	// budgetMgr enables dynamic token budget allocation (nil = uses static budget).
 	budgetMgr *contextx.BudgetManager
+	// eventBus provides waterfall/serial dispatch for agent loop lifecycle events.
+	eventBus *engine.AgentEventBus
 }
 
 func NewRunner(
@@ -219,6 +221,11 @@ func (r *Runner) SetContextIntegrator(ci *contextx.ContextIntegrator) {
 // SetBudgetManager injects the dynamic token budget manager (nil = disabled).
 func (r *Runner) SetBudgetManager(bm *contextx.BudgetManager) {
 	r.budgetMgr = bm
+}
+
+// SetEventBus injects the agent event bus for waterfall/serial lifecycle events.
+func (r *Runner) SetEventBus(bus *engine.AgentEventBus) {
+	r.eventBus = bus
 }
 
 // SetJournalConfig configures the journal persistence backend for DeepAgent runs.
@@ -459,6 +466,12 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	}
 
 	// --- history load + compress chain ---
+	if r.eventBus != nil {
+		preStepPayload := &engine.PreStepEvent{SessionID: session.ID, Step: 0}
+		_ = r.eventBus.Waterfall(ctx, engine.AgentPreStep, preStepPayload, func(ctx context.Context) error {
+			return nil
+		})
+	}
 	msgs, compressNote := r.loadAndCompress(ctx, session, userInput, opts.ForceCompact, publish)
 	if compressNote != "" {
 		publish(&engine.Event{Type: engine.EventCompress, Content: compressNote, Timestamp: nowMs()})
@@ -532,15 +545,27 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	var genErr error
 	tLLM := time.Now()
 	llmCtx, llmSpan := observability.StartSpan(tctx, "eino.llm.generate")
-	if r.cfg.UseStream {
-		final, genErr = r.runStream(llmCtx, handle, msgs, publish, genOpts...)
-	} else {
-		out, err := handle.Generate(llmCtx, msgs, genOpts...)
-		genErr = err
-		if out != nil {
-			final = strings.TrimSpace(out.Content)
+
+	// Wrap LLM call with agent/request waterfall (plugins can override model/params)
+	llmCall := func(ctx context.Context) error {
+		if r.cfg.UseStream {
+			final, genErr = r.runStream(ctx, handle, msgs, publish, genOpts...)
+		} else {
+			out, err := handle.Generate(ctx, msgs, genOpts...)
+			genErr = err
+			if out != nil {
+				final = strings.TrimSpace(out.Content)
+			}
 		}
+		return genErr
 	}
+	if r.eventBus != nil {
+		reqPayload := &engine.RequestEvent{SessionID: session.ID, Model: r.cfg.Model, Messages: len(msgs)}
+		genErr = r.eventBus.Waterfall(llmCtx, engine.AgentRequest, reqPayload, llmCall)
+	} else {
+		genErr = llmCall(llmCtx)
+	}
+
 	llmSpan.End()
 	llmLatency := time.Since(tLLM)
 	observability.Current().ObserveLLM(llmLatency)
@@ -565,6 +590,13 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	}
 
 	if genErr != nil {
+		// Emit agent/request-error (plugins can retry or inject fallback)
+		if r.eventBus != nil {
+			errPayload := &engine.RequestErrorEvent{SessionID: session.ID, Step: 0, Error: genErr}
+			_ = r.eventBus.Waterfall(ctx, engine.AgentRequestError, errPayload, func(ctx context.Context) error {
+				return nil
+			})
+		}
 		if isInterruptErr(genErr) {
 			if iid := ExtractFirstInterruptID(genErr); iid != "" {
 				r.setGraphInterrupt(session.ID, iid)
