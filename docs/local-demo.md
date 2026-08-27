@@ -7,7 +7,7 @@
 ## 一键启动
 
 ```powershell
-cd D:\project_go\code-agent
+# 在项目根目录下执行
 
 # mock LLM + host（本地零 Key）
 powershell -File scripts/dev_local.ps1

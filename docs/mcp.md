@@ -2,10 +2,20 @@
 
 ## Overview
 
-Code-Agent embeds an **MCP manager** (stdio + HTTP transports) and bridges tools into the agent registry as `server__tool` names when collisions exist.
+Code-Agent supports both **MCP Client** (connecting to external MCP servers) and **MCP Server** (exposing our tools to external MCP clients like VS Code, Claude Desktop).
+
+### MCP Client (Consumer)
 
 ```
 Agent Loop → tool.MapRegistry → MCPTool → Manager.CallTool → StdioClient/HTTPClient JSON-RPC
+```
+
+### MCP Server (Provider)
+
+External clients connect to our agent via standard MCP protocol:
+
+```
+VS Code / Claude Desktop → MCP Streamable HTTP → MCPServer → ToolRegistry → ITool.Execute()
 ```
 
 All MCP tools pass **security.Guard** (default CONFIRM; deny patterns on args; path sandbox when `path` present).
@@ -99,3 +109,45 @@ go build -o bin/mcp-demo.exe ./cmd/mcp-demo
 - Do not auto-approve MCP write/exec tools
 - Scope MCP command binary under trusted install paths
 - Treat MCP results as untrusted input in prompts
+
+## MCP Server (Provider)
+
+The MCP Server exposes our agent's tools, resources, and prompts to external MCP clients.
+
+### Supported Methods
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Protocol version negotiation, capability advertisement |
+| `ping` | Keepalive |
+| `tools/list` | List all registered tools with schemas |
+| `tools/call` | Execute a tool by name |
+| `resources/list` | List available resources |
+| `resources/read` | Read resource content by URI |
+| `prompts/list` | List available prompts |
+| `prompts/get` | Get prompt messages with arguments |
+
+### Capabilities
+
+The server advertises capabilities based on what's registered:
+- `tools` — if any tools are registered in the ToolRegistry
+- `resources` — if a ResourceProvider is configured
+- `prompts` — if a PromptProvider is configured
+
+### Integration
+
+```go
+import "github.com/spray272598/code-agent/internal/infrastructure/mcp"
+
+registry := tool.NewRegistry()
+// register tools...
+
+mcpServer := mcp.NewMCPServer(registry)
+mcpServer.WithResources(myResourceProvider)
+mcpServer.WithPrompts(myPromptProvider)
+
+jsonrpcServer := jsonrpc.NewServer()
+mcpServer.RegisterHandlers(jsonrpcServer)
+
+// Serve over stdio or HTTP
+```

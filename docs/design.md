@@ -1,10 +1,7 @@
 # Code-Agent 设计文档
 
 > **定位**：类 Claude Code 的 **Coding Agent 运行时**（服务端 + CLI 客户端）  
-> **仓库**：`git@github.com:spray272598/code-agent.git`  
-> **本地路径**：`D:\project_go\code-agent`  
-> **参考**：`walicode-server`（领域与 Agent 深度）、`walissh-client`（流式交互）、`ai-desktop-assistant`（可迁移底座）  
-> **状态**：Phase 1–6 + Eino 混合编排已落地  
+> **状态**：Phase 1–6 + Eino 混合编排 + 标准协议（JSON-RPC 2.0 / MCP / ACP）已落地  
 > **编排**：**默认 Eino ReAct**；无 Key/mock → `native-offline`。边界见 [boundary.md](./boundary.md)。  
 
 
@@ -271,7 +268,7 @@ skills/<id>/
 
 ### 4.8 上下文压缩与 Token
 
-**多级压缩（对标 walicode ContextCompressor）**
+**多级压缩**
 
 | Level | 动作 |
 |-------|------|
@@ -499,23 +496,7 @@ code-agent/
 
 ---
 
-## 9. 从 ai-desktop-assistant 迁移清单
-
-| 组件 | 动作 |
-|------|------|
-| ReAct Engine | 迁移并改流式、Hook、Reflect |
-| PermissionGuard | 迁移并升级 5 层 + path sandbox |
-| HybridReducer | 迁入 contextx，包进 Compressor |
-| MCP stdio/SSE | 迁到 infrastructure，domain 只 port |
-| Skill loader | 迁移增强 |
-| LLM OpenAI gateway | 加 Stream |
-| Session/Message MySQL | 扩展 project_id / summary |
-| Marketplace | 迁移并修 DIP |
-| React 控制台 | **不作为主路径**；可选调试页后期再加 |
-
----
-
-## 10. 分阶段实施计划
+## 9. 分阶段实施计划
 
 ### Phase 0 — 建仓与 DIP 骨架
 
@@ -619,12 +600,12 @@ code-agent/
 
 ---
 
-## 13. 成功标准（秋招可讲述）
+## 13. 成功标准
 
 1. 能画清：**CLI → Server → Loop → Tools/MCP → 权限 → 压缩/记忆**  
 2. 能 Demo：流式改代码 + 权限确认 + MCP 热装  
 3. 能说明：DDD 依赖倒置如何服务单测  
-4. 能对比：与 walicode 的对齐点、与 Claude Code 的差距（诚实）  
+4. 能对比：标准协议（MCP/ACP/JSON-RPC 2.0）的实现深度  
 5. 有数据：压缩前后 token、限流与配额行为  
 
 ---

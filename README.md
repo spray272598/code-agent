@@ -2,8 +2,7 @@
 
 类 **Claude Code** 的 Coding Agent 运行时（Go）：**Eino 负责编排与对话，自研负责安全执行与产品层**。
 
-- 仓库：`git@github.com:spray272598/code-agent.git`
-- 设计：[docs/design.md](docs/design.md) · 边界：[docs/boundary.md](docs/boundary.md) · Eino：[docs/eino-integration.md](docs/eino-integration.md) · 面试：[docs/interview-guide.md](docs/interview-guide.md)
+- 设计：[docs/design.md](docs/design.md) · 边界：[docs/boundary.md](docs/boundary.md) · Eino：[docs/eino-integration.md](docs/eino-integration.md)
 
 ## 架构原则（必读）
 
@@ -26,6 +25,16 @@ CLI ──SSE──► Server(trigger)
                          └─ GuardedTool → domain tools + MCP
 ```
 
+### 标准协议层
+
+```
+外部客户端 (VS Code, Claude Desktop, IDE)
+    │
+    ├─ MCP (Streamable HTTP / stdio) ──► MCPServer ──► ToolRegistry
+    ├─ ACP (JSON-RPC 2.0) ────────────► ACPHandler ──► ChatApp
+    └─ JSON-RPC 2.0 ──────────────────► jsonrpc.Server
+```
+
 ## 目录结构（DDD 分层）
 
 代码位于 `internal/`，按领域驱动设计严格分层，依赖方向自上而下（外层依赖内层，领域层不依赖任何外层）：
@@ -45,6 +54,7 @@ internal/
   application/            # 应用层：用例编排（ChatApp / RunBackground / Options）
   infrastructure/         # 基础设施层：外部适配器
     einoorch/             #   Eino 编排 Runner（异步压缩、子代理注入）
+    jsonrpc/              #   JSON-RPC 2.0 核心传输（MCP Server / ACP 共用）
     config/ · llm/ · mcp/ · redis/ · mysql/ · sqlite/ · kms/ · vector/ · ssh/
   trigger/                # 触发层：HTTP(SSE) · MCP · ACP 适配
   bootstrap/              # 组合根：装配各层依赖、注入配置
@@ -120,18 +130,19 @@ llm:
 - **账号（toC）**：邮箱 + 密码注册/登录，JWT 鉴权，邮箱验证与密码重置；数据按 `user_id` 隔离（无企业/组织概念）
 - **编排**：Eino ReAct + callbacks→SSE；`/team` 并行子代理；native 自研 Loop 兜底；**计划-执行-反思**可视化 + 可中断重规划（3.5）
 - **安全**：五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流；**sandbox 三档**（readonly / workspace / strict，5.1）
-- **LLM 可靠性**：纯函数重试分类器 `ClassifyLLMError`（21 个表驱动单测）；429 指数退避±20% 抖动尊重 Retry-After；400 上下文溢出→压缩后重提交（`ErrContextOverflow`）；401/403 上抛鉴权层（`ErrAuth`）；`openai.go` `doWithRetry` 闭环（`internal/infrastructure/llm/retry.go`）
-- **工具并行**：per-path 写锁替代 allRead 二分法——写同一文件的工具调用通过 `locks[path]` 互斥串行，写不同文件 / 读操作完全并行；bash 用全局互斥（`internal/domain/agent/engine/tool_batch.go`）
-- **停滞检测**：循环内连续重复工具签名 → `same==1` 注入 nudge 提示词给模型自纠机会，`same>=3` 硬停反射+报错（`internal/domain/agent/engine/loop.go`）
-- **上下文安全**：`SelectSafeSplit` 加 `min_compactable` 下限（可压缩区 token 过少时不浪费 LLM 摘要调用）+ snap 保护（`internal/domain/contextx/compressor.go`）
+- **LLM 可靠性**：纯函数重试分类器 `ClassifyLLMError`（21 个表驱动单测）；429 指数退避±20% 抖动尊重 Retry-After；400 上下文溢出→压缩后重提交（`ErrContextOverflow`）；401/403 上抛鉴权层（`ErrAuth`）
+- **工具并行**：per-path 写锁替代 allRead 二分法——写同一文件的工具调用通过 `locks[path]` 互斥串行，写不同文件 / 读操作完全并行；bash 用全局互斥
+- **停滞检测**：循环内连续重复工具签名 → `same==1` 注入 nudge 提示词给模型自纠机会，`same>=3` 硬停反射+报错
+- **上下文安全**：`SelectSafeSplit` 加 `min_compactable` 下限（可压缩区 token 过少时不浪费 LLM 摘要调用）+ snap 保护
 - **工具（本地 Workspace）**：read/write/edit/bash/glob/grep + `apply_patch`（结构化 diff）+ `lint`/`codecov` + `memory` + `delegate`（5.2）
-- **工具（远程 SSH）**：`ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_terminal`（交互式 PTY 终端）；连接凭据经 KMS 加密存储，仓储支持 SQLite/MySQL
-- **MCP**：stdio 热装，`server__tool` 注册，**与 core 工具同一 GuardedTool 横切**
-- **上下文管理（5.7）**：异步压缩（阈值可配 `compact_threshold_ratio`）+ 长任务跨段记忆固化 + PlanMode 探索期上下文隔离 + 子代理窗口隔离回写
-- **生态对接**：ACP 协议适配层（IDE 驱动，5.4）；用量监控面板 `/api/v1/usage`（5.3）；Plan 只读探索期状态机（5.5）；Headless 后台长任务（5.6）
+- **工具（远程 SSH）**：`ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_terminal`（交互式 PTY 终端）；连接凭据经 KMS 加密存储
+- **MCP**：stdio/HTTP 热装，`server__tool` 注册，**与 core 工具同一 GuardedTool 横切**；**MCP Server** 暴露 tools/resources/prompts 给外部客户端
+- **标准协议**：JSON-RPC 2.0 核心传输层；MCP Server（provider）+ MCP Client（consumer）；ACP over JSON-RPC 2.0（IDE 集成）
+- **上下文管理**：异步压缩（阈值可配 `compact_threshold_ratio`）+ 长任务跨段记忆固化 + PlanMode 探索期上下文隔离 + 子代理窗口隔离回写
+- **生态对接**：用量监控面板 `/api/v1/usage`；Plan 只读探索期状态机；Headless 后台长任务
 - **Skill / 记忆 / L0–L3 压缩 / Token 预算**
 - **存储/可观测**：SQLite | MySQL | memory；MinIO；OTLP/Prometheus；host-agent 
-- **CI/CD**：golangci-lint v2 + gofumpt 格式化门禁；CI 3 分片并行测试（domain-core / domain-rest / infra-app）+ 每分片 10 分钟超时；覆盖率自动合并报告
+- **CI/CD**：golangci-lint v2 + gofumpt 格式化门禁；CI 3 分片并行测试 + 每分片 10 分钟超时；覆盖率自动合并报告
 
 ## 文档
 
@@ -141,10 +152,10 @@ llm:
 | [docs/eino-integration.md](docs/eino-integration.md) | GuardedTool / 压缩 / 预算 |
 | [docs/architecture.md](docs/architecture.md) | Ports & Adapters |
 | [docs/agent-loop.md](docs/agent-loop.md) | ReAct 流程 |
-| [docs/mcp.md](docs/mcp.md) | MCP 对接 |
-| [docs/interview-guide.md](docs/interview-guide.md) | 秋招话术 |
+| [docs/mcp.md](docs/mcp.md) | MCP 对接（Client + Server） |
 | [docs/design.md](docs/design.md) | 总体设计 |
 | [docs/roadmap.md](docs/roadmap.md) | **toC 产品与工程路线图 / 后续工作规划** |
+| [docs/learning-guide.md](docs/learning-guide.md) | 学习指导 |
 
 ## 本机一键（Host + Server）
 

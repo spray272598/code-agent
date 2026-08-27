@@ -163,10 +163,6 @@ go test ./internal/infrastructure/einoorch/ -count=1 -v
 覆盖：权限 deny/confirm、validation、hook abort、cache+audit、mapsToSchema 工具保留、trim、PromptBuilder、
 `isInterruptErr` 误判防护、`runStats` TokenUsage、HITL resume 执行、tool_call delta 累积、filter tools。
 
-## 秋招话术
-
-> 编排可插拔：native 自研 Loop 与 Eino ReAct 共用 domain 工具。Eino 只负责图与 tool-calling；**安全与业务执行**集中在 GuardedTool 横切与压缩/预算链，框架无法绕过权限与审计。HITL 是应用层 awaiting + checkpoint，不是裸框架 resume。
-
 ## 后续
 
 1. ~~跨进程 Checkpoint 持久化 Interrupt~~ → `docs/checkpoint-index.md`  
