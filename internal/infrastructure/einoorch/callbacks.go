@@ -64,11 +64,11 @@ func (s *runStats) addUsage(u *model.TokenUsage) {
 
 // agentOptions builds compose callbacks that map Eino model/tool lifecycle → SSE events.
 func agentOptions(publish EventSink, stats *runStats) agent.AgentOption {
-	return agentOptionsWithEval(publish, stats, "", nil)
+	return agentOptionsWithEval(publish, stats, "", nil, nil)
 }
 
 // agentOptionsWithEval builds compose callbacks with optional eval tracking.
-func agentOptionsWithEval(publish EventSink, stats *runStats, sessionID string, evalCollector *eval.Collector) agent.AgentOption {
+func agentOptionsWithEval(publish EventSink, stats *runStats, sessionID string, evalCollector *eval.Collector, ctl *controlHandler) agent.AgentOption {
 	if publish == nil {
 		publish = func(*engine.Event) {}
 	}
@@ -79,6 +79,11 @@ func agentOptionsWithEval(publish EventSink, stats *runStats, sessionID string, 
 
 	modelH := &ub.ModelCallbackHandler{
 		OnStart: func(ctx context.Context, info *callbacks.RunInfo, input *model.CallbackInput) context.Context {
+			// Check for interrupt/replan between steps
+			if ctl != nil && ctl.ShouldInterrupt() {
+				publish(&engine.Event{Type: engine.EventCancel, Content: "interrupted by control signal", Timestamp: now()})
+				return ctx
+			}
 			n := 0
 			if input != nil {
 				n = len(input.Messages)

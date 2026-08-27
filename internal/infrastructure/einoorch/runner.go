@@ -284,6 +284,12 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		return nil, fmt.Errorf("empty input")
 	}
 
+	// --- ControlCh handler: drain mid-run signals concurrently ---
+	ctx, cancelFn := context.WithCancel(ctx)
+	ctl := newControlHandler(opts.ControlCh, r.perm, publish, cancelFn)
+	stopCtl := ctl.Start(ctx)
+	defer stopCtl()
+
 	if r.hooks != nil {
 		r.hooks.Emit(ctx, hook.Event{Point: hook.SessionStart, SessionID: session.ID})
 		defer r.hooks.Emit(ctx, hook.Event{Point: hook.SessionEnd, SessionID: session.ID})
@@ -516,7 +522,7 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 		Timestamp: nowMs(),
 	})
 
-	cbOpt := agentOptionsWithEval(publish, stats, session.ID, r.evalCollector)
+	cbOpt := agentOptionsWithEval(publish, stats, session.ID, r.evalCollector, ctl)
 	genOpts := []agent.AgentOption{cbOpt}
 	if graphOn {
 		// new user turn: force new run unless we are mid-graph-resume (handled separately)

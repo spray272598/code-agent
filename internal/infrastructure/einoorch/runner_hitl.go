@@ -64,7 +64,7 @@ func (r *Runner) tryGraphResume(
 		EvalCollector: r.evalCollector,
 	})
 	cpID := DefaultGraphCheckPointID(session.ID)
-	cbOpt := agentOptionsWithEval(publish, stats, session.ID, r.evalCollector)
+	cbOpt := agentOptionsWithEval(publish, stats, session.ID, r.evalCollector, nil)
 	genOpts := append([]agent.AgentOption{cbOpt}, graphResumeOpts(cpID, false)...)
 
 	t0 := time.Now()
