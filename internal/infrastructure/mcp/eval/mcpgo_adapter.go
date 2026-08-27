@@ -107,30 +107,91 @@ func (m *MCPGoClient) Close() error { return m.client.Close() }
 
 // --- Beyond IMCPClient: features our current port lacks (eval evidence) ---
 
-// ListResources shows mcp-go supports MCP resources (not in IMCPClient).
-func (m *MCPGoClient) ListResources(ctx context.Context) ([]string, error) {
+// ListResources implements IMCPClient.
+func (m *MCPGoClient) ListResources(ctx context.Context) ([]model.ResourceDef, error) {
 	res, err := m.client.ListResources(ctx, mcp.ListResourcesRequest{})
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(res.Resources))
+	out := make([]model.ResourceDef, 0, len(res.Resources))
 	for _, r := range res.Resources {
-		names = append(names, r.URI)
+		out = append(out, model.ResourceDef{
+			URI:        r.URI,
+			Name:       r.Name,
+			ServerName: m.name,
+		})
 	}
-	return names, nil
+	return out, nil
 }
 
-// ListPrompts shows mcp-go supports MCP prompts (not in IMCPClient).
-func (m *MCPGoClient) ListPrompts(ctx context.Context) ([]string, error) {
+// ReadResource implements IMCPClient.
+func (m *MCPGoClient) ReadResource(ctx context.Context, uri string) (*model.ResourceContent, error) {
+	req := mcp.ReadResourceRequest{}
+	req.Params.URI = uri
+	res, err := m.client.ReadResource(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Contents) == 0 {
+		return nil, fmt.Errorf("no content for resource: %s", uri)
+	}
+	c := res.Contents[0]
+	if trc, ok := mcp.AsTextResourceContents(c); ok {
+		return &model.ResourceContent{
+			URI:      trc.URI,
+			MimeType: trc.MIMEType,
+			Text:     trc.Text,
+		}, nil
+	}
+	return &model.ResourceContent{URI: uri}, nil
+}
+
+// ListPrompts implements IMCPClient.
+func (m *MCPGoClient) ListPrompts(ctx context.Context) ([]model.PromptDef, error) {
 	res, err := m.client.ListPrompts(ctx, mcp.ListPromptsRequest{})
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(res.Prompts))
+	out := make([]model.PromptDef, 0, len(res.Prompts))
 	for _, p := range res.Prompts {
-		names = append(names, p.Name)
+		pd := model.PromptDef{
+			Name:        p.Name,
+			Description: p.Description,
+			ServerName:  m.name,
+		}
+		for _, a := range p.Arguments {
+			pd.Arguments = append(pd.Arguments, model.PromptArgDef{
+				Name:        a.Name,
+				Description: a.Description,
+				Required:    a.Required,
+			})
+		}
+		out = append(out, pd)
 	}
-	return names, nil
+	return out, nil
+}
+
+// GetPrompt implements IMCPClient.
+func (m *MCPGoClient) GetPrompt(ctx context.Context, name string, args map[string]string) ([]model.PromptMessage, error) {
+	req := mcp.GetPromptRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+	res, err := m.client.GetPrompt(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.PromptMessage, 0, len(res.Messages))
+	for _, msg := range res.Messages {
+		content := ""
+		if tc, ok := mcp.AsTextContent(msg.Content); ok {
+			content = tc.Text
+		}
+		out = append(out, model.PromptMessage{
+			Role:    string(msg.Role),
+			Content: content,
+		})
+	}
+	return out, nil
 }
 
 func contentText(res *mcp.CallToolResult) string {

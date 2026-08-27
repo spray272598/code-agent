@@ -166,6 +166,83 @@ func (c *StdioClient) Close() error {
 	return nil
 }
 
+func (c *StdioClient) ListResources(ctx context.Context) ([]model.ResourceDef, error) {
+	var res struct {
+		Resources []struct {
+			URI         string `json:"uri"`
+			Name        string `json:"name"`
+			Description string `json:"description,omitempty"`
+			MimeType    string `json:"mimeType,omitempty"`
+		} `json:"resources"`
+	}
+	if err := c.call(ctx, "resources/list", map[string]any{}, &res); err != nil {
+		return nil, err
+	}
+	out := make([]model.ResourceDef, 0, len(res.Resources))
+	for _, r := range res.Resources {
+		out = append(out, model.ResourceDef{
+			URI: r.URI, Name: r.Name, Description: r.Description,
+			MimeType: r.MimeType, ServerName: c.name,
+		})
+	}
+	return out, nil
+}
+
+func (c *StdioClient) ReadResource(ctx context.Context, uri string) (*model.ResourceContent, error) {
+	var res model.ResourceContent
+	if err := c.call(ctx, "resources/read", map[string]any{"uri": uri}, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *StdioClient) ListPrompts(ctx context.Context) ([]model.PromptDef, error) {
+	var res struct {
+		Prompts []struct {
+			Name        string `json:"name"`
+			Description string `json:"description,omitempty"`
+			Arguments   []struct {
+				Name        string `json:"name"`
+				Description string `json:"description,omitempty"`
+				Required    bool   `json:"required,omitempty"`
+			} `json:"arguments,omitempty"`
+		} `json:"prompts"`
+	}
+	if err := c.call(ctx, "prompts/list", map[string]any{}, &res); err != nil {
+		return nil, err
+	}
+	out := make([]model.PromptDef, 0, len(res.Prompts))
+	for _, p := range res.Prompts {
+		pd := model.PromptDef{
+			Name: p.Name, Description: p.Description, ServerName: c.name,
+		}
+		for _, a := range p.Arguments {
+			pd.Arguments = append(pd.Arguments, model.PromptArgDef{
+				Name: a.Name, Description: a.Description, Required: a.Required,
+			})
+		}
+		out = append(out, pd)
+	}
+	return out, nil
+}
+
+func (c *StdioClient) GetPrompt(ctx context.Context, name string, args map[string]string) ([]model.PromptMessage, error) {
+	var res struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := c.call(ctx, "prompts/get", map[string]any{"name": name, "arguments": args}, &res); err != nil {
+		return nil, err
+	}
+	out := make([]model.PromptMessage, 0, len(res.Messages))
+	for _, m := range res.Messages {
+		out = append(out, model.PromptMessage{Role: m.Role, Content: m.Content})
+	}
+	return out, nil
+}
+
 func (c *StdioClient) call(ctx context.Context, method string, params any, result any) error {
 	if c.closed.Load() {
 		return fmt.Errorf("mcp client closed")

@@ -528,6 +528,80 @@ func (m *Manager) Health(ctx context.Context) []model.HealthStatus {
 	return out
 }
 
+func (m *Manager) ListResources(ctx context.Context) ([]model.ResourceDef, error) {
+	m.mu.RLock()
+	clients := make(map[string]mcpport.IMCPClient, len(m.clients))
+	for k, v := range m.clients {
+		clients[k] = v
+	}
+	m.mu.RUnlock()
+
+	var out []model.ResourceDef
+	for name, client := range clients {
+		resources, err := client.ListResources(ctx)
+		if err != nil {
+			log.Printf("[mcp] ListResources failed for %s: %v", name, err)
+			continue
+		}
+		out = append(out, resources...)
+	}
+	return out, nil
+}
+
+func (m *Manager) ReadResource(ctx context.Context, uri string) (*model.ResourceContent, error) {
+	m.mu.RLock()
+	clients := make(map[string]mcpport.IMCPClient, len(m.clients))
+	for k, v := range m.clients {
+		clients[k] = v
+	}
+	m.mu.RUnlock()
+
+	for _, client := range clients {
+		content, err := client.ReadResource(ctx, uri)
+		if err == nil {
+			return content, nil
+		}
+	}
+	return nil, fmt.Errorf("resource not found: %s", uri)
+}
+
+func (m *Manager) ListPrompts(ctx context.Context) ([]model.PromptDef, error) {
+	m.mu.RLock()
+	clients := make(map[string]mcpport.IMCPClient, len(m.clients))
+	for k, v := range m.clients {
+		clients[k] = v
+	}
+	m.mu.RUnlock()
+
+	var out []model.PromptDef
+	for name, client := range clients {
+		prompts, err := client.ListPrompts(ctx)
+		if err != nil {
+			log.Printf("[mcp] ListPrompts failed for %s: %v", name, err)
+			continue
+		}
+		out = append(out, prompts...)
+	}
+	return out, nil
+}
+
+func (m *Manager) GetPrompt(ctx context.Context, name string, args map[string]string) ([]model.PromptMessage, error) {
+	m.mu.RLock()
+	clients := make(map[string]mcpport.IMCPClient, len(m.clients))
+	for k, v := range m.clients {
+		clients[k] = v
+	}
+	m.mu.RUnlock()
+
+	for _, client := range clients {
+		messages, err := client.GetPrompt(ctx, name, args)
+		if err == nil {
+			return messages, nil
+		}
+	}
+	return nil, fmt.Errorf("prompt not found: %s", name)
+}
+
 func (m *Manager) ListServers() []model.ServerConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

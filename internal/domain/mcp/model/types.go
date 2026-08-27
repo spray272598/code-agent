@@ -37,6 +37,43 @@ type ToolDef struct {
 	ServerName  string
 }
 
+// ResourceDef MCP resource definition.
+type ResourceDef struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+	ServerName  string `json:"-"`
+}
+
+// ResourceContent MCP resource content.
+type ResourceContent struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+}
+
+// PromptDef MCP prompt definition.
+type PromptDef struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Arguments   []PromptArgDef `json:"arguments,omitempty"`
+	ServerName  string         `json:"-"`
+}
+
+// PromptArgDef MCP prompt argument definition.
+type PromptArgDef struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+// PromptMessage MCP prompt message.
+type PromptMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // HealthStatus per-server health.
 type HealthStatus struct {
 	Name      string `json:"name"`

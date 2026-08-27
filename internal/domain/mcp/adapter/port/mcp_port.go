@@ -15,6 +15,10 @@ type IMCPClient interface {
 	Ping(ctx context.Context) error
 	ListTools(ctx context.Context) ([]model.ToolDef, error)
 	CallTool(ctx context.Context, name string, args map[string]any) (string, error)
+	ListResources(ctx context.Context) ([]model.ResourceDef, error)
+	ReadResource(ctx context.Context, uri string) (*model.ResourceContent, error)
+	ListPrompts(ctx context.Context) ([]model.PromptDef, error)
+	GetPrompt(ctx context.Context, name string, args map[string]string) ([]model.PromptMessage, error)
 	Close() error
 }
 
@@ -28,6 +32,10 @@ type IMCPManagerPort interface {
 	Remove(name string) error
 	ListTools(ctx context.Context) ([]model.ToolDef, error)
 	CallTool(ctx context.Context, name string, args map[string]any) (string, error)
+	ListResources(ctx context.Context) ([]model.ResourceDef, error)
+	ReadResource(ctx context.Context, uri string) (*model.ResourceContent, error)
+	ListPrompts(ctx context.Context) ([]model.PromptDef, error)
+	GetPrompt(ctx context.Context, name string, args map[string]string) ([]model.PromptMessage, error)
 	Health(ctx context.Context) []model.HealthStatus
 	IsOnline(name string) bool
 }

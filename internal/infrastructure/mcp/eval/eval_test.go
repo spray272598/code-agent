@@ -92,7 +92,7 @@ func TestMCPGoResourcesPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list resources: %v", err)
 	}
-	if len(resources) != 1 || !strings.Contains(resources[0], "readme") {
+	if len(resources) != 1 || !strings.Contains(resources[0].URI, "readme") {
 		t.Fatalf("unexpected resources: %+v", resources)
 	}
 
@@ -100,7 +100,23 @@ func TestMCPGoResourcesPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list prompts: %v", err)
 	}
-	if len(prompts) != 1 || prompts[0] != "summarize" {
+	if len(prompts) != 1 || prompts[0].Name != "summarize" {
 		t.Fatalf("unexpected prompts: %+v", prompts)
+	}
+
+	content, err := c.ReadResource(ctx, "file:///readme")
+	if err != nil {
+		t.Fatalf("read resource: %v", err)
+	}
+	if !strings.Contains(content.Text, "README body") {
+		t.Fatalf("unexpected resource content: %+v", content)
+	}
+
+	messages, err := c.GetPrompt(ctx, "summarize", nil)
+	if err != nil {
+		t.Fatalf("get prompt: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Role != "user" {
+		t.Fatalf("unexpected messages: %+v", messages)
 	}
 }
