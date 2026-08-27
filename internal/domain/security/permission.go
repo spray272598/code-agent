@@ -320,12 +320,24 @@ func (g *Guard) networkEgressRules() []rule {
 	return []rule{
 		{id: "curl", reason: "network egress", patterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)\bcurl\b`), regexp.MustCompile(`(?i)\bwget\b`),
+			regexp.MustCompile(`(?i)\brclone\b`), regexp.MustCompile(`(?i)\brsync\b.*://`),
 		}},
 		{id: "ssh", reason: "remote shell", patterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)\bssh\s`), regexp.MustCompile(`(?i)\bscp\b`),
+			regexp.MustCompile(`(?i)\bsftp\b`), regexp.MustCompile(`(?i)\bsshpass\b`),
 		}},
 		{id: "nc", reason: "netcat", patterns: []*regexp.Regexp{
-			regexp.MustCompile(`(?i)\bnc\b`), regexp.MustCompile(`(?i)\bncat\b`),
+			regexp.MustCompile(`(?i)\bnc\s`), regexp.MustCompile(`(?i)\bncat\b`),
+			regexp.MustCompile(`(?i)\bsocat\b`),
+		}},
+		{id: "dns", reason: "dns exfiltration", patterns: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)\bnslookup\b`), regexp.MustCompile(`(?i)\bdig\s`),
+			regexp.MustCompile(`(?i)\bhost\s`),
+		}},
+		{id: "script_net", reason: "script network access", patterns: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)(import\s+socket|import\s+urllib|import\s+http)`),
+			regexp.MustCompile(`(?i)(require\s*\(\s*["']http|net\.Socket|net\.connect)`),
+			regexp.MustCompile(`(?i)dev/tcp/`),
 		}},
 	}
 }
@@ -671,6 +683,10 @@ func (g *Guard) underWorkspace(sessionID, p string) bool {
 	if err != nil {
 		return false
 	}
+	// resolve symlinks in workspace root once
+	if resolved, err := filepath.EvalSymlinks(absW); err == nil {
+		absW = resolved
+	}
 	// check all variants (encoding bypass)
 	for _, v := range PathVariants(p) {
 		if v == "" || strings.Contains(v, "\x00") {
@@ -687,6 +703,10 @@ func (g *Guard) underWorkspace(sessionID, p string) bool {
 			return false
 		}
 		absP = filepath.Clean(absP)
+		// resolve symlinks to prevent symlink-based escapes
+		if resolved, err := filepath.EvalSymlinks(absP); err == nil {
+			absP = resolved
+		}
 		rel, err := filepath.Rel(absW, absP)
 		if err != nil {
 			return false

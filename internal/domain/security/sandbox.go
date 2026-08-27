@@ -129,6 +129,13 @@ func isUnderWorkspace(path, workspace string) bool {
 	if err != nil {
 		return false
 	}
+	// resolve symlinks to prevent symlink-based escapes
+	if resolved, err := filepath.EvalSymlinks(absW); err == nil {
+		absW = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(absP); err == nil {
+		absP = resolved
+	}
 	rel, err := filepath.Rel(absW, absP)
 	if err != nil {
 		return false
@@ -137,8 +144,16 @@ func isUnderWorkspace(path, workspace string) bool {
 }
 
 func looksNetworkCmd(path, arg string) bool {
-	networkCmds := []string{"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "netcat"}
+	networkCmds := []string{
+		"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "netcat",
+		"nslookup", "dig", "host", "rclone", "rsync", "socat",
+	}
 	lp := strings.ToLower(filepath.Base(path))
+	// strip common wrappers (env, nice, time, etc.) to get the real binary
+	for _, prefix := range []string{"env", "nice", "time", "nohup", "sudo", "unshare"} {
+		lp = strings.TrimPrefix(lp, prefix)
+		lp = strings.TrimPrefix(lp, " ")
+	}
 	for _, c := range networkCmds {
 		if lp == c {
 			return true
@@ -146,9 +161,24 @@ func looksNetworkCmd(path, arg string) bool {
 	}
 	low := strings.ToLower(arg)
 	for _, c := range networkCmds {
-		if strings.Contains(low, c) {
+		if strings.Contains(low, " "+c) || strings.HasPrefix(low, c+" ") || strings.Contains(low, `"`+c+`"`) {
 			return true
 		}
+	}
+	// detect script-based network access: python/Node/Ruby/perl -c ... socket/urllib/http
+	scriptNetPatterns := []string{
+		"import socket", "import urllib", "import http.client", "import requests",
+		"require(", "http.get", "http.request", "net.Socket", "net.connect",
+		"IO::Socket", "open(|-", "dev/tcp",
+	}
+	for _, p := range scriptNetPatterns {
+		if strings.Contains(low, p) {
+			return true
+		}
+	}
+	// detect DNS-only commands that leak info
+	if strings.Contains(low, "host ") || strings.Contains(low, "dig ") || strings.Contains(low, "nslookup ") {
+		return true
 	}
 	return false
 }

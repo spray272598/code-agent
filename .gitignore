@@ -24,6 +24,7 @@
 configs/config.local.yaml
 .env
 .env.*
+!.env.example
 
 # Local secrets & runtime artifacts
 /secrets/
@@ -57,3 +58,6 @@ web/dist/
 
 # root build artifacts (go build ./cmd/...)
 /host-agent
+
+# Local tool directories
+.workbuddy/

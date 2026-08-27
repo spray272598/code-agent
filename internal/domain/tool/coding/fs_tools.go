@@ -77,6 +77,10 @@ func (w *Workspace) ResolveForSession(sessionID, rel string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("workspace not configured")
 	}
+	// resolve symlinks in workspace root to prevent symlink-based escapes
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	if rel == "" || rel == "." {
 		return root, nil
 	}
@@ -86,12 +90,24 @@ func (w *Workspace) ResolveForSession(sessionID, rel string) (string, error) {
 		if err != nil || strings.HasPrefix(rel2, "..") {
 			return "", fmt.Errorf("path outside workspace: %s", rel)
 		}
+		// resolve symlinks in the target path
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+			rel2, err = filepath.Rel(root, resolved)
+			if err != nil || strings.HasPrefix(rel2, "..") {
+				return "", fmt.Errorf("path outside workspace (symlink): %s", rel)
+			}
+			return resolved, nil
+		}
 		return clean, nil
 	}
 	full := filepath.Join(root, clean)
 	abs, err := filepath.Abs(full)
 	if err != nil {
 		return "", err
+	}
+	// resolve symlinks in the resolved path
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
 	rel2, err := filepath.Rel(root, abs)
 	if err != nil || strings.HasPrefix(rel2, "..") {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
+	"github.com/spray272598/code-agent/internal/domain/security"
 	"github.com/spray272598/code-agent/internal/domain/telemetry"
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/domain/tool/coding"
@@ -77,6 +78,9 @@ type Runner struct {
 	// short window-friendly summary before it is written back into the parent
 	// context (M5.7-4). When nil, the raw Output is used (legacy behaviour).
 	SummarizeResult func(ctx context.Context, role, output string) (summary string, err error)
+	// GuardFactory creates an isolated Guard for each subagent. When nil,
+	// subagents share the parent's security context (legacy behaviour).
+	GuardFactory func(workspace string) *security.Guard
 }
 
 // WorktreePort isolation (implemented in worktree package).
@@ -162,6 +166,12 @@ func (r *Runner) RunOne(ctx context.Context, spec Spec) Result {
 	}
 
 	reg := r.buildRegistry(spec, workDir)
+	// Create isolated Guard for this subagent's workspace
+	var guard *security.Guard
+	if r.GuardFactory != nil {
+		guard = r.GuardFactory(workDir)
+	}
+
 	maxSteps := spec.MaxSteps
 	if maxSteps <= 0 {
 		if rc, ok := r.Roles[strings.ToLower(spec.Role)]; ok && rc.MaxSteps > 0 {
@@ -171,7 +181,7 @@ func (r *Runner) RunOne(ctx context.Context, spec Spec) Result {
 		}
 	}
 
-	output, steps, tokens, err := r.miniLoop(ctx, spec, reg, maxSteps)
+	output, steps, tokens, err := r.miniLoop(ctx, spec, reg, maxSteps, guard)
 	res := Result{
 		ID: spec.ID, Role: spec.Role, Output: output, Steps: steps, Tokens: tokens,
 		WorkDir: workDir, Duration: time.Since(start).Milliseconds(), Status: "ok",
@@ -253,7 +263,7 @@ func (r *Runner) buildRegistry(spec Spec, workDir string) *tool.MapRegistry {
 	return local
 }
 
-func (r *Runner) miniLoop(ctx context.Context, spec Spec, reg *tool.MapRegistry, maxSteps int) (string, int, int, error) {
+func (r *Runner) miniLoop(ctx context.Context, spec Spec, reg *tool.MapRegistry, maxSteps int, guard *security.Guard) (string, int, int, error) {
 	if r.LLM == nil {
 		return "", 0, 0, fmt.Errorf("llm unavailable")
 	}
@@ -307,6 +317,16 @@ Do not invent tools. Stay concise.`, spec.Role)
 			if t == nil {
 				text = "tool not found: " + tc.Name
 			} else {
+				// Check isolated Guard before execution
+				if guard != nil {
+					if decision := guard.Check(spec.ID, tc.Name, tc.Args); decision.Action == security.ActionDeny {
+						text = "denied by sandbox: " + decision.Reason
+						messages = append(messages, port.ChatMessage{
+							Role: "tool", Content: text, Name: tc.Name, ToolCallID: "sa-" + tc.Name,
+						})
+						continue
+					}
+				}
 				tt := time.Now()
 				res, err := t.Execute(ctx, tc.Args)
 				telemetry.ObserveTool(time.Since(tt))

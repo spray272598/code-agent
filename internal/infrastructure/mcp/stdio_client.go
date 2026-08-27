@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
+	"github.com/spray272598/code-agent/internal/domain/tool/coding"
 )
 
 // StdioClient implements domain mcp port.IMCPClient over stdio JSON-RPC.
@@ -31,6 +32,7 @@ type StdioClient struct {
 	nextID     atomic.Int64
 	closed     atomic.Bool
 	toolsCache []model.ToolDef
+	homeDir    string // temp dir for HOME isolation, cleaned up on Close
 }
 
 func NewStdioClient(cfg model.ServerConfig) *StdioClient {
@@ -51,13 +53,17 @@ func (c *StdioClient) Initialize(ctx context.Context) error {
 		return fmt.Errorf("mcp stdio %s: empty command", c.name)
 	}
 	c.cmd = exec.Command(c.command, c.args...)
-	if len(c.env) > 0 {
-		env := os.Environ()
-		for k, v := range c.env {
-			env = append(env, k+"="+v)
-		}
-		c.cmd.Env = env
+	// Use filtered env to prevent API keys / tokens leaking to MCP servers
+	env := coding.SafeEnv()
+	for k, v := range c.env {
+		env = append(env, k+"="+v)
 	}
+	// Isolate HOME so MCP server cannot read ~/.ssh, ~/.aws, etc.
+	if homeDir, err := os.MkdirTemp("", "mcp-home-*"); err == nil {
+		env = append(env, "HOME="+homeDir)
+		c.homeDir = homeDir
+	}
+	c.cmd.Env = env
 	// Windows: hide console window for child MCP process
 	hideMCPWindow(c.cmd)
 	stdin, err := c.cmd.StdinPipe()
@@ -152,6 +158,10 @@ func (c *StdioClient) Close() error {
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
 		_, _ = c.cmd.Process.Wait()
+	}
+	// Clean up isolated HOME directory
+	if c.homeDir != "" {
+		os.RemoveAll(c.homeDir)
 	}
 	return nil
 }
