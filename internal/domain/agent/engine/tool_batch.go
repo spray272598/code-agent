@@ -249,8 +249,24 @@ func (l *Loop) runToolCalls(
 		var resText string
 		_ = telemetry.SpanTool(ctx, tc.Name, func(tctx context.Context) error {
 			tctx = tool.WithSessionID(tctx, session.ID)
-			text, _ := l.execTool(tctx, tc.Name, tc.Args)
-			resText = text
+			t := l.tools.Get(tc.Name)
+			if t == nil {
+				resText = fmt.Sprintf("tool not found: %s", tc.Name)
+				return nil
+			}
+			st := tool.AsStreaming(t)
+			ch := st.ExecuteStream(tctx, tc.Args)
+			for item := range ch {
+				if item.Progress != nil {
+					publish(&Event{Type: EventToolProgress, SubType: tc.Name, Step: step, Content: item.Progress.Text, Timestamp: now()})
+				}
+				if item.Terminal != nil {
+					resText = item.Terminal.Result
+					if item.Terminal.Error != nil {
+						resText = item.Terminal.Error.Error()
+					}
+				}
+			}
 			return nil
 		})
 		out.latency = time.Since(t0)
