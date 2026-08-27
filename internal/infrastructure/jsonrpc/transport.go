@@ -118,6 +118,19 @@ func (s *Server) Handle(method string, h HandlerFunc) {
 	s.handlers[method] = h
 }
 
+func (s *Server) CallHandler(ctx context.Context, id ID, method string, params json.RawMessage) (any, error) {
+	h, ok := s.handlers[method]
+	if !ok {
+		return nil, NewError(CodeMethodNotFound, "method not found: "+method)
+	}
+	return h(ctx, id, method, params)
+}
+
+func (s *Server) CallHandlerDirect(ctx context.Context, id ID, method string, params json.RawMessage) error {
+	_, err := s.CallHandler(ctx, id, method, params)
+	return err
+}
+
 func (s *Server) Serve(ctx context.Context, t Transport) error {
 	for {
 		raw, err := t.ReadFrame()
