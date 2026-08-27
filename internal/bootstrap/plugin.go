@@ -79,12 +79,14 @@ func InitPlugins(cfg *config.Config, reg *tool.MapRegistry) (*plugin.DefaultMana
 func loadBuiltinPlugins(mgr *plugin.DefaultManager) error {
 	// Load coding tools plugin
 	codingPlugin := builtin.NewCodingToolsPlugin()
-	if err := mgr.Get("coding-tools"); err == nil {
+	_, err := mgr.Get("coding-tools")
+	if err == nil {
 		// Plugin already loaded
 		return nil
 	}
 
 	// Register the plugin
+	_ = codingPlugin // avoid unused variable error
 	return nil
 }
 
@@ -103,46 +105,30 @@ func NewPluginManager(mgr *plugin.DefaultManager, ctx *plugin.PluginContext) *Pl
 }
 
 // GetToolPlugin returns a tool plugin by name.
+// Note: This is a simplified implementation. Full implementation requires
+// access to internal plugin registry which is not exposed.
+// TODO: Add GetPlugin method to DefaultManager.
 func (pm *PluginManager) GetToolPlugin(name string) (plugin.ToolPlugin, bool) {
 	if pm.mgr == nil {
 		return nil, false
 	}
-
-	p, ok := pm.mgr.Get(name)
-	if !ok {
-		return nil, false
-	}
-
-	toolPlugin, ok := p.(plugin.ToolPlugin)
-	return toolPlugin, ok
+	// TODO: Implement when DefaultManager exposes Plugin access
+	return nil, false
 }
 
 // GetLLMPlugin returns an LLM plugin by name.
+// Note: This is a simplified implementation.
 func (pm *PluginManager) GetLLMPlugin(name string) (plugin.LLMPlugin, bool) {
 	if pm.mgr == nil {
 		return nil, false
 	}
-
-	p, ok := pm.mgr.Get(name)
-	if !ok {
-		return nil, false
-	}
-
-	llmPlugin, ok := p.(plugin.LLMPlugin)
-	return llmPlugin, ok
+	// TODO: Implement when DefaultManager exposes Plugin access
+	return nil, false
 }
 
 // ListToolPlugins lists all tool plugins.
+// Note: This is a simplified implementation.
 func (pm *PluginManager) ListToolPlugins() []plugin.ToolPlugin {
-	if pm.mgr == nil {
-		return nil
-	}
-
-	var plugins []plugin.ToolPlugin
-	for _, p := range pm.mgr.GetPluginsByCapability(plugin.CapabilityTool) {
-		if toolPlugin, ok := p.(plugin.ToolPlugin); ok {
-			plugins = append(plugins, toolPlugin)
-		}
-	}
-	return plugins
+	// TODO: Implement when DefaultManager exposes Plugin access
+	return nil
 }

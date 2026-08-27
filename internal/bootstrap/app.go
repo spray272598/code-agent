@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -53,6 +54,7 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/mysql"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
+	lsandbox "github.com/spray272598/code-agent/internal/infrastructure/sandbox/linux"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
@@ -247,6 +249,27 @@ func Build(cfg *config.Config) (*App, error) {
 
 	ws := coding.NewWorkspace(workspaceRoot)
 	perm := security.NewGuardMode(workspaceRoot, cfg.Security.PathSandbox, cfg.Security.DefaultConfirmWrite, security.ParseSandboxMode(cfg.Security.SandboxMode))
+
+	// Inject enhanced sandbox enforcer (Linux kernel-level sandbox with Landlock, seccomp, namespaces, cgroups)
+	var enhancedEnforcer security.SandboxEnforcer
+	if runtime.GOOS == "linux" {
+		enhancedEnforcer = lsandbox.NewEnhancedSandboxEnforcer(perm.Audit())
+		if err := enhancedEnforcer.ApplyProfile(security.ProfileConfig{
+			NetworkBlock: perm.Mode() == security.ModeStrict,
+			Deny:        []string{"**/.env", "**/*.pem", "**/secrets/**"},
+		}, workspaceRoot); err != nil {
+			log.Printf("[bootstrap] enhanced sandbox init failed, falling back: %v\n", err)
+			enhancedEnforcer = nil
+		} else {
+			log.Printf("[bootstrap] enhanced kernel sandbox active: landlock+seccomp+namespaces+cgroups\n")
+		}
+	}
+
+	// Inject enhanced sandbox into Guard (dependency inversion)
+	if enhancedEnforcer != nil {
+		perm.SetExternalSandboxEnforcer(enhancedEnforcer)
+	}
+
 	reg := tool.NewRegistry()
 	// local coding tools
 	localRead := coding.NewReadFile(ws)

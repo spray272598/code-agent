@@ -79,6 +79,8 @@ type Guard struct {
 	integrityChain *IntegrityChain
 	// Advanced security: adaptive circuit breaker
 	adaptiveBreaker *AdaptiveCircuitBreaker
+	// External sandbox enforcer (injected by bootstrap for dependency inversion)
+	externalSandboxEnforcer SandboxEnforcer
 }
 
 // SandboxMode selects the enforcement tier applied to tool execution.
@@ -172,7 +174,15 @@ func (g *Guard) initExtendedSecurity(workspace string) {
 	} else if engine, err := DefaultDenyEngine(); err == nil {
 		g.denyEngine = engine
 	}
-	g.sandboxMgr = NewSandboxManager(workspace, g.configLoader, g.audit)
+
+	// Use external sandbox enforcer if provided (dependency injection from bootstrap)
+	// Otherwise create the default SandboxManager
+	if g.externalSandboxEnforcer != nil {
+		// Create a minimal SandboxManager that wraps the external enforcer
+		g.sandboxMgr = NewSandboxManagerWithEnforcer(workspace, g.configLoader, g.audit, g.externalSandboxEnforcer)
+	} else {
+		g.sandboxMgr = NewSandboxManager(workspace, g.configLoader, g.audit)
+	}
 
 	// Advanced security components
 	g.injectionDetector = NewPromptInjectionDetector()
@@ -188,6 +198,12 @@ func (g *Guard) initExtendedSecurity(workspace string) {
 		g.behaviorTracker.GetSessionRisk,
 		g.injectionDetector.GetTotalDetectionsForAdaptive,
 	)
+}
+
+// SetExternalSandboxEnforcer sets an external sandbox enforcer (for dependency injection)
+// This should be called before initExtendedSecurity, typically by bootstrap
+func (g *Guard) SetExternalSandboxEnforcer(enforcer SandboxEnforcer) {
+	g.externalSandboxEnforcer = enforcer
 }
 
 func (g *Guard) DenyEngine() *DenyEngine                     { return g.denyEngine }
