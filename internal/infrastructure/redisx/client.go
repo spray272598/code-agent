@@ -86,6 +86,19 @@ func (c *Client) Unlock(ctx context.Context, key, val string) error {
 	return c.rdb.Eval(ctx, lua, []string{key}, val).Err()
 }
 
+// TryReserve sets key=val only if the key does not already exist (SET NX),
+// returning true when the caller won the reservation. Used for idempotency-key
+// deduplication: the first request reserves a PENDING slot; concurrent/retried
+// requests observe the existing value (still PENDING → in-progress, or a stored
+// result → replay). When Redis is disabled it returns true so single-instance
+// runs are unaffected (no dedup, but no blocking).
+func (c *Client) TryReserve(ctx context.Context, key, val string, ttl time.Duration) (bool, error) {
+	if !c.Enabled() {
+		return true, nil
+	}
+	return c.rdb.SetNX(ctx, key, val, ttl).Result()
+}
+
 func (c *Client) IncrBy(ctx context.Context, key string, n int64, ttl time.Duration) (int64, error) {
 	if !c.Enabled() {
 		return 0, nil

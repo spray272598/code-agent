@@ -6,7 +6,7 @@ import "github.com/spray272598/code-agent/internal/application"
 func ToAppChat(r ChatRequest) application.ChatRequest {
 	return application.ChatRequest{
 		SessionID: r.SessionID, UserID: r.UserID, ProjectID: r.ProjectID,
-		Message: r.Message, AutoApprove: r.AutoApprove,
+		Message: r.Message, AutoApprove: r.AutoApprove, IdempotencyKey: r.IdempotencyKey,
 	}
 }
 

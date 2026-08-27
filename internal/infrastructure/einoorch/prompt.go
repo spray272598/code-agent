@@ -147,6 +147,9 @@ func (p *PromptBuilder) buildStatic(catalog ToolCatalog, activeSkill *skill.Skil
 		b.WriteString("\n")
 		b.WriteString(SubagentCatalog())
 
+		b.WriteString("\n")
+		b.WriteString(DelegationGuidanceSection())
+
 		if !p.ctx.IsNonInteractive {
 			b.WriteString("\n")
 			b.WriteString(UserGuideSection())

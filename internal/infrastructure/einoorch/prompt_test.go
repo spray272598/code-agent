@@ -41,6 +41,9 @@ func TestPromptBuilderDynamic(t *testing.T) {
 	if !strings.Contains(sys, "user_info") {
 		t.Fatal("missing user_info section")
 	}
+	if !strings.Contains(sys, "delegation_guidance") {
+		t.Fatal("missing delegation_guidance section")
+	}
 	sys2 := pb.Build(context.Background(), "u", "p", "hello2", nil, 8000)
 	if !strings.Contains(sys2, "echo") {
 		t.Fatal("cache path broken")
@@ -225,6 +228,19 @@ func TestCommunicationSection(t *testing.T) {
 	}
 	if !strings.Contains(section, "Lead with the answer") {
 		t.Fatal("should contain lead-with-answer guidance")
+	}
+}
+
+func TestDelegationGuidanceSection(t *testing.T) {
+	section := DelegationGuidanceSection()
+	if !strings.Contains(section, "<delegation_guidance>") {
+		t.Fatal("should have delegation_guidance tag")
+	}
+	if !strings.Contains(section, "part of the requested outcome") {
+		t.Fatal("should state delegation is part of the outcome")
+	}
+	if !strings.Contains(section, "self-contained brief") {
+		t.Fatal("should instruct a self-contained subagent brief")
 	}
 }
 

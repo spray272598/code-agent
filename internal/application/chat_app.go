@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -64,6 +66,9 @@ type ChatApp struct {
 	// Sprint 1.6: MCP is now per-user. ChatApp no longer holds a single global
 	// Manager; callers obtain the per-user Manager via MCPFactory().For(ctx).
 	mcpFactory mcpport.IUserMCPManagerFactory
+	// idem is the idempotency-key store. Production uses *redisx.Client; tests
+	// inject an in-memory fake. Lazily resolved via getIdemStore().
+	idem idemStore
 }
 
 // Set* methods retained for gradual migration; prefer application.Option.
@@ -281,11 +286,12 @@ func (a *ChatApp) ListTools() []map[string]string {
 func (a *ChatApp) Permission() *security.Guard { return a.perm }
 
 type ChatRequest struct {
-	SessionID   string `json:"sessionId"`
-	UserID      string `json:"userId"`
-	ProjectID   string `json:"projectId"`
-	Message     string `json:"message"`
-	AutoApprove bool   `json:"autoApprove"`
+	SessionID      string `json:"sessionId"`
+	UserID         string `json:"userId"`
+	ProjectID      string `json:"projectId"`
+	Message        string `json:"message"`
+	AutoApprove    bool   `json:"autoApprove"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 }
 
 type ChatResponse struct {
@@ -396,6 +402,111 @@ func (a *ChatApp) acquireRunLock(ctx context.Context, sessionID string) (func(),
 	}, nil
 }
 
+// idemStore is the minimal redis contract ChatApp needs for idempotency-key
+// deduplication. *redisx.Client satisfies it (Get/Set/TryReserve); tests inject
+// an in-memory fake so the logic runs without a live Redis.
+type idemStore interface {
+	Get(ctx context.Context, key string) (string, error)
+	TryReserve(ctx context.Context, key, val string, ttl time.Duration) (bool, error)
+	Set(ctx context.Context, key, val string, ttl time.Duration) error
+}
+
+// idemWindow is how long a completed idempotency result stays replayable.
+const idemWindow = 10 * time.Minute
+
+// getIdemStore returns the configured idempotency store, falling back to the
+// live Redis client when present. Returns nil when no store is available
+// (Redis disabled) — callers then skip dedup without blocking the run.
+func (a *ChatApp) getIdemStore() idemStore {
+	if a.idem != nil {
+		return a.idem
+	}
+	if a.redis != nil && a.redis.Enabled() {
+		return a.redis
+	}
+	return nil
+}
+
+func idemKey(userID, key string) string {
+	if userID == "" {
+		return "idem:" + key
+	}
+	return "idem:" + userID + ":" + key
+}
+
+// checkIdempotency inspects an incoming idempotency key and returns the
+// resolution status plus (for "done") the cached response to replay.
+//
+//	"none"    – key unseen; caller should proceed (a PENDING slot is reserved)
+//	"pending" – another request with this key is in flight → reject
+//	"done"    – completed; cached holds the result to replay
+//	"error"   – completed with error; err holds the original error
+//
+// A store read/lock failure degrades to "none" so the run is never blocked.
+func (a *ChatApp) checkIdempotency(ctx context.Context, req ChatRequest) (status string, cached *ChatResponse, err error) {
+	if req.IdempotencyKey == "" {
+		return "none", nil, nil
+	}
+	store := a.getIdemStore()
+	if store == nil {
+		return "none", nil, nil
+	}
+	key := idemKey(req.UserID, req.IdempotencyKey)
+	val, gerr := store.Get(ctx, key)
+	if gerr != nil {
+		return "none", nil, nil
+	}
+	if val == "" {
+		ok, rerr := store.TryReserve(ctx, key, "pending", idemWindow)
+		if rerr != nil {
+			return "none", nil, nil
+		}
+		if !ok {
+			// lost the race to a concurrent request → treat as in-flight
+			return "pending", nil, nil
+		}
+		return "none", nil, nil
+	}
+	if val == "pending" {
+		return "pending", nil, nil
+	}
+	if strings.HasPrefix(val, "done:") {
+		var resp ChatResponse
+		if jerr := json.Unmarshal([]byte(val[len("done:"):]), &resp); jerr == nil {
+			return "done", &resp, nil
+		}
+		return "none", nil, nil
+	}
+	if strings.HasPrefix(val, "err:") {
+		return "error", nil, errors.New(val[len("err:"):])
+	}
+	return "none", nil, nil
+}
+
+// storeIdempotency records the final outcome of an idempotency-keyed request so
+// a retry replays it instead of re-running the agent. runErr != nil stores an
+// error result; otherwise resp is stored. No-op when the request has no key or
+// no store is configured.
+func (a *ChatApp) storeIdempotency(ctx context.Context, req ChatRequest, resp *ChatResponse, runErr error) {
+	if req.IdempotencyKey == "" {
+		return
+	}
+	store := a.getIdemStore()
+	if store == nil {
+		return
+	}
+	key := idemKey(req.UserID, req.IdempotencyKey)
+	if runErr != nil {
+		_ = store.Set(ctx, key, "err:"+runErr.Error(), idemWindow)
+		return
+	}
+	if resp != nil {
+		if b, jerr := json.Marshal(resp); jerr == nil {
+			_ = store.Set(ctx, key, "done:"+string(b), idemWindow)
+		}
+	}
+}
+
 func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	forceCompact := false
 	if resp, handled, fc := a.trySlash(&req); handled {
@@ -404,18 +515,37 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 		forceCompact = fc
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.timeoutSec)*time.Second)
+	defer cancel()
+
 	session, err := a.resolveSession(req)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.timeoutSec)*time.Second)
-	defer cancel()
 	if err := a.checkRate(ctx, req.UserID); err != nil {
 		return nil, err
 	}
 	if err := a.checkQuota(ctx, req.UserID); err != nil {
 		return nil, err
 	}
+
+	// --- Idempotency-key deduplication ---
+	// A client-supplied key means "this exact request was already issued".
+	// Replay a completed result, or reject a still-in-flight duplicate so the
+	// agent never runs twice for one logical user action (retries, SSE reconnect).
+	// Checked after validation passes so a rejected pre-run check never leaves a
+	// stuck PENDING slot.
+	if req.IdempotencyKey != "" {
+		switch status, cached, ierr := a.checkIdempotency(ctx, req); status {
+		case "done":
+			return cached, nil
+		case "pending":
+			return nil, fmt.Errorf("request %s is already in progress", req.IdempotencyKey)
+		case "error":
+			return nil, ierr
+		}
+	}
+
 	unlock, err := a.acquireRunLock(ctx, session.ID)
 	if err != nil {
 		return nil, err
@@ -435,17 +565,21 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	}
 	a.markRun(session, req, checkpoint.StatusRunning, nil, "")
 	res, err := a.loop.Run(runCtx, session, req.Message, nil, engine.RunOptions{AutoApprove: req.AutoApprove, ForceCompact: forceCompact})
-	if err != nil && res == nil {
+	switch {
+	case err != nil && res == nil:
 		observability.Current().AddChatErrors(1)
 		if runCtx.Err() != nil {
 			a.markRun(session, req, checkpoint.StatusCancelled, nil, "cancel")
-			return &ChatResponse{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}, nil
+			cancelResp := &ChatResponse{SessionID: session.ID, Response: "cancelled", ErrorClass: "cancel"}
+			a.storeIdempotency(ctx, req, cancelResp, nil)
+			return cancelResp, nil
 		}
 		a.markRun(session, req, checkpoint.StatusFailed, nil, "error")
+		a.storeIdempotency(ctx, req, nil, err)
 		return nil, err
-	}
-	if res == nil {
+	case res == nil:
 		observability.Current().AddChatErrors(1)
+		a.storeIdempotency(ctx, req, nil, fmt.Errorf("empty result"))
 		return nil, fmt.Errorf("empty result")
 	}
 	a.persistResultCheckpoint(session, req, res, runCtx.Err())
@@ -458,11 +592,13 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 			observability.Warnf("token sess incr: %v", err)
 		}
 	}
-	return &ChatResponse{
+	resp := &ChatResponse{
 		SessionID: res.SessionID, Response: res.Response, Steps: res.Steps,
 		ToolCalls: res.ToolCalls, TokenUsed: res.TokenUsed,
 		NeedPermission: res.NeedPermission, Pending: res.Pending, ErrorClass: res.ErrorClass,
-	}, nil
+	}
+	a.storeIdempotency(ctx, req, resp, nil)
+	return resp, nil
 }
 
 // ChatStream runs the agent and streams events. parentCtx should be the HTTP request
@@ -511,6 +647,26 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 		cancel()
 		return nil, nil, err
 	}
+
+	// --- Idempotency-key deduplication ---
+	// For streaming we cannot replay the event stream, so a completed key is
+	// rejected with a pointer to the non-streaming endpoint; an in-flight key is
+	// rejected to avoid a second agent run. The final outcome is still stored so
+	// a non-streaming retry with the same key can replay it.
+	if req.IdempotencyKey != "" {
+		switch status, _, ierr := a.checkIdempotency(parentCtx, req); status {
+		case "done":
+			cancel()
+			return nil, nil, fmt.Errorf("idempotent request %s already completed; use the non-streaming endpoint to fetch the result", req.IdempotencyKey)
+		case "pending":
+			cancel()
+			return nil, nil, fmt.Errorf("request %s is already in progress", req.IdempotencyKey)
+		case "error":
+			cancel()
+			return nil, nil, ierr
+		}
+	}
+
 	unlock, err := a.acquireRunLock(ctx, session.ID)
 	if err != nil {
 		cancel()
@@ -534,12 +690,14 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 		if err != nil && res == nil {
 			if ctx.Err() != nil {
 				a.markRun(session, req, checkpoint.StatusCancelled, nil, "cancel")
+				a.storeIdempotency(ctx, req, nil, fmt.Errorf("cancelled"))
 				select {
 				case ch <- &engine.Event{Type: engine.EventCancel, Content: "cancelled", Completed: true, Timestamp: time.Now().UnixMilli()}:
 				default:
 				}
 			} else {
 				a.markRun(session, req, checkpoint.StatusFailed, nil, "error")
+				a.storeIdempotency(ctx, req, nil, err)
 				select {
 				case ch <- &engine.Event{Type: engine.EventError, Content: err.Error(), Completed: true, Timestamp: time.Now().UnixMilli()}:
 				case <-ctx.Done():
@@ -554,6 +712,11 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 				default:
 				}
 			}
+			a.storeIdempotency(ctx, req, &ChatResponse{
+				SessionID: res.SessionID, Response: res.Response, Steps: res.Steps,
+				ToolCalls: res.ToolCalls, TokenUsed: res.TokenUsed,
+				NeedPermission: res.NeedPermission, Pending: res.Pending, ErrorClass: res.ErrorClass,
+			}, nil)
 		}
 		if res != nil && a.redis != nil && a.redis.Enabled() && res.TokenUsed > 0 {
 			day := time.Now().Format("20060102")

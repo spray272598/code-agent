@@ -4,11 +4,12 @@ package dto
 
 // ChatRequest is the public chat payload.
 type ChatRequest struct {
-	SessionID   string `json:"sessionId"`
-	UserID      string `json:"userId"`
-	ProjectID   string `json:"projectId"`
-	Message     string `json:"message"`
-	AutoApprove bool   `json:"autoApprove"`
+	SessionID      string `json:"sessionId"`
+	UserID         string `json:"userId"`
+	ProjectID      string `json:"projectId"`
+	Message        string `json:"message"`
+	AutoApprove    bool   `json:"autoApprove"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 }
 
 // ChatResponse is the public chat result.

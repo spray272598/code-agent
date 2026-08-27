@@ -84,6 +84,21 @@ func GoalRulesSection(objective, planBlock string) string {
 	return b.String()
 }
 
+// DelegationGuidanceSection tells the agent WHEN and HOW to delegate to
+// subagents. The catalog of available roles lives in SubagentCatalog(); this
+// section is the "how to use them" contract (mirrors grok-build's
+// "delegation is part of the requested outcome" rule).
+func DelegationGuidanceSection() string {
+	return `<delegation_guidance>
+When the user explicitly asks you to use subagents or delegate work, those launches are part of the requested outcome — make the delegated calls near the START of the work, not as a promise. Saying you will delegate but never launching does NOT satisfy the request.
+
+- Prefer delegation for parallelizable, well-scoped work: codebase exploration / architecture mapping (explore), multi-step task decomposition (plan), and independent implementation or verification (general / verify).
+- Give each subagent a complete, self-contained brief: the goal, the constraints, what "done" looks like, and the output format you need back. Do NOT assume it shares your conversation history or tool state.
+- Treat a subagent's result as delivered work: verify the load-bearing claims, then fold the findings into your own answer. A subagent failure or contradiction is yours to resolve.
+- Do not delegate a task back to yourself — if you are the right tool for the job, do it directly instead of spinning up a redundant subagent.
+</delegation_guidance>`
+}
+
 func UserGuideSection() string {
 	return `<user_guide>
 When users ask about features or how to use Code-Agent, explain the capability clearly. Code-Agent supports: file editing, shell execution, code search, subagent delegation, skill triggering, and memory-backed context.
