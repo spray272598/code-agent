@@ -70,6 +70,34 @@ func (g *OpenAIGateway) GenerateStream(ctx context.Context, req *port.ChatReques
 	return g.doWithRetry(ctx, req, true, onDelta)
 }
 
+// ContextWindow returns the configured model's context window in tokens.
+// Implements the optional port.ModelWindowProvider interface so callers can
+// bind token budgets to the real window instead of a hardcoded default.
+func (g *OpenAIGateway) ContextWindow() int {
+	return modelContextWindow(g.model)
+}
+
+// modelContextWindow maps a model id to its context window (tokens). Unknown
+// models fall back to a conservative 128k window.
+func modelContextWindow(model string) int {
+	switch {
+	case strings.Contains(model, "gpt-4o"):
+		return 128000
+	case strings.Contains(model, "gpt-4-turbo"):
+		return 128000
+	case strings.Contains(model, "gpt-4"):
+		return 8192
+	case strings.Contains(model, "gpt-3.5"):
+		return 16385
+	case strings.Contains(model, "grok"):
+		return 131072
+	case strings.Contains(model, "claude"):
+		return 200000
+	default:
+		return 128000
+	}
+}
+
 // doWithRetry wraps do() with the retry classifier loop. Transient errors
 // (429/5xx) are retried with exponential backoff. Context overflow (400) returns
 // ErrContextOverflow so the caller can compress and resubmit. Auth errors (401/403)

@@ -1,6 +1,9 @@
 package einoorch
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Named defaults for Eino Runner (avoid magic numbers in call sites).
 const (
@@ -61,3 +64,21 @@ const (
 	interruptPrefixHappened = "interrupt happened"
 	interruptAndRerunMark   = "interrupt and rerun"
 )
+
+// modelContextWindow resolves a model id to its context window (tokens) for
+// token-budget derivation. Mirrors the gateway mapping in the llm package.
+// Returns 0 when the model is unknown so callers fall back to DefaultTokenBudget.
+func modelContextWindow(model string) int {
+	switch {
+	case strings.Contains(model, "gpt-4o"), strings.Contains(model, "grok"), strings.Contains(model, "claude"):
+		return 128000
+	case strings.Contains(model, "gpt-4-turbo"):
+		return 128000
+	case strings.Contains(model, "gpt-4"):
+		return 8192
+	case strings.Contains(model, "gpt-3.5"):
+		return 16385
+	default:
+		return 0
+	}
+}

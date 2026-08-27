@@ -2,20 +2,43 @@ package common
 
 import (
 	"fmt"
-	"unicode/utf8"
+	"math"
+	"unicode"
 )
 
-// EstimateTokens rough 4 chars ≈ 1 token heuristic (CJK-aware via runes).
+// EstimateTokens returns an approximate token count for s.
+//
+// It is language-aware rather than a flat "4 chars ≈ 1 token" heuristic:
+//   - ASCII / Latin text:            ~4 chars per token  (weight 0.25)
+//   - CJK (Han / Hiragana / Katakana / Hangul): ~1.5 tokens per character
+//   - other Unicode (symbols, emoji): ~2 chars per token (weight 0.5/1.0)
+//
+// The flat divide-by-4 under-prices CJK by ~3-4x (Chinese is ~1-2 tokens per
+// character), which risked overflowing the real model context window. This is
+// still a heuristic — for exact counts prefer a real BPE tokenizer via the
+// TokenCounter seam (see token_counter.go).
 func EstimateTokens(s string) int {
-	n := utf8.RuneCountInString(s)
-	if n == 0 {
+	if s == "" {
 		return 0
 	}
-	t := n / 4
+	var t float64
+	for _, r := range s {
+		switch {
+		case r <= 0x2000: // ASCII + Latin-1 + common punctuation
+			t += 0.25
+		case unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
+			unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r):
+			t += 1.5 // CJK: roughly 1-2 tokens per character
+		case r > 0xFFFF: // astral planes: emoji, rare symbols
+			t += 1.0
+		default: // other BMP symbols / marks
+			t += 0.5
+		}
+	}
 	if t < 1 {
 		return 1
 	}
-	return t
+	return int(math.Ceil(t))
 }
 
 func TruncateRunes(s string, max int) string {

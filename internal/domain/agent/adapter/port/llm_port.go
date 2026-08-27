@@ -8,6 +8,14 @@ type ILLMPort interface {
 	GenerateStream(ctx context.Context, req *ChatRequest, onDelta func(delta StreamDelta)) (*ChatResponse, error)
 }
 
+// ModelWindowProvider is an OPTIONAL capability a port may implement to expose
+// the model's real context window. It is intentionally NOT part of ILLMPort so
+// that adding it does not force changes across every (mock) implementation.
+// Callers should type-assert and fall back to a configured default when absent.
+type ModelWindowProvider interface {
+	ContextWindow() int
+}
+
 type ChatRequest struct {
 	SystemPrompt string
 	Messages     []ChatMessage

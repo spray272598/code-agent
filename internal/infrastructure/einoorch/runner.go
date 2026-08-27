@@ -112,7 +112,11 @@ func NewRunner(
 		cfg.Model = DefaultModel
 	}
 	if cfg.TokenBudget <= 0 {
-		cfg.TokenBudget = DefaultTokenBudget
+		if w := modelContextWindow(cfg.Model); w > 0 {
+			cfg.TokenBudget = int(float64(w) * 0.80)
+		} else {
+			cfg.TokenBudget = DefaultTokenBudget
+		}
 	}
 	if cfg.GraphCheckPointDir == "" {
 		cfg.GraphCheckPointDir = DefaultGraphCheckpoint

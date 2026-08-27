@@ -12,6 +12,10 @@ type MockGateway struct{}
 
 func NewMock() *MockGateway { return &MockGateway{} }
 
+// ContextWindow implements the optional port.ModelWindowProvider interface.
+// Returns 0 so callers fall back to their configured default budget.
+func (m *MockGateway) ContextWindow() int { return 0 }
+
 func (m *MockGateway) Generate(ctx context.Context, req *port.ChatRequest) (*port.ChatResponse, error) {
 	return m.GenerateStream(ctx, req, nil)
 }

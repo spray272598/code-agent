@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/spray272598/code-agent/internal/types/common"
 )
 
 // BudgetState tracks the current token budget state with dynamic adjustment.
@@ -21,10 +23,11 @@ type BudgetState struct {
 
 // BudgetManager manages per-session token budgets with dynamic adjustment.
 type BudgetManager struct {
-	mu     sync.Mutex
-	total  int
-	input  int
-	output int
+	mu        sync.Mutex
+	total     int
+	input     int
+	output    int
+	realInput int // exact input tokens from provider usage; 0 = use heuristic estimate
 }
 
 // NewBudgetManager creates a BudgetManager with the given total token budget.
@@ -66,20 +69,56 @@ func (m *BudgetManager) Resize(newTotal int) {
 	m.output = int(float64(newTotal) * outputRatio)
 }
 
+// NewBudgetManagerForWindow derives a BudgetManager from a real model context
+// window (used at 80%, matching the input/output split in NewBudgetManager).
+// Pass 0 to fall back to the default 16000 budget.
+func NewBudgetManagerForWindow(window int) *BudgetManager {
+	if window <= 0 {
+		return NewBudgetManager(0)
+	}
+	return NewBudgetManager(int(float64(window) * 0.80))
+}
+
+// SetContextWindow rebinds the budget to a real model context window while
+// preserving the 80/20 input/output split. A non-positive window is ignored.
+func (m *BudgetManager) SetContextWindow(window int) {
+	if m == nil || window <= 0 {
+		return
+	}
+	m.Resize(int(float64(window) * 0.80))
+}
+
+// SetRealInputTokens anchors the budget's input usage to the exact token count
+// reported by the LLM provider (ChatResponse.PromptTokens), overriding the
+// EstimateTokens heuristic. A non-positive value is ignored so the heuristic
+// estimate remains the fallback. The latest real measurement wins.
+func (m *BudgetManager) SetRealInputTokens(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.realInput = n
+}
+
 // Evaluate returns the current budget state given used input tokens.
 func (m *BudgetManager) Evaluate(usedInputTokens int) BudgetState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	used := usedInputTokens
+	if m.realInput > 0 {
+		used = m.realInput
+	}
 	state := BudgetState{
 		TotalBudget:     m.total,
 		InputBudget:     m.input,
 		OutputBudget:    m.output,
-		UsedInput:       usedInputTokens,
-		AvailableTokens: m.total - usedInputTokens,
+		UsedInput:       used,
+		AvailableTokens: m.total - used,
 		LastUpdated:     time.Now(),
 	}
 	if m.input > 0 {
-		state.PressureRatio = float64(usedInputTokens) / float64(m.input)
+		state.PressureRatio = float64(used) / float64(m.input)
 	}
 	if state.PressureRatio > 1.0 {
 		state.PressureRatio = 1.0
@@ -336,13 +375,14 @@ func Throttle(history []map[string]any, budget int) ([]map[string]any, int) {
 }
 
 // estimateMsgTokens estimates the token count for a single message content.
+// Delegates to the language-aware common.EstimateTokens so message-level and
+// summary-level estimates share one heuristic (previously this used a separate
+// len(content)/3 byte heuristic that disagreed with EstimateTokens).
 func estimateMsgTokens(content string) int {
 	if content == "" {
 		return 0
 	}
-	// Rough estimate: 4 chars = 1 token for English, 2 chars = 1 token for CJK.
-	// Simple heuristic: divide by 3 for mixed content.
-	return len(content) / 3
+	return common.EstimateTokens(content)
 }
 
 // ContextIntegrator coordinates budget management, compression, and memory enrichment.
@@ -390,6 +430,17 @@ func (ci *ContextIntegrator) SetMemoryEnricher(e *MemoryEnricher) {
 }
 
 // Prepare processes context before LLM call: enrich with memories, compress if needed.
+// RecordLLMUsage anchors the session budget to exact provider token counts.
+// Call this after each LLM Generate/GenerateStream with resp.PromptTokens /
+// resp.OutputTokens so the compression decision uses ground truth instead of
+// the EstimateTokens heuristic. Safe to call when integrator or its budget is nil.
+func (ci *ContextIntegrator) RecordLLMUsage(promptTokens, outputTokens int) {
+	if ci == nil || ci.budgetMgr == nil {
+		return
+	}
+	ci.budgetMgr.SetRealInputTokens(promptTokens)
+}
+
 func (ci *ContextIntegrator) Prepare(query string, history []map[string]any, opts CompressOptions) ([]map[string]any, CompressResult) {
 	result := CompressResult{History: history, Level: "none"}
 
