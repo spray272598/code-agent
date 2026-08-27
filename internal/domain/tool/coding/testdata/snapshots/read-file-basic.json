@@ -1,0 +1,14 @@
+{
+  "name": "read-file-basic",
+  "tool_calls": [
+    {
+      "name": "read_file",
+      "args": {
+        "path": "C:\\Users\\27259\\AppData\\Local\\Temp\\TestSnapshotReadFile3365866724\\001\\hello.txt"
+      },
+      "result": {
+        "text": "hello world"
+      }
+    }
+  ]
+}

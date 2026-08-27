@@ -1,0 +1,14 @@
+{
+  "name": "glob-go-files",
+  "tool_calls": [
+    {
+      "name": "glob",
+      "args": {
+        "pattern": "**/*.go"
+      },
+      "result": {
+        "text": "src/main.go\nsrc/util.go"
+      }
+    }
+  ]
+}

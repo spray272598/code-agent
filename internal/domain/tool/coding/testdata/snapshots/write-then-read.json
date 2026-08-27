@@ -1,0 +1,24 @@
+{
+  "name": "write-then-read",
+  "tool_calls": [
+    {
+      "name": "write_file",
+      "args": {
+        "content": "written by test",
+        "path": "C:\\Users\\27259\\AppData\\Local\\Temp\\TestSnapshotWriteAndRead3835080619\\001\\output.txt"
+      },
+      "result": {
+        "text": "wrote \u003cTEMP\u003e\\output.txt (15 bytes)"
+      }
+    },
+    {
+      "name": "read_file",
+      "args": {
+        "path": "C:\\Users\\27259\\AppData\\Local\\Temp\\TestSnapshotWriteAndRead3835080619\\001\\output.txt"
+      },
+      "result": {
+        "text": "written by test"
+      }
+    }
+  ]
+}
