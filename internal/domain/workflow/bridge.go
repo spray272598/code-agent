@@ -10,7 +10,7 @@ import (
 type LoopBridge struct {
 	mu           sync.RWMutex
 	loopExecutor LoopExecutor
-	engine       *Engine
+	engine       *SequentialEngine
 	activeRuns   map[string]*ActiveRun
 }
 
@@ -33,7 +33,7 @@ type ActiveRun struct {
 func NewLoopBridge(executor LoopExecutor) *LoopBridge {
 	return &LoopBridge{
 		loopExecutor: executor,
-		engine:       NewEngine(nil, nil),
+		engine:       NewSequentialEngine(nil),
 		activeRuns:   make(map[string]*ActiveRun),
 	}
 }
@@ -59,7 +59,7 @@ func (b *LoopBridge) RunWorkflow(ctx context.Context, spec WorkflowSpec) (*RunRe
 		cancel()
 	}()
 
-	engine := NewEngine(b.buildHost(ctx), nil)
+	engine := NewSequentialEngine(b.buildHost(ctx))
 	result, err := engine.Run(ctx, spec)
 
 	b.mu.Lock()

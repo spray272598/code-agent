@@ -16,3 +16,12 @@ type HostResponse struct {
 type Host interface {
 	Execute(ctx context.Context, req HostRequest) (HostResponse, error)
 }
+
+// RunResult is the outcome of a workflow execution.
+type RunResult struct {
+	WorkflowID string         `json:"workflowId"`
+	Outcome    Outcome        `json:"outcome"`
+	Results    []StepResult   `json:"results"`
+	Data       map[string]any `json:"data,omitempty"`
+	Error      string         `json:"error,omitempty"`
+}
