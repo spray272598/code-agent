@@ -575,6 +575,13 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 	observability.Current().ObserveLLM(llmLatency)
 	observability.Current().AddChatTotal(1)
 
+	// P1.4: anchor the context budget to the real provider token counts captured
+	// by the model callbacks (stats). This lets the next turn's context
+	// preparation/compression decision use ground truth instead of the
+	// EstimateTokens heuristic. Safe no-op when no integrator is wired or counts
+	// are unavailable (SetRealInputTokens ignores non-positive values).
+	r.recordUsageToContextIntegrator(stats)
+
 	// --- Evaluation: record LLM call metrics ---
 	if r.evalCollector != nil {
 		r.evalCollector.AddSample(session.ID, eval.Sample{
@@ -750,3 +757,16 @@ func (r *Runner) Run(ctx context.Context, session *sessmodel.Session, userInput 
 }
 
 var _ engine.Runner = (*Runner)(nil)
+
+// recordUsageToContextIntegrator anchors the session context budget to the real
+// provider token counts measured during the last LLM call (captured by the
+// model callbacks into stats). It is the engine-side wiring for
+// ContextIntegrator.RecordLLMUsage: each turn's measured prompt tokens become
+// the budget's ground-truth input usage for the next turn's compression
+// decision. Nil-safe so it can be called unconditionally after every run.
+func (r *Runner) recordUsageToContextIntegrator(stats *runStats) {
+	if r == nil || r.ctxIntegrator == nil || stats == nil {
+		return
+	}
+	r.ctxIntegrator.RecordLLMUsage(int(stats.promptTokens.Load()), int(stats.completionTokens.Load()))
+}

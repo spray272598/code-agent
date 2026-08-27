@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
+	"github.com/spray272598/code-agent/internal/domain/contextx"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	domtool "github.com/spray272598/code-agent/internal/domain/tool"
@@ -350,4 +351,59 @@ func TestNowMs(t *testing.T) {
 	if n < time.Now().Add(-time.Minute).UnixMilli() {
 		t.Fatal(n)
 	}
+}
+
+// --- P1.4: engine wiring of ContextIntegrator.RecordLLMUsage ---
+
+// TestRunnerRecordUsageToContextIntegrator verifies that the engine-side helper
+// forwards the measured prompt tokens from the run stats into the context
+// integrator's budget, so the next turn's compression decision uses ground
+// truth instead of the EstimateTokens heuristic.
+func TestRunnerRecordUsageToContextIntegrator(t *testing.T) {
+	bm := contextx.NewBudgetManager(100000)
+	ci := contextx.NewContextIntegrator(contextx.NewCompressor(50000), bm, nil)
+
+	r := &Runner{ctxIntegrator: ci}
+
+	// Before any LLM call, the budget has no anchored real input.
+	if got := bm.Evaluate(0).UsedInput; got != 0 {
+		t.Fatalf("precondition: expected UsedInput 0, got %d", got)
+	}
+
+	stats := &runStats{}
+	stats.addUsage(&model.TokenUsage{PromptTokens: 1234, CompletionTokens: 56})
+	r.recordUsageToContextIntegrator(stats)
+
+	// The real prompt tokens must anchor the budget, overriding the heuristic
+	// estimate passed to Evaluate.
+	if got := bm.Evaluate(0).UsedInput; got != 1234 {
+		t.Fatalf("expected budget anchored to 1234 real input tokens, got %d", got)
+	}
+
+	// Idempotent + latest-wins: a later, smaller reading replaces the anchor.
+	stats2 := &runStats{}
+	stats2.addUsage(&model.TokenUsage{PromptTokens: 700})
+	r.recordUsageToContextIntegrator(stats2)
+	if got := bm.Evaluate(0).UsedInput; got != 700 {
+		t.Fatalf("expected latest reading 700 to win, got %d", got)
+	}
+}
+
+// TestRunnerRecordUsageToContextIntegratorNilSafe ensures the helper is a no-op
+// (and never panics) when no integrator is wired or the runner is nil.
+func TestRunnerRecordUsageToContextIntegratorNilSafe(t *testing.T) {
+	stats := &runStats{}
+	stats.addUsage(&model.TokenUsage{PromptTokens: 999})
+
+	// No integrator wired → no panic, no effect.
+	r := &Runner{}
+	r.recordUsageToContextIntegrator(stats)
+
+	// Nil receiver → no panic.
+	var nr *Runner
+	nr.recordUsageToContextIntegrator(stats)
+
+	// Nil stats → no panic.
+	r2 := &Runner{ctxIntegrator: contextx.NewContextIntegrator(contextx.NewCompressor(1), contextx.NewBudgetManager(100), nil)}
+	r2.recordUsageToContextIntegrator(nil)
 }
