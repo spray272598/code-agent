@@ -1,0 +1,20 @@
+{
+  "id": "coding-tools",
+  "version": "1.0.0",
+  "name": "Coding Tools",
+  "description": "Core coding tools for file operations and shell execution",
+  "author": "code-agent",
+  "entry": "./coding-tools.so",
+  "type": "tool",
+  "dependencies": [],
+  "capabilities": ["tool"],
+  "config": {
+    "timeout": 60,
+    "max_output_size": 10240
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "exec:shell"
+  ]
+}

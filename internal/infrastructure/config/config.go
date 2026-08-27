@@ -32,6 +32,8 @@ type Config struct {
 	Host       HostConfig       `yaml:"host"`
 	OTLP       OTLPConfig       `yaml:"otlp"`
 	SSH        SSHConfig        `yaml:"ssh"`
+	// Plugins configures the plugin system.
+	Plugins PluginsConfig `yaml:"plugins"`
 	// Vector selects the dense-vector backend for memory search + code RAG.
 	// provider: "mem" (default, in-process) | "qdrant" (remote). Qdrant is only
 	// used when embedding is also enabled (LLM.EmbeddingEnabled).
@@ -272,6 +274,14 @@ type LoggingConfig struct {
 type TeamsConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	File    string `yaml:"file"` // teams/default.yaml
+}
+
+// PluginsConfig configures the plugin system.
+type PluginsConfig struct {
+	// Enabled enables the plugin system.
+	Enabled bool `yaml:"enabled"`
+	// Directory is the directory to search for plugins.
+	Directory string `yaml:"directory"`
 }
 
 type SubAgentConfig struct {

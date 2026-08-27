@@ -113,5 +113,9 @@ subagent:
   max_concurrent: 3
   default_steps: 8
 
+plugins:
+  enabled: true
+  directory: "./plugins"
+
 logging:
   level: "info"
