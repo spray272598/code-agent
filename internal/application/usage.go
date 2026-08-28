@@ -1,11 +1,7 @@
 package application
 
 import (
-	"context"
 	"fmt"
-	"time"
-
-	"github.com/spray272598/code-agent/internal/observability"
 )
 
 // Usage is a point-in-time view of resource consumption, surfaced via the
@@ -21,40 +17,6 @@ type Usage struct {
 	SessionUsed    int            `json:"session_used"`
 	ActiveRuns     int            `json:"active_runs"`
 	Counters       map[string]any `json:"counters"`
-}
-
-// UsageSnapshot returns the current usage view for a user/session.
-func (a *ChatApp) UsageSnapshot(ctx context.Context, userID, sessionID string) *Usage {
-	u := &Usage{
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
-		QuotaEnabled: a.quotaEnabled,
-		QuotaPerDay:  a.quotaPerDay,
-		Counters:     observability.Current().Snapshot(),
-	}
-	if a.quotaEnabled && a.redis != nil && a.redis.Enabled() {
-		if v, err := a.redis.Get(ctx, "token:user:"+userID+":"+todayKey()); err == nil && v != "" {
-			var n int
-			fmt.Sscanf(v, "%d", &n)
-			u.DailyUsed = n
-		}
-		if a.quotaPerDay > 0 {
-			u.DailyRemaining = a.quotaPerDay - u.DailyUsed
-			if u.DailyRemaining < 0 {
-				u.DailyRemaining = 0
-			}
-		}
-	}
-	if sessionID != "" && a.redis != nil && a.redis.Enabled() {
-		if v, err := a.redis.Get(ctx, "token:sess:"+sessionID); err == nil && v != "" {
-			var n int
-			fmt.Sscanf(v, "%d", &n)
-			u.SessionUsed = n
-		}
-	}
-	if a.runs != nil {
-		u.ActiveRuns = len(a.runs.ActiveIDs())
-	}
-	return u
 }
 
 // Render returns a human-readable status block for the TUI/CLI.

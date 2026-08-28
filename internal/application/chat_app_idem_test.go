@@ -44,7 +44,7 @@ func (f *fakeIdem) Set(_ context.Context, key, val string, _ time.Duration) erro
 func newIdemApp() (*ChatApp, *fakeIdem) {
 	a := &ChatApp{}
 	f := newFakeIdem()
-	a.idem = f
+	a.idemSvc = &IdempotencyService{idem: f}
 	return a, f
 }
 
@@ -57,7 +57,7 @@ func TestCheckIdempotencyNoKey(t *testing.T) {
 }
 
 func TestCheckIdempotencyNilStore(t *testing.T) {
-	a := &ChatApp{} // no idem, no redis → degrade to none
+	a := &ChatApp{idemSvc: &IdempotencyService{}} // no idem, no redis → degrade to none
 	st, _, _ := a.checkIdempotency(context.Background(), ChatRequest{IdempotencyKey: "k", UserID: "u"})
 	if st != "none" {
 		t.Fatalf("expected none for nil store, got %s", st)

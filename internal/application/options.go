@@ -108,10 +108,11 @@ func WithKeyStore(k *auth.KeyStore) Option {
 // WithCheckpoint injects durable interrupt store + run registry.
 func WithCheckpoint(store checkpoint.Store, runs *checkpoint.RunRegistry) Option {
 	return func(a *ChatApp) {
-		a.ckStore = store
-		a.runs = runs
-		if a.runs == nil {
-			a.runs = checkpoint.NewRunRegistry()
+		if runs == nil {
+			runs = checkpoint.NewRunRegistry()
+		}
+		a.cp = &CheckpointService{
+			ckStore: store, runs: runs, perm: a.perm,
 		}
 	}
 }
@@ -119,8 +120,7 @@ func WithCheckpoint(store checkpoint.Store, runs *checkpoint.RunRegistry) Option
 // WithSSH injects SSH pool and connection repository.
 func WithSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository) Option {
 	return func(a *ChatApp) {
-		a.sshPool = pool
-		a.sshRepo = repo
+		a.sshSvc = &SSHService{pool: pool, repo: repo}
 	}
 }
 
@@ -150,16 +150,30 @@ func New(core CoreDeps, opts ...Option) *ChatApp {
 	a := &ChatApp{
 		loop: core.Loop, sessions: core.Sessions, messages: core.Messages,
 		tools: core.Tools, perm: core.Perm, redis: core.Redis,
-		timeoutSec: core.TimeoutSec, workspace: core.Workspace,
-		rateEnabled: core.RateEnabled, ratePerMin: core.RatePerMin,
-		quotaEnabled: core.QuotaEnabled && core.QuotaPerDay > 0, quotaPerDay: core.QuotaPerDay,
+		workspace: core.Workspace,
 		keys:  auth.NewKeyStore(core.APIKeys),
 		slash: slash.NewRegistry(),
+		rateSvc: &RateQuotaService{
+			redis:        core.Redis,
+			rateEnabled:  core.RateEnabled,
+			ratePerMin:   core.RatePerMin,
+			quotaEnabled: core.QuotaEnabled && core.QuotaPerDay > 0,
+			quotaPerDay:  core.QuotaPerDay,
+		},
+		cp: &CheckpointService{
+			ckStore: nil, perm: core.Perm, redis: core.Redis,
+			timeoutSec: core.TimeoutSec, workspace: core.Workspace,
+		},
+		idemSvc: &IdempotencyService{},
 	}
 	for _, o := range opts {
 		if o != nil {
 			o(a)
 		}
+	}
+	// Wire perm into CheckpointService after options are applied
+	if a.cp != nil {
+		a.cp.perm = a.perm
 	}
 	return a
 }
@@ -189,7 +203,9 @@ func NewChatApp(
 // user-level quota). perDay <= 0 disables regardless of enabled.
 func WithTokenQuota(enabled bool, perDay int) Option {
 	return func(a *ChatApp) {
-		a.quotaEnabled = enabled && perDay > 0
-		a.quotaPerDay = perDay
+		if a.rateSvc != nil {
+			a.rateSvc.quotaEnabled = enabled && perDay > 0
+			a.rateSvc.quotaPerDay = perDay
+		}
 	}
 }

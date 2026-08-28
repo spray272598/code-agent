@@ -5,16 +5,16 @@ import (
 	"testing"
 
 	"github.com/spray272598/code-agent/internal/domain/checkpoint"
-	"github.com/spray272598/code-agent/internal/domain/hook"
 )
 
 // newTestApp builds a ChatApp with only checkpoint + hooks wired (for
 // touchStep / ListResumable testing without a full engine).
 func newTestApp(store checkpoint.Store, runs *checkpoint.RunRegistry) *ChatApp {
 	a := New(CoreDeps{})
-	a.ckStore = store
-	a.runs = runs
-	a.hooks = hook.NewBus()
+	a.cp = &CheckpointService{
+		ckStore: store,
+		runs:    runs,
+	}
 	return a
 }
 
@@ -26,7 +26,7 @@ func TestTouchStepOnlyRunning(t *testing.T) {
 	ctx := context.Background()
 	// running snapshot → step updated
 	_ = store.Save(ctx, &checkpoint.Snapshot{SessionID: "s1", Status: checkpoint.StatusRunning})
-	a.touchStep(ctx, "s1", 3, "fs_read")
+	a.cp.touchStep(ctx, "s1", 3, "fs_read")
 	snap, _ := store.Get(ctx, "s1")
 	if snap.Step != 3 {
 		t.Fatalf("expected step=3, got %d", snap.Step)
@@ -37,7 +37,7 @@ func TestTouchStepOnlyRunning(t *testing.T) {
 
 	// non-running snapshot → ignored
 	_ = store.Save(ctx, &checkpoint.Snapshot{SessionID: "s2", Status: checkpoint.StatusCompleted})
-	a.touchStep(ctx, "s2", 5, "bash")
+	a.cp.touchStep(ctx, "s2", 5, "bash")
 	snap2, _ := store.Get(ctx, "s2")
 	if snap2.Step != 0 {
 		t.Fatalf("completed snapshot should not be touched, got step=%d", snap2.Step)
