@@ -55,6 +55,9 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/vector/qdrant"
 	"github.com/spray272598/code-agent/internal/observability"
 	wshub "github.com/spray272598/code-agent/internal/trigger/ws"
+
+	// Register infrastructure storage implementations (init() side effects).
+	_ "github.com/spray272598/code-agent/internal/infrastructure/orchestration"
 )
 
 // builder carries every intermediate value constructed during bootstrap so the

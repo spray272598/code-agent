@@ -11,7 +11,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/hook"
 	"github.com/spray272598/code-agent/internal/domain/security"
-	essmodel "github.com/spray272598/code-agent/internal/domain/session/model"
+	sessmodel "github.com/spray272598/code-agent/internal/domain/session/model"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/subagent"
 	"github.com/spray272598/code-agent/internal/domain/telemetry"

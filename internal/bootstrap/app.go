@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spray272598/code-agent/internal/infrastructure/config"
 	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
 	"github.com/spray272598/code-agent/internal/observability"
 )

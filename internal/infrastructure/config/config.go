@@ -335,18 +335,18 @@ func Default() *Config {
 		LLM: LLMConfig{UseMock: true, Model: "deepseek-ai/DeepSeek-V3"},
 		Database: DatabaseConfig{
 			Type: "mysql", AutoMigrate: true, SchemaPath: "scripts/sql/01_schema.sql",
-			MySQL: MySQLConfig{Host: "127.0.0.1", Port: 3306, Database: "code_agent", Username: "root", Password: "123456"},
+			MySQL: MySQLConfig{Host: "127.0.0.1", Port: 3306, Database: "code_agent", Username: "root", Password: "${MYSQL_PASSWORD}"},
 		},
 		Redis:      RedisConfig{Enabled: true, Host: "127.0.0.1", Port: 6379},
 		RateLimit:  RateLimitConfig{Enabled: true, PerMinute: 60},
 		TokenQuota: TokenQuotaConfig{Enabled: true, PerUserPerDay: 2000000},
 		Storage: StorageConfig{
 			Enabled: true, Endpoint: "http://127.0.0.1:9000", Bucket: "code-agent",
-			AccessKey: "minioadmin", SecretKey: "minioadmin", UsePathStyle: true,
+			AccessKey: "${MINIO_ACCESS_KEY}", SecretKey: "${MINIO_SECRET_KEY}", UsePathStyle: true,
 			LocalFallbackDir: "./data/objects",
 		},
 		Security: SecurityConfig{
-			PathSandbox: true, DefaultConfirmWrite: true, APIKeys: []string{"dev-key"},
+			PathSandbox: true, DefaultConfirmWrite: true, APIKeys: []string{"${API_KEY}"},
 			CORSOrigins:  []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8080", "http://127.0.0.1:8080"},
 			MaxBodyBytes: 2 << 20,
 		},
@@ -551,6 +551,20 @@ func Validate(cfg *Config) error {
 	if cfg.Security.MaxBodyBytes <= 0 {
 		return fmt.Errorf("security.max_body_bytes must be positive, got %d", cfg.Security.MaxBodyBytes)
 	}
+
+	// Validate required credentials are not placeholders.
+	if cfg.Database.Type == "mysql" && cfg.Database.MySQL.Password == "${MYSQL_PASSWORD}" {
+		return fmt.Errorf("database.mysql.password must be set (set MYSQL_PASSWORD env or update config)")
+	}
+	if cfg.Storage.Enabled && (cfg.Storage.AccessKey == "${MINIO_ACCESS_KEY}" || cfg.Storage.SecretKey == "${MINIO_SECRET_KEY}") {
+		return fmt.Errorf("storage.access_key/secret_key must be set (set MINIO_ACCESS_KEY/MINIO_SECRET_KEY env or update config)")
+	}
+	for i, key := range cfg.Security.APIKeys {
+		if key == "${API_KEY}" {
+			return fmt.Errorf("security.api_keys[%d] must be set (set API_KEY env or update config)", i)
+		}
+	}
+
 	return nil
 }
 

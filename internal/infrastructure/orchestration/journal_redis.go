@@ -4,10 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/spray272598/code-agent/internal/domain/orchestration"
 )
+
+func init() {
+	orchestration.RegisterStorageFactory(orchestration.StorageRedis, func(cfg orchestration.JournalStorageConfig, runID string) (orchestration.JournalStorage, error) {
+		if cfg.RedisAddr == "" {
+			return nil, fmt.Errorf("journal: Redis storage requires RedisAddr")
+		}
+		s, err := NewRedisJournalStorage(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+		if err != nil {
+			return nil, fmt.Errorf("journal: init Redis storage: %w", err)
+		}
+		log.Printf("[journal] using Redis storage for run=%s", runID)
+		return s, nil
+	})
+}
 
 // RedisJournalStorage persists journal entries to Redis using sorted sets.
 // Entries are stored as JSON strings scored by timestamp for ordered retrieval.
@@ -51,7 +67,7 @@ func (s *RedisJournalStorage) stateKey(runID string) string {
 	return s.prefix + runID + ":state"
 }
 
-func (s *RedisJournalStorage) Append(entry JournalEntry) error {
+func (s *RedisJournalStorage) Append(entry orchestration.JournalEntry) error {
 	entry.Timestamp = time.Now()
 	b, err := json.Marshal(entry)
 	if err != nil {
@@ -70,7 +86,7 @@ func (s *RedisJournalStorage) Append(entry JournalEntry) error {
 	return nil
 }
 
-func (s *RedisJournalStorage) ReadAll(runID string) ([]JournalEntry, error) {
+func (s *RedisJournalStorage) ReadAll(runID string) ([]orchestration.JournalEntry, error) {
 	key := s.entryKey(runID)
 	results, err := s.client.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
 		Min: "-inf",
@@ -79,9 +95,9 @@ func (s *RedisJournalStorage) ReadAll(runID string) ([]JournalEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zrange journal: %w", err)
 	}
-	var entries []JournalEntry
+	var entries []orchestration.JournalEntry
 	for _, raw := range results {
-		var e JournalEntry
+		var e orchestration.JournalEntry
 		if err := json.Unmarshal([]byte(raw), &e); err != nil {
 			continue
 		}
@@ -91,7 +107,7 @@ func (s *RedisJournalStorage) ReadAll(runID string) ([]JournalEntry, error) {
 }
 
 // SaveState persists the current JournalState as a Redis hash (O(1) lookup).
-func (s *RedisJournalStorage) SaveState(state *JournalState) error {
+func (s *RedisJournalStorage) SaveState(state *orchestration.JournalState) error {
 	key := s.stateKey(state.RunID)
 	s.mustCtx()
 	pipe := s.client.TxPipeline()
@@ -116,7 +132,7 @@ func (s *RedisJournalStorage) SaveState(state *JournalState) error {
 }
 
 // LoadState retrieves the current JournalState from Redis hash.
-func (s *RedisJournalStorage) LoadState(runID string) (*JournalState, error) {
+func (s *RedisJournalStorage) LoadState(runID string) (*orchestration.JournalState, error) {
 	key := s.stateKey(runID)
 	h, err := s.client.HGetAll(s.ctx, key).Result()
 	if err != nil {
@@ -125,9 +141,9 @@ func (s *RedisJournalStorage) LoadState(runID string) (*JournalState, error) {
 	if len(h) == 0 {
 		return nil, nil
 	}
-	state := &JournalState{RunID: runID}
+	state := &orchestration.JournalState{RunID: runID}
 	if v, ok := h["status"]; ok {
-		state.Status = StatusFromString(v)
+		state.Status = orchestration.StatusFromString(v)
 	}
 	if v, ok := h["goal"]; ok {
 		state.Goal = v
@@ -166,4 +182,4 @@ func (s *RedisJournalStorage) mustCtx() {
 	}
 }
 
-var _ JournalStorage = (*RedisJournalStorage)(nil)
+var _ orchestration.JournalStorage = (*RedisJournalStorage)(nil)

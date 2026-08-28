@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/ssh/model"
 	sshlib "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type pooledConn struct {
@@ -23,20 +26,30 @@ type Pool struct {
 	mu        sync.RWMutex
 	conns     map[string]*pooledConn
 	stopCh    chan struct{}
+	stopped   chan struct{}
 	heartbeat time.Duration
+	knownKeys string // path to known_hosts file, empty = InsecureIgnoreHostKey
 }
 
 func NewPool() *Pool {
 	p := &Pool{
 		conns:     make(map[string]*pooledConn),
 		stopCh:    make(chan struct{}),
+		stopped:   make(chan struct{}),
 		heartbeat: 30 * time.Second,
 	}
 	go p.watchdog()
 	return p
 }
 
-// Connect 建立SSH连接
+// NewPoolWithKnownHosts creates a pool that verifies host keys against a known_hosts file.
+func NewPoolWithKnownHosts(knownHostsPath string) *Pool {
+	p := NewPool()
+	p.knownKeys = knownHostsPath
+	return p
+}
+
+// Connect establishes an SSH connection.
 func (p *Pool) Connect(ctx context.Context, cfg model.ConnectionConfig) error {
 	client, err := p.dial(ctx, cfg)
 	if err != nil {
@@ -49,7 +62,20 @@ func (p *Pool) Connect(ctx context.Context, cfg model.ConnectionConfig) error {
 	return nil
 }
 
-// dial 建立SSH连接的具体实现
+// hostKeyCallback returns an appropriate host key callback based on configuration.
+func (p *Pool) hostKeyCallback() sshlib.HostKeyCallback {
+	if p.knownKeys == "" {
+		return sshlib.InsecureIgnoreHostKey()
+	}
+	kh, err := knownhosts.New(p.knownKeys)
+	if err != nil {
+		// Fall back to insecure if known_hosts file is invalid/missing.
+		return sshlib.InsecureIgnoreHostKey()
+	}
+	return kh
+}
+
+// dial establishes an SSH connection.
 func (p *Pool) dial(ctx context.Context, cfg model.ConnectionConfig) (*sshlib.Client, error) {
 	authMethods := make([]sshlib.AuthMethod, 0)
 	if cfg.AuthType == "private_key" && cfg.PrivateKey != "" {
@@ -72,7 +98,7 @@ func (p *Pool) dial(ctx context.Context, cfg model.ConnectionConfig) (*sshlib.Cl
 	sshCfg := &sshlib.ClientConfig{
 		User:            cfg.Username,
 		Auth:            authMethods,
-		HostKeyCallback: sshlib.InsecureIgnoreHostKey(),
+		HostKeyCallback: p.hostKeyCallback(),
 		Timeout:         10 * time.Second,
 	}
 
@@ -89,18 +115,17 @@ func (p *Pool) dial(ctx context.Context, cfg model.ConnectionConfig) (*sshlib.Cl
 	return sshlib.NewClient(sshConn, chans, reqs), nil
 }
 
-// GetConnection 获取活跃连接，如果断开则尝试重连
+// GetConnection returns an active connection, reconnecting if necessary.
 func (p *Pool) GetConnection(name string) (*sshlib.Client, error) {
-	p.mu.RLock()
+	p.mu.Lock()
 	pc, ok := p.conns[name]
-	p.mu.RUnlock()
+	p.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("ssh connection '%s' not found", name)
 	}
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	if !pc.online {
-		// 尝试重连
 		client, err := p.dial(context.Background(), pc.config)
 		if err != nil {
 			return nil, fmt.Errorf("reconnect failed: %w", err)
@@ -112,7 +137,7 @@ func (p *Pool) GetConnection(name string) (*sshlib.Client, error) {
 	return pc.client, nil
 }
 
-// Disconnect 断开指定连接
+// Disconnect closes and removes a named connection.
 func (p *Pool) Disconnect(name string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -127,7 +152,7 @@ func (p *Pool) Disconnect(name string) error {
 	return nil
 }
 
-// IsConnected 检查连接是否活跃
+// IsConnected checks if a connection is active.
 func (p *Pool) IsConnected(name string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -135,12 +160,24 @@ func (p *Pool) IsConnected(name string) bool {
 	return ok && pc.online
 }
 
-// Health 返回所有连接的健康状态
+// Health returns the health status of all connections.
 func (p *Pool) Health() []model.HealthStatus {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-	result := make([]model.HealthStatus, 0, len(p.conns))
-	for name, pc := range p.conns {
+	names := make([]string, 0, len(p.conns))
+	for name := range p.conns {
+		names = append(names, name)
+	}
+	p.mu.RUnlock()
+
+	result := make([]model.HealthStatus, 0, len(names))
+	for _, name := range names {
+		p.mu.RLock()
+		pc := p.conns[name]
+		p.mu.RUnlock()
+		if pc == nil {
+			continue
+		}
+		pc.mu.Lock()
 		status := model.HealthStatus{Name: name, Online: pc.online}
 		if pc.online && pc.client != nil {
 			start := time.Now()
@@ -151,14 +188,16 @@ func (p *Pool) Health() []model.HealthStatus {
 				status.Error = err.Error()
 			}
 		}
+		pc.mu.Unlock()
 		result = append(result, status)
 	}
 	return result
 }
 
-// CloseAll 关闭所有连接
+// CloseAll closes all connections and stops the watchdog.
 func (p *Pool) CloseAll() {
 	close(p.stopCh)
+	<-p.stopped // wait for watchdog to finish
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, pc := range p.conns {
@@ -169,8 +208,9 @@ func (p *Pool) CloseAll() {
 	p.conns = make(map[string]*pooledConn)
 }
 
-// watchdog 心跳检测
+// watchdog performs periodic health checks.
 func (p *Pool) watchdog() {
+	defer close(p.stopped)
 	ticker := time.NewTicker(p.heartbeat)
 	defer ticker.Stop()
 	for {
@@ -190,6 +230,7 @@ func (p *Pool) healthCheck() {
 		names = append(names, name)
 	}
 	p.mu.RUnlock()
+
 	for _, name := range names {
 		p.mu.RLock()
 		pc := p.conns[name]
@@ -208,7 +249,7 @@ func (p *Pool) healthCheck() {
 	}
 }
 
-// GetConfig 获取连接配置（用于重连）
+// GetConfig returns the connection configuration (for reconnection).
 func (p *Pool) GetConfig(name string) (model.ConnectionConfig, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -219,7 +260,7 @@ func (p *Pool) GetConfig(name string) (model.ConnectionConfig, bool) {
 	return pc.config, true
 }
 
-// ListConnections 列出所有连接名
+// ListConnections returns all connection names.
 func (p *Pool) ListConnections() []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -228,4 +269,15 @@ func (p *Pool) ListConnections() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// EnsureDefaultKnownHosts creates a default known_hosts file if it doesn't exist.
+func EnsureDefaultKnownHosts(dir string) (string, error) {
+	path := filepath.Join(dir, "known_hosts")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+			return "", fmt.Errorf("create known_hosts: %w", err)
+		}
+	}
+	return path, nil
 }

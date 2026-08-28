@@ -613,11 +613,9 @@ func (m *Manager) ListServers() []model.ServerConfig {
 }
 
 func (m *Manager) Close() error {
-	select {
-	case <-m.stopWatch:
-	default:
+	m.watchOnce.Do(func() {
 		close(m.stopWatch)
-	}
+	})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for n, c := range m.clients {

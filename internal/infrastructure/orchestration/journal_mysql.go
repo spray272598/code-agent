@@ -3,10 +3,26 @@ package orchestration
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/spray272598/code-agent/internal/domain/orchestration"
 )
+
+func init() {
+	orchestration.RegisterStorageFactory(orchestration.StorageMySQL, func(cfg orchestration.JournalStorageConfig, runID string) (orchestration.JournalStorage, error) {
+		if cfg.MySQLDSN == "" {
+			return nil, fmt.Errorf("journal: MySQL storage requires MySQLDSN")
+		}
+		s, err := NewMySQLJournalStorage(cfg.MySQLDSN)
+		if err != nil {
+			return nil, fmt.Errorf("journal: init MySQL storage: %w", err)
+		}
+		log.Printf("[journal] using MySQL storage for run=%s", runID)
+		return s, nil
+	})
+}
 
 // MySQLJournalStorage persists journal entries to a MySQL database.
 // Suitable for multi-instance deployments where journal state must be shared.
@@ -69,7 +85,7 @@ func (s *MySQLJournalStorage) ensureSchema() error {
 	return nil
 }
 
-func (s *MySQLJournalStorage) Append(entry JournalEntry) error {
+func (s *MySQLJournalStorage) Append(entry orchestration.JournalEntry) error {
 	entry.Timestamp = time.Now()
 	_, err := s.db.Exec(
 		`INSERT INTO orchestration_journal (run_id, ts, type, phase_id, parent_id, content, token_delta, agent, error_msg)
@@ -90,7 +106,7 @@ func (s *MySQLJournalStorage) Append(entry JournalEntry) error {
 	return nil
 }
 
-func (s *MySQLJournalStorage) ReadAll(runID string) ([]JournalEntry, error) {
+func (s *MySQLJournalStorage) ReadAll(runID string) ([]orchestration.JournalEntry, error) {
 	rows, err := s.db.Query(
 		`SELECT run_id, ts, type, phase_id, parent_id, content, token_delta, agent, error_msg
 		 FROM orchestration_journal WHERE run_id = ? ORDER BY ts ASC`, runID)
@@ -99,10 +115,10 @@ func (s *MySQLJournalStorage) ReadAll(runID string) ([]JournalEntry, error) {
 	}
 	defer rows.Close()
 
-	var entries []JournalEntry
+	var entries []orchestration.JournalEntry
 	for rows.Next() {
 		var (
-			e        JournalEntry
+			e        orchestration.JournalEntry
 			phaseID  sql.NullString
 			parentID sql.NullString
 			content  sql.NullString
@@ -152,4 +168,4 @@ func (s *MySQLJournalStorage) Close() error {
 	return s.db.Close()
 }
 
-var _ JournalStorage = (*MySQLJournalStorage)(nil)
+var _ orchestration.JournalStorage = (*MySQLJournalStorage)(nil)

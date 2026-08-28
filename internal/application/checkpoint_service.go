@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -261,6 +262,8 @@ func (cs *CheckpointService) acquireRunLock(ctx context.Context, sessionID strin
 		return nil, fmt.Errorf("session %s is already running", sessionID)
 	}
 	return func() {
-		_ = cs.redis.Unlock(context.Background(), "run:lock:"+sessionID, val)
+		if err := cs.redis.Unlock(context.Background(), "run:lock:"+sessionID, val); err != nil {
+			slog.Warn("failed to release run lock", "session", sessionID, "error", err)
+		}
 	}, nil
 }

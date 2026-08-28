@@ -232,13 +232,11 @@ func TestEncryptingRepo_DeleteDelegates(t *testing.T) {
 	}
 }
 
-func TestEncryptingRepo_PanicsOnNilDeps(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("expected panic")
-		}
-	}()
-	_ = NewEncryptingConnRepo(nil, nil)
+func TestEncryptingRepo_ReturnsNilOnNilDeps(t *testing.T) {
+	result := NewEncryptingConnRepo(nil, nil)
+	if result != nil {
+		t.Fatalf("expected nil, got %v", result)
+	}
 }
 
 // Sanity: the sshport import compiles end-to-end.

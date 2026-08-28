@@ -2,7 +2,7 @@ package orchestration
 
 import (
 	"fmt"
-	"log"
+	"sync"
 )
 
 // StorageType identifies the persistence backend for journal entries.
@@ -34,6 +34,23 @@ type JournalStorageConfig struct {
 	RedisDB int `json:"redisDb" yaml:"redisDb"`
 }
 
+// StorageFactory creates a JournalStorage from config.
+type StorageFactory func(cfg JournalStorageConfig, runID string) (JournalStorage, error)
+
+// storageRegistry holds registered storage factories (infrastructure implementations).
+var (
+	storageMu       sync.RWMutex
+	storageRegistry = map[StorageType]StorageFactory{}
+)
+
+// RegisterStorageFactory registers a storage factory for a given type.
+// Called by infrastructure packages during init.
+func RegisterStorageFactory(t StorageType, f StorageFactory) {
+	storageMu.Lock()
+	defer storageMu.Unlock()
+	storageRegistry[t] = f
+}
+
 // DefaultJournalStorageConfig returns sensible defaults (file-based).
 func DefaultJournalStorageConfig() JournalStorageConfig {
 	return JournalStorageConfig{
@@ -46,42 +63,24 @@ func DefaultJournalStorageConfig() JournalStorageConfig {
 // Returns the storage backend and an error if the backend cannot be initialized.
 func NewJournalStorage(cfg JournalStorageConfig, runID string) (JournalStorage, error) {
 	switch cfg.Type {
-	case StorageMySQL:
-		if cfg.MySQLDSN == "" {
-			return nil, fmt.Errorf("journal: MySQL storage requires MySQLDSN")
+	case StorageMySQL, StorageRedis:
+		storageMu.RLock()
+		factory, ok := storageRegistry[cfg.Type]
+		storageMu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("journal: storage type %s not registered (import infrastructure/orchestration)", cfg.Type)
 		}
-		s, err := NewMySQLJournalStorage(cfg.MySQLDSN)
-		if err != nil {
-			return nil, fmt.Errorf("journal: init MySQL storage: %w", err)
-		}
-		log.Printf("[journal] using MySQL storage for run=%s", runID)
-		return s, nil
-
-	case StorageRedis:
-		if cfg.RedisAddr == "" {
-			return nil, fmt.Errorf("journal: Redis storage requires RedisAddr")
-		}
-		s, err := NewRedisJournalStorage(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
-		if err != nil {
-			return nil, fmt.Errorf("journal: init Redis storage: %w", err)
-		}
-		log.Printf("[journal] using Redis storage for run=%s", runID)
-		return s, nil
+		return factory(cfg, runID)
 
 	case StorageMemory:
-		log.Printf("[journal] using in-memory storage for run=%s", runID)
 		return NewMemoryJournalStorage(), nil
 
 	case StorageFile, "":
 		dir := cfg.FileDir
-		if dir == "" {
-			dir = "" // NewFileJournalStorage defaults to os.TempDir()
-		}
 		s, err := NewFileJournalStorage(dir, runID)
 		if err != nil {
 			return nil, fmt.Errorf("journal: init file storage: %w", err)
 		}
-		log.Printf("[journal] using file storage for run=%s dir=%s", runID, dir)
 		return s, nil
 
 	default:

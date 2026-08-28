@@ -169,7 +169,7 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		// WriteTimeout left 0 for long SSE streams
+		WriteTimeout:      5 * time.Minute, // Long enough for SSE streams, prevents slow-client resource exhaustion
 	}
 	if certFile != "" && keyFile != "" {
 		if err := validateTLSFiles(certFile, keyFile); err != nil {
