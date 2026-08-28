@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -1143,6 +1144,10 @@ func (a *ChatApp) checkRate(ctx context.Context, userID string) error {
 	}
 	ok, err := a.redis.AllowRate(ctx, "rl:chat:"+userID, limit, time.Minute)
 	if err != nil {
+		slog.Default().Warn("rate limit check failed, allowing request",
+			"user_id", userID,
+			"error", err,
+		)
 		return nil
 	}
 	if !ok {
@@ -1162,7 +1167,14 @@ func (a *ChatApp) checkQuota(ctx context.Context, userID string) error {
 		userID = "anonymous"
 	}
 	used, err := a.redis.Get(ctx, "token:user:"+userID+":"+todayKey())
-	if err != nil || used == "" {
+	if err != nil {
+		slog.Default().Warn("quota check failed, allowing request",
+			"user_id", userID,
+			"error", err,
+		)
+		return nil
+	}
+	if used == "" {
 		return nil // no record yet → not over
 	}
 	var usedTok int

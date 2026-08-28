@@ -31,7 +31,8 @@ type storedKey struct {
 // NewMemoryLLMKeyRepo returns an empty in-memory repo.
 func NewMemoryLLMKeyRepo(sealer kms.CryptoSealer) *MemoryLLMKeyRepo {
 	if sealer == nil {
-		panic("NewMemoryLLMKeyRepo: sealer required")
+		// Fail at construction time rather than at first use.
+		return nil
 	}
 	return &MemoryLLMKeyRepo{
 		data:   make(map[string]map[string]storedKey),

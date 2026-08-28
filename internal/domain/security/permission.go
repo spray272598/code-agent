@@ -420,8 +420,9 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 	}
 
-	// L5 circuit (adaptive threshold)
-	g.mu.RLock()
+	// L5 circuit (adaptive threshold) — hold lock for entire check-and-maybe-deny
+	// to prevent TOCTOU race between reading streak and circuit breaker decision.
+	g.mu.Lock()
 	streak := g.denyStreak[sessionID]
 	threshold := g.circuitLimit
 	if g.adaptiveBreaker != nil {
@@ -432,17 +433,17 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	}
 	if g.sessionAllow[sessionID] != nil {
 		if g.sessionAllow[sessionID]["*"] {
-			g.mu.RUnlock()
+			g.mu.Unlock()
 			g.auditAllow(CategoryTool, tool, "session approved", sessionID)
 			return Decision{Action: ActionAllow, Layer: "L4", Tool: tool, Summary: summary, Reason: "session approve all"}
 		}
 		if g.sessionAllow[sessionID][sig(tool, args)] {
-			g.mu.RUnlock()
+			g.mu.Unlock()
 			g.auditAllow(CategoryTool, tool, "session approved specific", sessionID)
 			return Decision{Action: ActionAllow, Layer: "L4", Tool: tool, Summary: summary}
 		}
 	}
-	g.mu.RUnlock()
+	g.mu.Unlock()
 	if streak >= threshold {
 		g.auditDeny(CategoryTool, "circuit_breaker", tool,
 			fmt.Sprintf("too many denials (streak=%d threshold=%d)", streak, threshold),

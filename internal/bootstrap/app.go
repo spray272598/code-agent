@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"github.com/spray272598/code-agent/internal/application"
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
-	"github.com/spray272598/code-agent/internal/domain/audit"
 	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/domain/checkpoint"
@@ -31,9 +29,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
 	"github.com/spray272598/code-agent/internal/domain/memory"
-	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/security"
-	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/skill"
 	"github.com/spray272598/code-agent/internal/domain/slash"
 	"github.com/spray272598/code-agent/internal/domain/spec"
@@ -52,12 +48,9 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/llm"
 	"github.com/spray272598/code-agent/internal/infrastructure/logger"
 	inframcp "github.com/spray272598/code-agent/internal/infrastructure/mcp"
-	"github.com/spray272598/code-agent/internal/infrastructure/mysql"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
-	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	lsandbox "github.com/spray272598/code-agent/internal/infrastructure/sandbox/linux"
 	skillmarket "github.com/spray272598/code-agent/internal/infrastructure/skill"
-	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
 	"github.com/spray272598/code-agent/internal/infrastructure/storage"
@@ -124,119 +117,26 @@ func Build(cfg *config.Config) (*App, error) {
 		}
 	}
 
-	var sessionRepo sessrepo.ISessionRepository
-	var messageRepo sessrepo.IMessageRepository
-	var memRepo memport.IMemoryRepository
-	var auditRepo audit.Repository
-	var summaryRepo sessrepo.ISummaryRepository
-	var closer func()
-	var db *sql.DB
-	switch strings.ToLower(cfg.Database.Type) {
-	case "mysql":
-		opened, err := mysql.Open(cfg.MySQLDSN(), cfg.Database.AutoMigrate, cfg.Database.SchemaPath)
-		if err != nil {
-			log.Printf("[bootstrap] mysql unavailable (%v), use memory\n", err)
-			sessionRepo = repository.NewMemorySessionRepo()
-			messageRepo = repository.NewMemoryMessageRepo()
-			memRepo = repository.NewMemoryCoreRepo()
-			auditRepo = repository.NewMemoryAuditRepo()
-			summaryRepo = repository.NewMemorySummaryRepo()
-			closer = func() {}
-			cfg.Database.Type = "memory"
-		} else {
-			db = opened
-			sessionRepo = repository.NewMySQLSessionRepo(db)
-			messageRepo = repository.NewMySQLMessageRepo(db)
-			memRepo = repository.NewMySQLMemoryRepo(db)
-			auditRepo = repository.NewMySQLAuditRepo(db)
-			summaryRepo = repository.NewMySQLSummaryRepo(db)
-			closer = func() { _ = db.Close() }
-		}
-	case "sqlite", "sqlite3":
-		path := cfg.Database.SQLitePath
-		if path == "" {
-			path = "./data/code-agent.db"
-		}
-		opened, err := sqlite.Open(path, true) // always migrate lightweight schema
-		if err != nil {
-			log.Printf("[bootstrap] sqlite unavailable (%v), use memory\n", err)
-			sessionRepo = repository.NewMemorySessionRepo()
-			messageRepo = repository.NewMemoryMessageRepo()
-			memRepo = repository.NewMemoryCoreRepo()
-			auditRepo = repository.NewMemoryAuditRepo()
-			summaryRepo = repository.NewMemorySummaryRepo()
-			closer = func() {}
-			cfg.Database.Type = "memory"
-		} else {
-			db = opened
-			sessionRepo = repository.NewSQLiteSessionRepo(db)
-			messageRepo = repository.NewSQLiteMessageRepo(db)
-			memRepo = repository.NewSQLiteMemoryRepo(db)
-			auditRepo = repository.NewSQLiteAuditRepo(db)
-			summaryRepo = repository.NewSQLiteSummaryRepo(db)
-			closer = func() { _ = db.Close() }
-			log.Printf("[bootstrap] sqlite path=%s\n", path)
-		}
-	default:
-		sessionRepo = repository.NewMemorySessionRepo()
-		messageRepo = repository.NewMemoryMessageRepo()
-		memRepo = repository.NewMemoryCoreRepo()
-		auditRepo = repository.NewMemoryAuditRepo()
-		summaryRepo = repository.NewMemorySummaryRepo()
-		closer = func() {}
-		cfg.Database.Type = "memory"
-	}
-
-	// account repos (Sprint 1.1)
-	var userRepo auth.UserRepository
-	var deviceRepo auth.DeviceRepository
-	var refreshRepo auth.RefreshTokenRepository
-	switch strings.ToLower(cfg.Database.Type) {
-	case "mysql":
-		userRepo = repository.NewMySQLUserRepo(db)
-		deviceRepo = repository.NewMySQLDeviceRepo(db)
-		refreshRepo = repository.NewMySQLRefreshTokenRepo(db)
-	case "sqlite", "sqlite3":
-		userRepo = repository.NewSQLiteUserRepo(db)
-		deviceRepo = repository.NewSQLiteDeviceRepo(db)
-		refreshRepo = repository.NewSQLiteRefreshTokenRepo(db)
-	default:
-		userRepo = repository.NewMemoryUserRepo()
-		deviceRepo = repository.NewMemoryDeviceRepo()
-		refreshRepo = repository.NewMemoryRefreshTokenRepo()
-	}
-
-	memSvc := memory.NewService(memRepo)
-	memCtx := &coding.MemoryContext{Svc: memSvc}
-
 	// Sprint 2.8: KMS sealer (AES-256-GCM). Constructed once at boot; all
-	// encrypting repos (SSH, LLM Key) share the same sealer. The keyfile
-	// lives at ./secrets/kms.key (or CODE_AGENT_KMS_KEY env override).
+	// encrypting repos (SSH, LLM Key) share the same sealer.
 	sealer, err := kmsinfra.NewSealer()
 	if err != nil {
 		log.Fatalf("[bootstrap] kms sealer: %v", err)
 	}
 	log.Printf("[bootstrap] kms sealer active key id=%s\n", sealer.KeyID())
 
-	// Sprint 2.3: per-user LLM API key store. The repository encrypts API keys
-	// at rest via the sealer above; in memory mode we use the in-memory repo
-	// (still encrypted in RAM via the sealer for consistency).
-	var llmKeyRepo llmkey.Repository
-	switch strings.ToLower(cfg.Database.Type) {
-	case "mysql":
-		if db != nil {
-			llmKeyRepo = repository.NewMySQLLLMKeyRepo(db, sealer)
+	// Build all repositories (eliminates 3x repeated switch pattern).
+	r := buildRepos(cfg, sealer)
+	defer func() {
+		if r.Closer != nil {
+			r.Closer()
 		}
-	case "sqlite", "sqlite3":
-		if db != nil {
-			llmKeyRepo = repository.NewSQLiteLLMKeyRepo(db, sealer)
-		}
-	default:
-		llmKeyRepo = repository.NewMemoryLLMKeyRepo(sealer)
-	}
-	if llmKeyRepo == nil {
-		llmKeyRepo = repository.NewMemoryLLMKeyRepo(sealer) // safe fallback
-	}
+	}()
+	cfg.Database.Type = r.dbType
+
+	// Memory service
+	memSvc := memory.NewService(r.MemRepo)
+	memCtx := &coding.MemoryContext{Svc: memSvc}
 
 	rdb := redisx.New(cfg.Redis)
 	llmPort := llm.NewFromConfig(cfg)
@@ -333,13 +233,13 @@ func Build(cfg *config.Config) (*App, error) {
 	var sshRepo sshport.IConnectionRepository
 	if cfg.SSH.Enabled {
 		sshPool = sshinfra.NewPool()
-		if db != nil {
+		if r.DB != nil {
 			var raw sshport.IConnectionRepository
 			switch strings.ToLower(cfg.Database.Type) {
 			case "mysql":
-				raw = sshinfra.NewMySQLConnRepo(db)
+				raw = sshinfra.NewMySQLConnRepo(r.DB)
 			default:
-				raw = sshinfra.NewSQLiteConnRepo(db)
+				raw = sshinfra.NewSQLiteConnRepo(r.DB)
 			}
 			// Sprint 2.9: wrap the raw SSH repo so Password/PrivateKey are
 			// stored as KMS ciphertext. Fail-closed: the decorator propagates
@@ -654,10 +554,10 @@ func Build(cfg *config.Config) (*App, error) {
 			GraphResume:           cfg.EinoGraphResumeEnabled(),
 			GraphCheckPointDir:    cfg.Agent.EinoCheckPointDir,
 			Router:                cfg.LLM.ToRoutes(),
-		}, reg, perm, sessionRepo, messageRepo)
+		}, reg, perm, r.SessionRepo, r.MessageRepo)
 		er.SetHooks(hooks)
-		er.SetAudit(auditRepo)
-		er.SetSummaryRepo(summaryRepo)
+		er.SetAudit(r.AuditRepo)
+		er.SetSummaryRepo(r.SummaryRepo)
 		er.SetSkills(skillSvc)
 		er.SetMemory(memSvc)
 		er.SetSpecService(specSvc)
@@ -670,12 +570,12 @@ func Build(cfg *config.Config) (*App, error) {
 		log.Printf("[bootstrap] orchestrator=eino graph_resume=%v checkpoint_dir=%s | GuardedTool on ALL tools\n",
 			cfg.EinoGraphResumeEnabled(), cfg.Agent.EinoCheckPointDir)
 	} else {
-		loop := engine.NewLoop(llmPort, reg, sessionRepo, messageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
+		loop := engine.NewLoop(llmPort, reg, r.SessionRepo, r.MessageRepo, perm, cfg.Agent.MaxSteps, cfg.Agent.TokenBudget)
 		loop.SetSkills(skillSvc)
 		loop.SetHooks(hooks)
 		loop.SetMemory(memSvc, memCtx)
-		loop.SetAudit(auditRepo)
-		loop.SetSummaryRepo(summaryRepo)
+		loop.SetAudit(r.AuditRepo)
+		loop.SetSummaryRepo(r.SummaryRepo)
 		loop.SetSpecService(specSvc)
 		if blobStore != nil {
 			loop.SetBlobStore(blobStore, 4000)
@@ -692,10 +592,10 @@ func Build(cfg *config.Config) (*App, error) {
 	chatOpts = append(chatOpts,
 		application.WithSkills(skillSvc),
 		application.WithMemory(memSvc),
-		application.WithAudit(auditRepo),
+		application.WithAudit(r.AuditRepo),
 		application.WithKeyStore(keyStore),
 		application.WithCheckpoint(ckStore, runReg),
-		application.WithSummaryRepo(summaryRepo),
+		application.WithSummaryRepo(r.SummaryRepo),
 	)
 	if blobStore != nil {
 		chatOpts = append(chatOpts, application.WithBlobStore(blobStore))
@@ -707,7 +607,7 @@ func Build(cfg *config.Config) (*App, error) {
 		chatOpts = append(chatOpts, application.WithSSH(sshPool, sshRepo))
 	}
 	chat := application.New(application.CoreDeps{
-		Loop: runner, Sessions: sessionRepo, Messages: messageRepo, Tools: reg, Perm: perm,
+		Loop: runner, Sessions: r.SessionRepo, Messages: r.MessageRepo, Tools: reg, Perm: perm,
 		Redis: rdb, TimeoutSec: cfg.Agent.TimeoutSec, Workspace: workspaceRoot,
 		RateEnabled: cfg.RateLimit.Enabled, RatePerMin: cfg.RateLimit.PerMinute,
 		QuotaEnabled: cfg.TokenQuota.Enabled, QuotaPerDay: cfg.TokenQuota.PerUserPerDay,
@@ -717,14 +617,14 @@ func Build(cfg *config.Config) (*App, error) {
 
 	// auth service (Sprint 1.2): signup, email verification, and credential
 	// auth. JWT issuance arrives in Sprint 1.3.
-	chat.SetAuthService(application.NewAuthService(userRepo, nil))
+	chat.SetAuthService(application.NewAuthService(r.UserRepo, nil))
 
 	// token service (Sprint 1.3): HS256 access tokens + rotating refresh tokens.
-	chat.SetTokenService(application.NewTokenService(userRepo, refreshRepo, []byte(cfg.JWTSecret), []byte(cfg.JWTSecretPrev)))
+	chat.SetTokenService(application.NewTokenService(r.UserRepo, r.RefreshRepo, []byte(cfg.JWTSecret), []byte(cfg.JWTSecretPrev)))
 
 	// device authorization service (Sprint 1.4): RFC8628 device flow for the TUI.
 	chat.SetDeviceService(application.NewDeviceService(
-		deviceRepo, userRepo, chat.TokenService(),
+		r.DeviceRepo, r.UserRepo, chat.TokenService(),
 		cfg.Auth.VerificationURI,
 		time.Duration(cfg.Auth.DeviceCodeTTLSec)*time.Second,
 		time.Duration(cfg.Auth.DevicePollIntervalSec)*time.Second,
@@ -773,11 +673,11 @@ func Build(cfg *config.Config) (*App, error) {
 		Host: hostExec, Bridge: hostBridge, HostHub: hostHub,
 		SSHTerminalHub: sshTermHub,
 		SSHPool:        sshPool,
-		UserRepo:       userRepo,
-		DeviceRepo:     deviceRepo,
-		RefreshRepo:    refreshRepo,
+		UserRepo:       r.UserRepo,
+		DeviceRepo:     r.DeviceRepo,
+		RefreshRepo:    r.RefreshRepo,
 		KMS:            sealer,
-		LLMKey:         llmKeyRepo,
+		LLMKey:         r.LLMKeyRepo,
 		Closer: func() {
 			if mcpHealth != nil {
 				mcpHealth.Stop()
@@ -789,9 +689,6 @@ func Build(cfg *config.Config) (*App, error) {
 				sshPool.CloseAll()
 			}
 			_ = rdb.Close()
-			if closer != nil {
-				closer()
-			}
 		},
 	}, nil
 }

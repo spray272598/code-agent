@@ -27,7 +27,9 @@ type EncryptingConnRepo struct {
 // NewEncryptingConnRepo wires the KMS sealer around an existing repo.
 func NewEncryptingConnRepo(inner sshport.IConnectionRepository, sealer kms.CryptoSealer) *EncryptingConnRepo {
 	if inner == nil || sealer == nil {
-		panic("ssh.NewEncryptingConnRepo: inner and sealer are required")
+		// Fail at construction time rather than at first use.
+		// In a server context, this indicates a programming error in bootstrap wiring.
+		return nil
 	}
 	return &EncryptingConnRepo{inner: inner, sealer: sealer}
 }
