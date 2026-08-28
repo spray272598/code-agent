@@ -11,14 +11,19 @@ import (
 	"github.com/spray272598/code-agent/internal/types/common"
 )
 
+// Action is the enforcement decision returned by Guard.Check.
 type Action string
 
 const (
-	ActionAllow   Action = "allow"
-	ActionDeny    Action = "deny"
+	// ActionAllow permits the tool call without interaction.
+	ActionAllow Action = "allow"
+	// ActionDeny blocks the tool call outright.
+	ActionDeny Action = "deny"
+	// ActionConfirm requires human-in-the-loop approval before proceeding.
 	ActionConfirm Action = "confirm"
 )
 
+// Decision is the result of evaluating a tool call against the Guard.
 type Decision struct {
 	Action  Action `json:"action"`
 	Layer   string `json:"layer"`
@@ -28,6 +33,7 @@ type Decision struct {
 	Summary string `json:"summary"`
 }
 
+// PendingConfirm is a confirmation request awaiting an Approve/Reject decision.
 type PendingConfirm struct {
 	ID        string         `json:"id"`
 	SessionID string         `json:"sessionId"`
@@ -39,6 +45,8 @@ type PendingConfirm struct {
 	CreatedAt time.Time      `json:"createdAt"`
 }
 
+// AwaitingResume records a session that is paused waiting for a confirmation
+// decision so the agent loop can resume once the user responds.
 type AwaitingResume struct {
 	SessionID string
 	Tool      string
@@ -47,41 +55,57 @@ type AwaitingResume struct {
 	Ready     bool
 }
 
-// Guard implements 5-layer defense with command normalization, extended with
-// Glob-based deny rules, secret sanitization, audit logging, and network policy.
+// Guard implements a layered defense for tool execution: command normalization,
+// 5-layer permission checks, glob-based deny rules, secret sanitization, audit
+// logging, network policy, and extended security components (prompt-injection
+// detection, behavior analytics, integrity chain, adaptive circuit breaker).
+//
+// The struct is intentionally split into three sub-objects:
+//   - guardState: mutable per-session state guarded by a mutex.
+//   - guardConfig: immutable configuration set at construction time.
+//   - guardComponents: injected/extended security subsystems.
 type Guard struct {
+	state      guardState
+	config     guardConfig
+	components guardComponents
+}
+
+// guardState holds every piece of mutable, mutex-protected runtime state.
+type guardState struct {
 	mu           sync.RWMutex
 	sessionAllow map[string]map[string]bool
 	pending      map[string]*PendingConfirm
 	awaiting     map[string]*AwaitingResume
 	denyStreak   map[string]int
-	circuitLimit int
-	workspace    string
 	sessionWS    map[string]string
+}
+
+// guardConfig holds immutable configuration decided when the Guard is built.
+type guardConfig struct {
+	workspace    string
 	pathSandbox  bool
 	confirmWrite bool
-	denyRules    []rule
-	confirmRules []rule
-	readTools    map[string]bool
-	writeTools   map[string]bool
+	circuitLimit int
 	mcpConfirm   bool
 	mode         SandboxMode
-	// Extended security components
-	denyEngine   *DenyEngine
-	sanitizer    *Sanitizer
-	audit        *AuditLogger
-	netEnforcer  *NetworkEnforcer
-	sandboxMgr   *SandboxManager
-	configLoader *ConfigLoader
-	// Advanced security: prompt injection detection
-	injectionDetector *PromptInjectionDetector
-	// Advanced security: behavior analysis & anomaly detection
-	behaviorTracker *BehaviorTracker
-	// Advanced security: tamper-evident integrity chain
-	integrityChain *IntegrityChain
-	// Advanced security: adaptive circuit breaker
-	adaptiveBreaker *AdaptiveCircuitBreaker
-	// External sandbox enforcer (injected by bootstrap for dependency inversion)
+	readTools    map[string]bool
+	writeTools   map[string]bool
+	denyRules    []rule
+	confirmRules []rule
+}
+
+// guardComponents holds the injected and extended security subsystems.
+type guardComponents struct {
+	denyEngine              *DenyEngine
+	sanitizer               *Sanitizer
+	audit                   *AuditLogger
+	netEnforcer             *NetworkEnforcer
+	sandboxMgr              *SandboxManager
+	configLoader            *ConfigLoader
+	injectionDetector       *PromptInjectionDetector
+	behaviorTracker         *BehaviorTracker
+	integrityChain          *IntegrityChain
+	adaptiveBreaker         *AdaptiveCircuitBreaker
 	externalSandboxEnforcer SandboxEnforcer
 }
 
@@ -132,31 +156,38 @@ type rule struct {
 	layer      string
 }
 
+// NewGuard builds a Guard in the default workspace sandbox tier.
 func NewGuard(workspace string, pathSandbox, confirmWrite bool) *Guard {
 	return NewGuardMode(workspace, pathSandbox, confirmWrite, ModeWorkspace)
 }
 
-// NewGuardMode builds a Guard with an explicit sandbox tier and all extended
-// security components (deny engine, sanitizer, audit, network policy, sandbox mgr).
+// NewGuardMode builds a Guard with an explicit sandbox tier and wires up all
+// extended security components (deny engine, sanitizer, audit, network policy,
+// sandbox manager, prompt-injection detector, behavior tracker, integrity
+// chain and adaptive circuit breaker).
 func NewGuardMode(workspace string, pathSandbox, confirmWrite bool, mode SandboxMode) *Guard {
 	g := &Guard{
-		sessionAllow: make(map[string]map[string]bool),
-		pending:      make(map[string]*PendingConfirm),
-		awaiting:     make(map[string]*AwaitingResume),
-		denyStreak:   make(map[string]int),
-		circuitLimit: 5,
-		workspace:    workspace,
-		sessionWS:    make(map[string]string),
-		pathSandbox:  pathSandbox,
-		confirmWrite: confirmWrite,
-		mcpConfirm:   true,
-		mode:         mode,
-		readTools: map[string]bool{
-			"read_file": true, "glob": true, "grep": true, "memory_search": true,
-			"code_search": true, "code_index": true,
+		state: guardState{
+			sessionAllow: make(map[string]map[string]bool),
+			pending:      make(map[string]*PendingConfirm),
+			awaiting:     make(map[string]*AwaitingResume),
+			denyStreak:   make(map[string]int),
+			sessionWS:    make(map[string]string),
 		},
-		writeTools: map[string]bool{
-			"write_file": true, "edit_file": true, "memory_save": true,
+		config: guardConfig{
+			circuitLimit: 5,
+			workspace:    workspace,
+			pathSandbox:  pathSandbox,
+			confirmWrite: confirmWrite,
+			mcpConfirm:   true,
+			mode:         mode,
+			readTools: map[string]bool{
+				"read_file": true, "glob": true, "grep": true, "memory_search": true,
+				"code_search": true, "code_index": true,
+			},
+			writeTools: map[string]bool{
+				"write_file": true, "edit_file": true, "memory_save": true,
+			},
 		},
 	}
 	g.initRules()
@@ -165,62 +196,82 @@ func NewGuardMode(workspace string, pathSandbox, confirmWrite bool, mode Sandbox
 }
 
 func (g *Guard) initExtendedSecurity(workspace string) {
-	g.sanitizer = DefaultSanitizer()
-	g.audit = DefaultAuditLogger()
-	g.netEnforcer = NewNetworkEnforcer(DefaultNetworkPolicy())
-	g.configLoader = NewConfigLoader(workspace)
-	if denyCfg, err := g.configLoader.Load(); err == nil {
+	g.components.sanitizer = DefaultSanitizer()
+	g.components.audit = DefaultAuditLogger()
+	g.components.netEnforcer = NewNetworkEnforcer(DefaultNetworkPolicy())
+	g.components.configLoader = NewConfigLoader(workspace)
+	if denyCfg, err := g.components.configLoader.Load(); err == nil {
 		if engine, err := NewDenyEngine(denyCfg.Deny); err == nil {
-			g.denyEngine = engine
+			g.components.denyEngine = engine
 		}
 	} else if engine, err := DefaultDenyEngine(); err == nil {
-		g.denyEngine = engine
+		g.components.denyEngine = engine
 	}
 
-	// Use external sandbox enforcer if provided (dependency injection from bootstrap)
-	// Otherwise create the default SandboxManager
-	if g.externalSandboxEnforcer != nil {
-		// Create a minimal SandboxManager that wraps the external enforcer
-		g.sandboxMgr = NewSandboxManagerWithEnforcer(workspace, g.configLoader, g.audit, g.externalSandboxEnforcer)
+	// Use an external sandbox enforcer if injected by bootstrap for dependency
+	// inversion; otherwise fall back to the default SandboxManager.
+	if g.components.externalSandboxEnforcer != nil {
+		g.components.sandboxMgr = NewSandboxManagerWithEnforcer(
+			workspace, g.components.configLoader, g.components.audit, g.components.externalSandboxEnforcer)
 	} else {
-		g.sandboxMgr = NewSandboxManager(workspace, g.configLoader, g.audit)
+		g.components.sandboxMgr = NewSandboxManager(workspace, g.components.configLoader, g.components.audit)
 	}
 
-	// Advanced security components
-	g.injectionDetector = NewPromptInjectionDetector()
-	g.behaviorTracker = NewBehaviorTracker()
-	g.behaviorTracker.SetDeletionBurstThreshold(10*time.Minute, 3)
-	g.behaviorTracker.SetRapidAccessThreshold(5*time.Minute, 3)
-	g.integrityChain = NewIntegrityChain()
-	g.adaptiveBreaker = NewAdaptiveCircuitBreaker()
+	// Advanced security components.
+	g.components.injectionDetector = NewPromptInjectionDetector()
+	g.components.behaviorTracker = NewBehaviorTracker()
+	g.components.behaviorTracker.SetDeletionBurstThreshold(10*time.Minute, 3)
+	g.components.behaviorTracker.SetRapidAccessThreshold(5*time.Minute, 3)
+	g.components.integrityChain = NewIntegrityChain()
+	g.components.adaptiveBreaker = NewAdaptiveCircuitBreaker()
 
-	// Wire risk data sources for adaptive circuit breaker
-	g.adaptiveBreaker.SetRiskSources(
+	// Wire risk data sources for the adaptive circuit breaker.
+	g.components.adaptiveBreaker.SetRiskSources(
 		g.Mode,
-		g.behaviorTracker.GetSessionRisk,
-		g.injectionDetector.GetTotalDetectionsForAdaptive,
+		g.components.behaviorTracker.GetSessionRisk,
+		g.components.injectionDetector.GetTotalDetectionsForAdaptive,
 	)
 }
 
-// SetExternalSandboxEnforcer sets an external sandbox enforcer (for dependency injection)
-// This should be called before initExtendedSecurity, typically by bootstrap
+// SetExternalSandboxEnforcer injects an external sandbox enforcer (dependency
+// injection). It must be called before initExtendedSecurity, typically by
+// bootstrap.
 func (g *Guard) SetExternalSandboxEnforcer(enforcer SandboxEnforcer) {
-	g.externalSandboxEnforcer = enforcer
+	g.components.externalSandboxEnforcer = enforcer
 }
 
-func (g *Guard) DenyEngine() *DenyEngine                     { return g.denyEngine }
-func (g *Guard) Sanitizer() *Sanitizer                       { return g.sanitizer }
-func (g *Guard) Audit() *AuditLogger                         { return g.audit }
-func (g *Guard) NetworkEnforcer() *NetworkEnforcer           { return g.netEnforcer }
-func (g *Guard) SandboxManager() *SandboxManager             { return g.sandboxMgr }
-func (g *Guard) ConfigLoader() *ConfigLoader                 { return g.configLoader }
-func (g *Guard) InjectionDetector() *PromptInjectionDetector { return g.injectionDetector }
-func (g *Guard) BehaviorTracker() *BehaviorTracker           { return g.behaviorTracker }
-func (g *Guard) IntegrityChain() *IntegrityChain             { return g.integrityChain }
-func (g *Guard) AdaptiveBreaker() *AdaptiveCircuitBreaker    { return g.adaptiveBreaker }
+// DenyEngine exposes the glob-based deny engine.
+func (g *Guard) DenyEngine() *DenyEngine { return g.components.denyEngine }
+
+// Sanitizer exposes the secret sanitizer.
+func (g *Guard) Sanitizer() *Sanitizer { return g.components.sanitizer }
+
+// Audit exposes the audit logger.
+func (g *Guard) Audit() *AuditLogger { return g.components.audit }
+
+// NetworkEnforcer exposes the network policy enforcer.
+func (g *Guard) NetworkEnforcer() *NetworkEnforcer { return g.components.netEnforcer }
+
+// SandboxManager exposes the sandbox manager.
+func (g *Guard) SandboxManager() *SandboxManager { return g.components.sandboxMgr }
+
+// ConfigLoader exposes the deny-rule config loader.
+func (g *Guard) ConfigLoader() *ConfigLoader { return g.components.configLoader }
+
+// InjectionDetector exposes the prompt-injection detector.
+func (g *Guard) InjectionDetector() *PromptInjectionDetector { return g.components.injectionDetector }
+
+// BehaviorTracker exposes the behavior-anomaly tracker.
+func (g *Guard) BehaviorTracker() *BehaviorTracker { return g.components.behaviorTracker }
+
+// IntegrityChain exposes the tamper-evident integrity chain.
+func (g *Guard) IntegrityChain() *IntegrityChain { return g.components.integrityChain }
+
+// AdaptiveBreaker exposes the adaptive circuit breaker.
+func (g *Guard) AdaptiveBreaker() *AdaptiveCircuitBreaker { return g.components.adaptiveBreaker }
 
 // Mode returns the active sandbox tier.
-func (g *Guard) Mode() SandboxMode { return g.mode }
+func (g *Guard) Mode() SandboxMode { return g.config.mode }
 
 // SetMode switches the sandbox tier at runtime. Transitioning into readonly is
 // the mechanism behind PlanMode's explore phase; exiting back to workspace
@@ -229,13 +280,13 @@ func (g *Guard) SetMode(m SandboxMode) {
 	if g == nil {
 		return
 	}
-	g.mu.Lock()
-	g.mode = m
-	g.mu.Unlock()
+	g.state.mu.Lock()
+	g.config.mode = m
+	g.state.mu.Unlock()
 }
 
 func (g *Guard) initRules() {
-	// Multiple patterns per rule to catch spacing / flag-order variants after normalize
+	// Multiple patterns per rule catch spacing / flag-order variants after normalize.
 	denies := []struct {
 		id, reason string
 		pats       []string
@@ -282,7 +333,7 @@ func (g *Guard) initRules() {
 		for _, p := range d.pats {
 			res = append(res, regexp.MustCompile(p))
 		}
-		g.denyRules = append(g.denyRules, rule{id: d.id, reason: d.reason, patterns: res, layer: "L1"})
+		g.config.denyRules = append(g.config.denyRules, rule{id: d.id, reason: d.reason, patterns: res, layer: "L1"})
 	}
 	confirms := []struct {
 		id, reason string
@@ -300,7 +351,7 @@ func (g *Guard) initRules() {
 		for _, p := range c.pats {
 			res = append(res, regexp.MustCompile(p))
 		}
-		g.confirmRules = append(g.confirmRules, rule{id: c.id, reason: c.reason, patterns: res, layer: "L3"})
+		g.config.confirmRules = append(g.config.confirmRules, rule{id: c.id, reason: c.reason, patterns: res, layer: "L3"})
 	}
 }
 
@@ -321,7 +372,7 @@ func matchAny(rules []rule, variants []string) *rule {
 // isMutating reports whether a tool can change the filesystem or process state.
 func (g *Guard) isMutating(tool string) bool {
 	base := toolBaseName(tool)
-	if g.writeTools[tool] || g.writeTools[base] {
+	if g.config.writeTools[tool] || g.config.writeTools[base] {
 		return true
 	}
 	switch base {
@@ -360,21 +411,22 @@ func (g *Guard) networkEgressRules() []rule {
 	}
 }
 
+// Check evaluates a tool call against all defense layers and returns a Decision.
 func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 	summary := tool + ": " + fmt.Sprint(args)
 	tool = strings.TrimSpace(tool)
 
-	// L0 Prompt Injection Detection: analyze command content for injection patterns
-	if g.injectionDetector != nil {
+	// L0 Prompt Injection Detection: analyze command content for injection patterns.
+	if g.components.injectionDetector != nil {
 		cmd := extract(tool, args)
 		if cmd != "" {
-			report := g.injectionDetector.CheckWithSession(sessionID, cmd)
+			report := g.components.injectionDetector.CheckWithSession(sessionID, cmd)
 			if report.Detected && report.ShouldBlock(InjectionHigh) {
 				g.auditDeny(CategoryDenied, "prompt_injection", tool,
 					fmt.Sprintf("injection detected: %d matches, score=%.2f", len(report.Matches), report.Score),
 					sessionID)
-				if g.integrityChain != nil {
-					g.integrityChain.Append("prompt_injection_blocked", sessionID, "",
+				if g.components.integrityChain != nil {
+					g.components.integrityChain.Append("prompt_injection_blocked", sessionID, "",
 						fmt.Sprintf("tool=%s matches=%d", tool, len(report.Matches)),
 						map[string]any{"score": report.Score, "matches": len(report.Matches)})
 				}
@@ -390,8 +442,8 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 	}
 
-	// L0 Behavior Tracking: record event and detect anomalies
-	if g.behaviorTracker != nil {
+	// L0 Behavior Tracking: record event and detect anomalies.
+	if g.components.behaviorTracker != nil {
 		target := ""
 		if p, ok := args["path"].(string); ok {
 			target = p
@@ -400,7 +452,7 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		} else {
 			target = extract(tool, args)
 		}
-		anomalies := g.behaviorTracker.Track(BehaviorEvent{
+		anomalies := g.components.behaviorTracker.Track(BehaviorEvent{
 			Time:      time.Now(),
 			SessionID: sessionID,
 			Tool:      tool,
@@ -422,57 +474,57 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 	}
 
-	// L5 circuit (adaptive threshold) — hold lock for entire check-and-maybe-deny
-	// to prevent TOCTOU race between reading streak and circuit breaker decision.
-	g.mu.Lock()
-	streak := g.denyStreak[sessionID]
-	threshold := g.circuitLimit
-	if g.adaptiveBreaker != nil {
-		adaptiveThreshold := g.adaptiveBreaker.GetThreshold(sessionID)
+	// L5 circuit (adaptive threshold) — hold lock for the entire check-and-maybe-deny
+	// to prevent a TOCTOU race between reading the streak and the breaker decision.
+	g.state.mu.Lock()
+	streak := g.state.denyStreak[sessionID]
+	threshold := g.config.circuitLimit
+	if g.components.adaptiveBreaker != nil {
+		adaptiveThreshold := g.components.adaptiveBreaker.GetThreshold(sessionID)
 		if adaptiveThreshold < threshold {
 			threshold = adaptiveThreshold
 		}
 	}
-	if g.sessionAllow[sessionID] != nil {
-		if g.sessionAllow[sessionID]["*"] {
-			g.mu.Unlock()
+	if g.state.sessionAllow[sessionID] != nil {
+		if g.state.sessionAllow[sessionID]["*"] {
+			g.state.mu.Unlock()
 			g.auditAllow(CategoryTool, tool, "session approved", sessionID)
 			return Decision{Action: ActionAllow, Layer: "L4", Tool: tool, Summary: summary, Reason: "session approve all"}
 		}
-		if g.sessionAllow[sessionID][sig(tool, args)] {
-			g.mu.Unlock()
+		if g.state.sessionAllow[sessionID][sig(tool, args)] {
+			g.state.mu.Unlock()
 			g.auditAllow(CategoryTool, tool, "session approved specific", sessionID)
 			return Decision{Action: ActionAllow, Layer: "L4", Tool: tool, Summary: summary}
 		}
 	}
-	g.mu.Unlock()
+	g.state.mu.Unlock()
 	if streak >= threshold {
 		g.auditDeny(CategoryTool, "circuit_breaker", tool,
 			fmt.Sprintf("too many denials (streak=%d threshold=%d)", streak, threshold),
 			sessionID)
-		if g.integrityChain != nil {
-			g.integrityChain.Append("circuit_breaker", sessionID, "",
+		if g.components.integrityChain != nil {
+			g.components.integrityChain.Append("circuit_breaker", sessionID, "",
 				fmt.Sprintf("tool=%s streak=%d threshold=%d", tool, streak, threshold),
 				map[string]any{"streak": streak, "threshold": threshold})
 		}
 		return Decision{Action: ActionDeny, Layer: "L5", RuleID: "circuit", Reason: "too many denials", Tool: tool, Summary: summary}
 	}
 
-	// L1 deny — all command variants
+	// L1 deny — all command variants.
 	cmd := extract(tool, args)
 	variants := CommandVariants(cmd)
-	if r := matchAny(g.denyRules, variants); r != nil {
+	if r := matchAny(g.config.denyRules, variants); r != nil {
 		g.incDeny(sessionID)
 		g.auditDeny(CategoryTool, r.id, tool, r.reason, sessionID)
 		return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 	}
 
-	// Sandbox tier
-	if g.mode == ModeReadonly && g.isMutating(tool) {
+	// Sandbox tier.
+	if g.config.mode == ModeReadonly && g.isMutating(tool) {
 		g.auditDeny(CategorySandbox, "readonly", tool, "read-only sandbox: mutating tool denied", sessionID)
 		return Decision{Action: ActionDeny, Layer: "L1", RuleID: "readonly", Reason: "read-only sandbox: mutating tool denied", Tool: tool, Summary: summary}
 	}
-	if g.mode == ModeStrict {
+	if g.config.mode == ModeStrict {
 		base := toolBaseName(tool)
 		if tool == "bash" || base == "bash" || tool == "run_command" {
 			if r := matchAny(g.networkEgressRules(), variants); r != nil {
@@ -482,8 +534,8 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 	}
 
-	// L2 path sandbox + Glob deny engine
-	if g.pathSandbox && tool != "switch_workspace" {
+	// L2 path sandbox + glob deny engine.
+	if g.config.pathSandbox && tool != "switch_workspace" {
 		if p := pathArg(tool, args); p != "" {
 			norm := NormalizePathArg(p)
 			if !g.underWorkspace(sessionID, norm) {
@@ -491,7 +543,7 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 				g.auditDeny(CategorySandbox, "path_sandbox", norm, "path outside workspace", sessionID)
 				return Decision{Action: ActionDeny, Layer: "L2", RuleID: "path_sandbox", Reason: "path outside workspace", Tool: tool, Summary: summary}
 			}
-			if g.denyEngine != nil && g.denyEngine.IsDenied(norm) {
+			if g.components.denyEngine != nil && g.components.denyEngine.IsDenied(norm) {
 				g.incDeny(sessionID)
 				g.auditDeny(CategorySandbox, "glob_deny", norm, "glob pattern denied path", sessionID)
 				return Decision{Action: ActionDeny, Layer: "L2", RuleID: "glob_deny", Reason: "path matches deny glob pattern", Tool: tool, Summary: summary}
@@ -503,13 +555,13 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 	}
 
-	// L2.5 network policy enforcement
-	if g.netEnforcer != nil {
+	// L2.5 network policy enforcement.
+	if g.components.netEnforcer != nil {
 		if cmd != "" {
 			lower := strings.ToLower(cmd)
 			for _, netPattern := range []string{"http://", "https://", "ssh://", "ftp://"} {
 				if strings.Contains(lower, netPattern) {
-					decision := g.netEnforcer.FilterURL(extractURL(cmd))
+					decision := g.components.netEnforcer.FilterURL(extractURL(cmd))
 					if decision.Action == ActionDeny {
 						g.incDeny(sessionID)
 						g.auditDeny(CategoryNetwork, decision.RuleID, cmd, decision.Reason, sessionID)
@@ -521,21 +573,21 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		}
 	}
 
-	// L3 tool class
+	// L3 tool class.
 	base := toolBaseName(tool)
-	if g.readTools[tool] || g.readTools[base] {
+	if g.config.readTools[tool] || g.config.readTools[base] {
 		sanitizedSummary := g.sanitizeSummary(summary)
 		g.auditAllow(CategoryTool, tool, "read tool allowed", sessionID)
 		return Decision{Action: ActionAllow, Layer: "L3", Tool: tool, Summary: sanitizedSummary}
 	}
-	if g.writeTools[tool] || g.writeTools[base] {
-		if g.confirmWrite {
+	if g.config.writeTools[tool] || g.config.writeTools[base] {
+		if g.config.confirmWrite {
 			g.auditConfirm(CategoryTool, "write", tool, "write/edit requires confirm", sessionID)
 			return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "write", Reason: "write/edit requires confirm", Tool: tool, Summary: summary}
 		}
 	}
 	if tool == "bash" || base == "bash" || tool == "run_command" {
-		if r := matchAny(g.confirmRules, variants); r != nil {
+		if r := matchAny(g.config.confirmRules, variants); r != nil {
 			g.auditConfirm(CategoryTool, r.id, tool, r.reason, sessionID)
 			return Decision{Action: ActionConfirm, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
 		}
@@ -543,7 +595,7 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "bash", Reason: "shell requires confirm", Tool: tool, Summary: summary}
 	}
 	if strings.HasPrefix(tool, "ssh_") || strings.HasPrefix(base, "ssh_") {
-		if r := matchAny(g.denyRules, variants); r != nil {
+		if r := matchAny(g.config.denyRules, variants); r != nil {
 			g.incDeny(sessionID)
 			g.auditDeny(CategoryTool, r.id, tool, r.reason, sessionID)
 			return Decision{Action: ActionDeny, Layer: r.layer, RuleID: r.id, Reason: r.reason, Tool: tool, Summary: summary}
@@ -556,8 +608,8 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 		return Decision{Action: ActionConfirm, Layer: "L3", RuleID: "delegate", Reason: "subagent delegation requires confirm", Tool: tool, Summary: summary}
 	}
 
-	if g.mcpConfirm || isMCPTool(tool) {
-		if r := matchAny(g.denyRules, variants); r != nil {
+	if g.config.mcpConfirm || isMCPTool(tool) {
+		if r := matchAny(g.config.denyRules, variants); r != nil {
 			g.incDeny(sessionID)
 			g.auditDeny(CategoryTool, "mcp_"+r.id, tool, "mcp args matched deny: "+r.reason, sessionID)
 			return Decision{Action: ActionDeny, Layer: "L1", RuleID: "mcp_" + r.id, Reason: "mcp args matched deny: " + r.reason, Tool: tool, Summary: summary}
@@ -577,26 +629,32 @@ func (g *Guard) Check(sessionID, tool string, args map[string]any) Decision {
 }
 
 func (g *Guard) auditAllow(category AuditCategory, target, detail string, sessionID ...string) {
-	if g.audit != nil {
-		g.audit.Allow(category, target, detail, sessionID...)
+	if g.components.audit != nil {
+		g.components.audit.Allow(category, target, detail, sessionID...)
 	}
 }
 
 func (g *Guard) auditDeny(category AuditCategory, ruleID, target, detail string, sessionID ...string) {
-	if g.audit != nil {
-		g.audit.Deny(category, ruleID, target, detail, sessionID...)
+	if g.components.audit != nil {
+		g.components.audit.Deny(category, ruleID, target, detail, sessionID...)
 	}
 }
 
 func (g *Guard) auditConfirm(category AuditCategory, ruleID, target, detail string, sessionID ...string) {
-	if g.audit != nil {
-		g.audit.Confirm(category, ruleID, target, detail, sessionID...)
+	if g.components.audit != nil {
+		g.components.audit.Confirm(category, ruleID, target, detail, sessionID...)
+	}
+}
+
+func (g *Guard) auditWarn(category AuditCategory, target, detail string, sessionID ...string) {
+	if g.components.audit != nil {
+		g.components.audit.Warn(category, target, detail)
 	}
 }
 
 func (g *Guard) sanitizeSummary(s string) string {
-	if g.sanitizer != nil && g.sanitizer.HasAnyMatch(s) {
-		return g.sanitizer.RedactAll(s)
+	if g.components.sanitizer != nil && g.components.sanitizer.HasAnyMatch(s) {
+		return g.components.sanitizer.RedactAll(s)
 	}
 	return s
 }
@@ -624,13 +682,13 @@ func toolBaseName(tool string) string {
 }
 
 func isMCPTool(name string) bool {
-	// registered as server__tool or tagged in description; name heuristic
+	// Registered as server__tool, or name contains a double underscore separator.
 	return strings.Contains(name, "__")
 }
 
 func looksReadOnlyMCP(name string) bool {
 	n := strings.ToLower(toolBaseName(name))
-	// write/exec names never auto-allow
+	// Write/exec names never auto-allow.
 	for _, k := range []string{"write", "delete", "remove", "exec", "run", "bash", "shell", "eval", "put", "create", "drop"} {
 		if strings.Contains(n, k) {
 			return false
@@ -665,28 +723,29 @@ func looksDangerousArgs(args map[string]any) bool {
 
 // SetSessionWorkspace overrides the workspace for a specific session.
 func (g *Guard) SetSessionWorkspace(sessionID, path string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
 	if path == "" {
-		delete(g.sessionWS, sessionID)
+		delete(g.state.sessionWS, sessionID)
 		return
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return
 	}
-	g.sessionWS[sessionID] = abs
+	g.state.sessionWS[sessionID] = abs
 }
 
-// SessionWorkspace returns the effective workspace for a session (session override > global).
+// SessionWorkspace returns the effective workspace for a session
+// (session override takes precedence over the global workspace).
 func (g *Guard) SessionWorkspace(sessionID string) string {
-	g.mu.RLock()
-	if ws, ok := g.sessionWS[sessionID]; ok {
-		g.mu.RUnlock()
+	g.state.mu.RLock()
+	if ws, ok := g.state.sessionWS[sessionID]; ok {
+		g.state.mu.RUnlock()
 		return ws
 	}
-	g.mu.RUnlock()
-	return g.workspace
+	g.state.mu.RUnlock()
+	return g.config.workspace
 }
 
 func (g *Guard) underWorkspace(sessionID, p string) bool {
@@ -694,7 +753,7 @@ func (g *Guard) underWorkspace(sessionID, p string) bool {
 	if ws == "" {
 		return true
 	}
-	// reject invalid UTF-8 / null from NormalizePathArg
+	// Reject invalid UTF-8 / null from NormalizePathArg.
 	if p == "" || strings.Contains(p, "\x00") {
 		return false
 	}
@@ -702,11 +761,11 @@ func (g *Guard) underWorkspace(sessionID, p string) bool {
 	if err != nil {
 		return false
 	}
-	// resolve symlinks in workspace root once
+	// Resolve symlinks in workspace root once.
 	if resolved, err := filepath.EvalSymlinks(absW); err == nil {
 		absW = resolved
 	}
-	// check all variants (encoding bypass)
+	// Check all variants (encoding bypass).
 	for _, v := range PathVariants(p) {
 		if v == "" || strings.Contains(v, "\x00") {
 			return false
@@ -722,7 +781,7 @@ func (g *Guard) underWorkspace(sessionID, p string) bool {
 			return false
 		}
 		absP = filepath.Clean(absP)
-		// resolve symlinks to prevent symlink-based escapes
+		// Resolve symlinks to prevent symlink-based escapes.
 		if resolved, err := filepath.EvalSymlinks(absP); err == nil {
 			absP = resolved
 		}
@@ -738,8 +797,8 @@ func (g *Guard) underWorkspace(sessionID, p string) bool {
 }
 
 func (g *Guard) sensitivePathEnhanced(p string) bool {
-	if g.denyEngine != nil {
-		return g.denyEngine.IsDeniedLegacy(p)
+	if g.components.denyEngine != nil {
+		return g.components.denyEngine.IsDeniedLegacy(p)
 	}
 	return sensitivePath(p)
 }
@@ -765,64 +824,69 @@ func sensitivePath(p string) bool {
 	return false
 }
 
+// CreatePending records a confirmation request and marks the session as awaiting.
 func (g *Guard) CreatePending(sessionID, tool string, args map[string]any, d Decision) *PendingConfirm {
 	id := fmt.Sprintf("perm-%d", time.Now().UnixNano())
 	p := &PendingConfirm{
 		ID: id, SessionID: sessionID, Tool: tool, Args: args,
 		Reason: d.Reason, RuleID: d.RuleID, Layer: d.Layer, CreatedAt: time.Now(),
 	}
-	g.mu.Lock()
-	g.pending[id] = p
-	g.awaiting[sessionID] = &AwaitingResume{SessionID: sessionID, Tool: tool, Args: args, PermID: id, Ready: false}
-	g.mu.Unlock()
+	g.state.mu.Lock()
+	g.state.pending[id] = p
+	g.state.awaiting[sessionID] = &AwaitingResume{SessionID: sessionID, Tool: tool, Args: args, PermID: id, Ready: false}
+	g.state.mu.Unlock()
 	return p
 }
 
+// Approve grants a pending confirmation, scoping it to the session, a single
+// tool signature, or (for "session"/"always") every tool in the session.
 func (g *Guard) Approve(id, scope string) (*PendingConfirm, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	p, ok := g.pending[id]
+	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
+	p, ok := g.state.pending[id]
 	if !ok {
 		return nil, fmt.Errorf("pending not found: %s", id)
 	}
-	delete(g.pending, id)
-	if g.sessionAllow[p.SessionID] == nil {
-		g.sessionAllow[p.SessionID] = map[string]bool{}
+	delete(g.state.pending, id)
+	if g.state.sessionAllow[p.SessionID] == nil {
+		g.state.sessionAllow[p.SessionID] = map[string]bool{}
 	}
 	if scope == "session" || scope == "always" {
-		g.sessionAllow[p.SessionID]["*"] = true
+		g.state.sessionAllow[p.SessionID]["*"] = true
 	} else {
-		g.sessionAllow[p.SessionID][sig(p.Tool, p.Args)] = true
+		g.state.sessionAllow[p.SessionID][sig(p.Tool, p.Args)] = true
 	}
-	g.denyStreak[p.SessionID] = 0
-	if a, ok := g.awaiting[p.SessionID]; ok && a.PermID == id {
+	g.state.denyStreak[p.SessionID] = 0
+	if a, ok := g.state.awaiting[p.SessionID]; ok && a.PermID == id {
 		a.Ready = true
 	} else {
-		g.awaiting[p.SessionID] = &AwaitingResume{SessionID: p.SessionID, Tool: p.Tool, Args: p.Args, PermID: id, Ready: true}
+		g.state.awaiting[p.SessionID] = &AwaitingResume{SessionID: p.SessionID, Tool: p.Tool, Args: p.Args, PermID: id, Ready: true}
 	}
 	return p, nil
 }
 
+// Reject denies a pending confirmation and increments the session deny streak.
 func (g *Guard) Reject(id string) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	p, ok := g.pending[id]
+	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
+	p, ok := g.state.pending[id]
 	if !ok {
 		return fmt.Errorf("pending not found")
 	}
-	delete(g.pending, id)
-	if a, ok := g.awaiting[p.SessionID]; ok && a.PermID == id {
-		delete(g.awaiting, p.SessionID)
+	delete(g.state.pending, id)
+	if a, ok := g.state.awaiting[p.SessionID]; ok && a.PermID == id {
+		delete(g.state.awaiting, p.SessionID)
 	}
-	g.denyStreak[p.SessionID]++
+	g.state.denyStreak[p.SessionID]++
 	return nil
 }
 
+// ListPending returns the pending confirmations, optionally filtered by session.
 func (g *Guard) ListPending(sessionID string) []*PendingConfirm {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
+	g.state.mu.RLock()
+	defer g.state.mu.RUnlock()
 	var out []*PendingConfirm
-	for _, p := range g.pending {
+	for _, p := range g.state.pending {
 		if sessionID == "" || p.SessionID == sessionID {
 			out = append(out, p)
 		}
@@ -830,14 +894,15 @@ func (g *Guard) ListPending(sessionID string) []*PendingConfirm {
 	return out
 }
 
+// TakeReadyResume consumes and returns a resume marker if the session is ready.
 func (g *Guard) TakeReadyResume(sessionID string) *AwaitingResume {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	a, ok := g.awaiting[sessionID]
+	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
+	a, ok := g.state.awaiting[sessionID]
 	if !ok || a == nil || !a.Ready {
 		return nil
 	}
-	delete(g.awaiting, sessionID)
+	delete(g.state.awaiting, sessionID)
 	cp := *a
 	return &cp
 }
@@ -847,8 +912,8 @@ func (g *Guard) RestorePending(p *PendingConfirm) {
 	if g == nil || p == nil || p.ID == "" || p.SessionID == "" {
 		return
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
 	cp := *p
 	if cp.Args == nil {
 		cp.Args = map[string]any{}
@@ -856,8 +921,8 @@ func (g *Guard) RestorePending(p *PendingConfirm) {
 	if cp.CreatedAt.IsZero() {
 		cp.CreatedAt = time.Now()
 	}
-	g.pending[cp.ID] = &cp
-	g.awaiting[cp.SessionID] = &AwaitingResume{
+	g.state.pending[cp.ID] = &cp
+	g.state.awaiting[cp.SessionID] = &AwaitingResume{
 		SessionID: cp.SessionID, Tool: cp.Tool, Args: cp.Args, PermID: cp.ID, Ready: false,
 	}
 }
@@ -867,9 +932,9 @@ func (g *Guard) ExportPending(id string) *PendingConfirm {
 	if g == nil || id == "" {
 		return nil
 	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	p, ok := g.pending[id]
+	g.state.mu.RLock()
+	defer g.state.mu.RUnlock()
+	p, ok := g.state.pending[id]
 	if !ok || p == nil {
 		return nil
 	}
@@ -878,19 +943,19 @@ func (g *Guard) ExportPending(id string) *PendingConfirm {
 }
 
 func (g *Guard) incDeny(sessionID string) {
-	g.mu.Lock()
-	g.denyStreak[sessionID]++
-	count := g.denyStreak[sessionID]
-	g.mu.Unlock()
+	g.state.mu.Lock()
+	g.state.denyStreak[sessionID]++
+	count := g.state.denyStreak[sessionID]
+	g.state.mu.Unlock()
 
-	// Record in adaptive circuit breaker
-	if g.adaptiveBreaker != nil {
-		g.adaptiveBreaker.RecordDenial(sessionID, "", "security_denied")
+	// Record in adaptive circuit breaker.
+	if g.components.adaptiveBreaker != nil {
+		g.components.adaptiveBreaker.RecordDenial(sessionID, "", "security_denied")
 	}
 
-	// Record in integrity chain
-	if g.integrityChain != nil {
-		g.integrityChain.Append("deny_incremented", sessionID, "",
+	// Record in integrity chain.
+	if g.components.integrityChain != nil {
+		g.components.integrityChain.Append("deny_incremented", sessionID, "",
 			fmt.Sprintf("deny_count=%d", count),
 			map[string]any{"count": count})
 	}
@@ -918,12 +983,6 @@ func toolCategory(tool string) string {
 	}
 }
 
-func (g *Guard) auditWarn(category AuditCategory, target, detail string, sessionID ...string) {
-	if g.audit != nil {
-		g.audit.Warn(category, target, detail)
-	}
-}
-
 func extract(tool string, args map[string]any) string {
 	if args == nil {
 		return ""
@@ -938,7 +997,7 @@ func extract(tool string, args map[string]any) string {
 			return p
 		}
 	}
-	// MCP tools: join string args for pattern scan
+	// MCP tools: join string args for pattern scan.
 	var parts []string
 	for _, v := range args {
 		if s, ok := v.(string); ok {
