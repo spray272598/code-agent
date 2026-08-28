@@ -3,21 +3,65 @@ package plan
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Plan multi-step plan for coding tasks.
 type Plan struct {
 	Goal    string `json:"goal"`
 	Steps   []Step `json:"steps"`
-	Source  string `json:"source"` // rule|spec|llm
+	Source  string `json:"source"` // rule|spec|llm|dynamic
 	SpecRef string `json:"spec_ref,omitempty"`
+
+	// Dynamic plan features
+	mu          sync.RWMutex    `json:"-"`
+	PendingSub  []SubTask       `json:"pending_sub,omitempty"` // sub-tasks to generate
+	GoalState   GoalState       `json:"goal_state,omitempty"`
+	Approval    *PlanApproval   `json:"approval,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type Step struct {
-	Index  int    `json:"index"`
-	Title  string `json:"title"`
-	Status string `json:"status"` // pending|done|failed|skipped
-	Note   string `json:"note,omitempty"`
+	Index      int      `json:"index"`
+	Title      string   `json:"title"`
+	Status     string   `json:"status"` // pending|done|failed|skipped|in_progress
+	Note       string   `json:"note,omitempty"`
+	DependsOn  []int    `json:"depends_on,omitempty"` // indices of prerequisite steps
+	CanRunInParallel bool `json:"can_run_in_parallel,omitempty"`
+	SubSteps   []Step   `json:"sub_steps,omitempty"` // dynamic sub-steps
+}
+
+// SubTask represents a task that can be dynamically expanded into sub-steps.
+type SubTask struct {
+	ParentIndex int    `json:"parent_index"`
+	Description string `json:"description"`
+	Reason      string `json:"reason"` // why this needs expansion
+}
+
+// GoalState tracks the lifecycle of a plan goal.
+type GoalState string
+
+const (
+	GoalActive   GoalState = "active"
+	GoalPaused   GoalState = "paused"
+	GoalBlocked  GoalState = "blocked"
+	GoalComplete GoalState = "complete"
+)
+
+// GoalBlockReason explains why a goal is blocked.
+type GoalBlockReason struct {
+	Code    string `json:"code"`    // machine-readable: "dependency", "error", "user_input"
+	Message string `json:"message"` // human-readable explanation
+}
+
+// PlanApproval tracks whether the plan needs user approval before execution.
+type PlanApproval struct {
+	Required bool      `json:"required"`
+	Status   string    `json:"status"` // pending|approved|rejected
+	Reason   string    `json:"reason,omitempty"`
+	At       time.Time `json:"at,omitempty"`
 }
 
 // SpecData is the minimal spec interface the plan system needs (avoids import cycle).
@@ -50,11 +94,14 @@ func BuildRulePlan(goal string) *Plan {
 	}
 
 	analysis := analyzeComplexity(goal)
+	now := time.Now()
 
 	if !analysis.isComplex {
 		return &Plan{
-			Goal:   goal,
-			Source: "rule",
+			Goal:      goal,
+			Source:    "rule",
+			CreatedAt: now,
+			UpdatedAt: now,
 			Steps: []Step{
 				{Index: 1, Title: "Understand task and gather context", Status: "pending"},
 				{Index: 2, Title: "Implement solution", Status: "pending"},
@@ -66,9 +113,11 @@ func BuildRulePlan(goal string) *Plan {
 	steps := generateDynamicSteps(goal, analysis)
 
 	return &Plan{
-		Goal:   goal,
-		Source: "rule",
-		Steps:  steps,
+		Goal:      goal,
+		Source:    "rule",
+		CreatedAt: now,
+		UpdatedAt: now,
+		Steps:     steps,
 	}
 }
 
@@ -177,10 +226,13 @@ func BuildFromSpec(sd SpecData) *Plan {
 	if goal == "" {
 		goal = sd.GetTitle()
 	}
+	now := time.Now()
 	plan := &Plan{
-		Goal:    goal,
-		Source:  "spec",
-		SpecRef: sd.GetTitle(),
+		Goal:      goal,
+		Source:    "spec",
+		SpecRef:   sd.GetTitle(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	// Build steps from spec tasks
@@ -258,6 +310,18 @@ func (p *Plan) StringForPrompt() string {
 		if s.Note != "" {
 			b.WriteString("  note: " + s.Note + "\n")
 		}
+		if len(s.SubSteps) > 0 {
+			for _, sub := range s.SubSteps {
+				subMarker := "[ ]"
+				switch sub.Status {
+				case "done":
+					subMarker = "[x]"
+				case "in_progress":
+					subMarker = "[→]"
+				}
+				b.WriteString(fmt.Sprintf("  %s %d.%d %s\n", subMarker, s.Index, sub.Index, sub.Title))
+			}
+		}
 	}
 	return b.String()
 }
@@ -267,6 +331,8 @@ func (p *Plan) Advance(ok bool, note string) {
 	if p == nil {
 		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	for i := range p.Steps {
 		if p.Steps[i].Status == "pending" || p.Steps[i].Status == "" || p.Steps[i].Status == "in_progress" {
 			if ok {
@@ -275,6 +341,7 @@ func (p *Plan) Advance(ok bool, note string) {
 				p.Steps[i].Status = "failed"
 			}
 			p.Steps[i].Note = note
+			p.UpdatedAt = time.Now()
 			return
 		}
 	}
@@ -285,6 +352,8 @@ func (p *Plan) AdvanceByIndex(index int, ok bool, note string) {
 	if p == nil {
 		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	for i := range p.Steps {
 		if p.Steps[i].Index == index {
 			if ok {
@@ -293,6 +362,7 @@ func (p *Plan) AdvanceByIndex(index int, ok bool, note string) {
 				p.Steps[i].Status = "failed"
 			}
 			p.Steps[i].Note = note
+			p.UpdatedAt = time.Now()
 			return
 		}
 	}
@@ -417,9 +487,6 @@ func (p *Plan) Visualize() string {
 }
 
 // Replan rebuilds a fresh rule-driven plan from a (possibly revised) goal.
-// It preserves the original Goal field unless a new goal is provided (empty
-// string keeps the current goal). Used by interruptible re-planning when the
-// agent gets stuck or the user requests a re-plan mid-run.
 func (p *Plan) Replan(newGoal string) *Plan {
 	if p == nil {
 		return nil
@@ -430,7 +497,6 @@ func (p *Plan) Replan(newGoal string) *Plan {
 	}
 	np := BuildRulePlan(goal)
 	if np == nil {
-		// single-step goal: keep a minimal one-step plan
 		np = &Plan{Goal: goal, Source: "replan"}
 	}
 	np.Source = "replan"
@@ -438,4 +504,180 @@ func (p *Plan) Replan(newGoal string) *Plan {
 		np.SpecRef = p.SpecRef
 	}
 	return np
+}
+
+// --- Dynamic Plan Features ---
+
+// RequestSubTaskExpansion marks a step for dynamic sub-task generation.
+func (p *Plan) RequestSubTaskExpansion(parentIndex int, description, reason string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.PendingSub = append(p.PendingSub, SubTask{
+		ParentIndex: parentIndex,
+		Description: description,
+		Reason:      reason,
+	})
+	p.UpdatedAt = time.Now()
+}
+
+// ExpandStep adds sub-steps to a parent step (called after LLM generates them).
+func (p *Plan) ExpandStep(parentIndex int, subSteps []Step) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.Steps {
+		if p.Steps[i].Index == parentIndex {
+			p.Steps[i].SubSteps = append(p.Steps[i].SubSteps, subSteps...)
+			// Remove from pending
+			for j, sub := range p.PendingSub {
+				if sub.ParentIndex == parentIndex {
+					p.PendingSub = append(p.PendingSub[:j], p.PendingSub[j+1:]...)
+					break
+				}
+			}
+			p.UpdatedAt = time.Now()
+			return
+		}
+	}
+}
+
+// HasPendingExpansions returns true if there are steps waiting for sub-task generation.
+func (p *Plan) HasPendingExpansions() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.PendingSub) > 0
+}
+
+// SetGoalState updates the goal lifecycle state.
+func (p *Plan) SetGoalState(state GoalState, reason *GoalBlockReason) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.GoalState = state
+	p.UpdatedAt = time.Now()
+}
+
+// GetGoalState returns the current goal state.
+func (p *Plan) GetGoalState() GoalState {
+	if p == nil {
+		return ""
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.GoalState
+}
+
+// RequestApproval marks the plan as needing user approval before execution.
+func (p *Plan) RequestApproval(reason string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.Approval = &PlanApproval{
+		Required: true,
+		Status:   "pending",
+		Reason:   reason,
+	}
+	p.UpdatedAt = time.Now()
+}
+
+// Approve marks the plan as approved by the user.
+func (p *Plan) Approve() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.Approval != nil {
+		p.Approval.Status = "approved"
+		p.Approval.At = time.Now()
+	}
+	p.UpdatedAt = time.Now()
+}
+
+// Reject marks the plan as rejected by the user.
+func (p *Plan) Reject(reason string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.Approval != nil {
+		p.Approval.Status = "rejected"
+		p.Approval.Reason = reason
+		p.Approval.At = time.Now()
+	}
+	p.UpdatedAt = time.Now()
+}
+
+// NeedsApproval returns true if the plan is waiting for user approval.
+func (p *Plan) NeedsApproval() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.Approval != nil && p.Approval.Required && p.Approval.Status == "pending"
+}
+
+// AddDependsOn adds a dependency between steps.
+func (p *Plan) AddDependsOn(stepIndex, dependsOn int) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.Steps {
+		if p.Steps[i].Index == stepIndex {
+			p.Steps[i].DependsOn = append(p.Steps[i].DependsOn, dependsOn)
+			p.UpdatedAt = time.Now()
+			return
+		}
+	}
+}
+
+// GetReadySteps returns steps that are pending and have all dependencies satisfied.
+func (p *Plan) GetReadySteps() []Step {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	// Build set of done indices
+	doneSet := map[int]bool{}
+	for _, s := range p.Steps {
+		if s.Status == "done" {
+			doneSet[s.Index] = true
+		}
+	}
+
+	var ready []Step
+	for _, s := range p.Steps {
+		if s.Status != "pending" {
+			continue
+		}
+		allDepsDone := true
+		for _, dep := range s.DependsOn {
+			if !doneSet[dep] {
+				allDepsDone = false
+				break
+			}
+		}
+		if allDepsDone {
+			ready = append(ready, s)
+		}
+	}
+	return ready
 }
