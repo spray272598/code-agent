@@ -249,12 +249,20 @@ type MCPConfig struct {
 	// ConfigFile is the path to an mcp.json (VS Code / Claude Desktop style
 	// {"mcpServers": {...}}) file loaded at startup. Empty = none.
 	ConfigFile string `yaml:"config_file"`
+	// HotReload enables watching ConfigFile for changes and auto-reconnect.
+	HotReload bool `yaml:"hot_reload"`
 }
 
 type SkillsConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	Dir       string `yaml:"dir"`        // installed/local skills root
 	MarketDir string `yaml:"market_dir"` // marketplace catalog root (browse-only)
+	// RemoteURL is the base URL of a remote skill registry (e.g. https://skills.example.com).
+	// When set, the remote marketplace is used alongside the local market.
+	RemoteURL string `yaml:"remote_url"`
+	// PublicKeyPath is the path to an Ed25519 public key (hex) for verifying
+	// skill signatures from the remote registry. Empty = skip verification.
+	PublicKeyPath string `yaml:"public_key_path"`
 }
 
 type HooksConfig struct {
@@ -280,8 +288,11 @@ type TeamsConfig struct {
 type PluginsConfig struct {
 	// Enabled enables the plugin system.
 	Enabled bool `yaml:"enabled"`
-	// Directory is the directory to search for plugins.
+	// Directory is the directory to search for plugins (manifest-based).
 	Directory string `yaml:"directory"`
+	// SODir is the directory to search for .so dynamic plugins.
+	// Go plugins (.so) are loaded via plugin.Open at runtime.
+	SODir string `yaml:"so_dir"`
 }
 
 type SubAgentConfig struct {
@@ -306,6 +317,8 @@ type OTLPConfig struct {
 	Endpoint string `yaml:"endpoint"` // host:port for OTLP HTTP, e.g. localhost:4318
 	Insecure bool   `yaml:"insecure"`
 	Service  string `yaml:"service"`
+	// MetricsEnabled enables OTel Metrics API export (replaces custom Prometheus).
+	MetricsEnabled bool `yaml:"metrics_enabled"`
 }
 
 func Default() *Config {

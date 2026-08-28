@@ -3,7 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -26,8 +26,7 @@ type OTLPConfig struct {
 	Service  string
 }
 
-// Fallback defaults when OTLPConfig fields are empty. Keep in sync with
-// config.Default().OTLP.
+// Fallback defaults when OTLPConfig fields are empty.
 const (
 	defaultOTLPEndpoint = "localhost:4318"
 	defaultServiceName  = "code-agent"
@@ -78,7 +77,10 @@ func SetupTracer(ctx context.Context, cfg OTLPConfig) (func(context.Context) err
 	)
 	otel.SetTracerProvider(tp)
 	Tracer = otel.Tracer("code-agent")
-	log.Printf("[otel] OTLP HTTP exporter -> %s service=%s\n", endpoint, service)
+	slog.Default().Info("OTLP HTTP exporter configured",
+		"endpoint", endpoint,
+		"service", service,
+	)
 
 	return tp.Shutdown, nil
 }

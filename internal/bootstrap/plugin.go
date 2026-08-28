@@ -10,6 +10,7 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/tool"
 	"github.com/spray272598/code-agent/internal/infrastructure/config"
 	"github.com/spray272598/code-agent/internal/infrastructure/plugin/builtin"
+	pluginruntime "github.com/spray272598/code-agent/internal/infrastructure/plugin/runtime"
 )
 
 // PluginConfig represents the plugin configuration.
@@ -52,13 +53,43 @@ func InitPlugins(cfg *config.Config, reg *tool.MapRegistry) (*plugin.DefaultMana
 		log.Printf("[bootstrap] load builtin plugins: %v\n", err)
 	}
 
-	// Load plugins from directory
+	// Load plugins from directory (manifest-based)
 	if cfg.Plugins.Directory != "" {
 		plugins, err := loader.LoadFromDir(context.Background(), cfg.Plugins.Directory)
 		if err != nil {
 			log.Printf("[bootstrap] load plugins from dir: %v\n", err)
 		} else {
 			log.Printf("[bootstrap] loaded %d plugins from %s\n", len(plugins), cfg.Plugins.Directory)
+		}
+	}
+
+	// Load .so dynamic plugins (Go plugin system)
+	if cfg.Plugins.SODir != "" {
+		soLoader := pluginruntime.NewSOLoader(pluginCtx)
+		entries, err := os.ReadDir(cfg.Plugins.SODir)
+		if err != nil {
+			log.Printf("[bootstrap] so plugin dir: %v\n", err)
+		} else {
+			loaded := 0
+			for _, entry := range entries {
+				if entry.IsDir() || filepath.Ext(entry.Name()) != ".so" {
+					continue
+				}
+				soPath := filepath.Join(cfg.Plugins.SODir, entry.Name())
+				p, err := soLoader.Load(context.Background(), soPath)
+				if err != nil {
+					log.Printf("[bootstrap] so plugin %s: %v\n", entry.Name(), err)
+					continue
+				}
+				if err := mgr.RegisterPlugin(p); err != nil {
+					log.Printf("[bootstrap] register so plugin %s: %v\n", entry.Name(), err)
+					continue
+				}
+				loaded++
+			}
+			if loaded > 0 {
+				log.Printf("[bootstrap] loaded %d .so plugins from %s\n", loaded, cfg.Plugins.SODir)
+			}
 		}
 	}
 

@@ -1,7 +1,8 @@
 package observability
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -27,6 +28,23 @@ func SetLogLevel(level string) {
 	default:
 		logLevel.Store(1)
 	}
+	// Also sync slog level
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slogLevel(),
+	})))
+}
+
+func slogLevel() slog.Level {
+	switch logLevel.Load() {
+	case 0:
+		return slog.LevelDebug
+	case 2:
+		return slog.LevelWarn
+	case 3:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func LogLevel() string {
@@ -42,26 +60,56 @@ func LogLevel() string {
 	}
 }
 
+// Debugf logs at debug level using slog.
 func Debugf(format string, args ...any) {
 	if logLevel.Load() <= 0 {
-		log.Printf("[debug] "+format, args...)
+		slog.Default().Debug(format, args...)
 	}
 }
 
+// Infof logs at info level using slog.
 func Infof(format string, args ...any) {
 	if logLevel.Load() <= 1 {
-		log.Printf("[info] "+format, args...)
+		slog.Default().Info(format, args...)
 	}
 }
 
+// Warnf logs at warn level using slog.
 func Warnf(format string, args ...any) {
 	if logLevel.Load() <= 2 {
-		log.Printf("[warn] "+format, args...)
+		slog.Default().Warn(format, args...)
 	}
 }
 
+// Errorf logs at error level using slog.
 func Errorf(format string, args ...any) {
-	log.Printf("[error] "+format, args...)
+	slog.Default().Error(format, args...)
+}
+
+// DebugContext logs at debug level with context.
+func DebugContext(ctx context.Context, msg string, args ...any) {
+	if logLevel.Load() <= 0 {
+		slog.Default().DebugContext(ctx, msg, args...)
+	}
+}
+
+// InfoContext logs at info level with context.
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	if logLevel.Load() <= 1 {
+		slog.Default().InfoContext(ctx, msg, args...)
+	}
+}
+
+// WarnContext logs at warn level with context.
+func WarnContext(ctx context.Context, msg string, args ...any) {
+	if logLevel.Load() <= 2 {
+		slog.Default().WarnContext(ctx, msg, args...)
+	}
+}
+
+// ErrorContext logs at error level with context.
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	slog.Default().ErrorContext(ctx, msg, args...)
 }
 
 // ApplyFromEnv reads LOG_LEVEL.

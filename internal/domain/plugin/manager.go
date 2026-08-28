@@ -94,6 +94,12 @@ func (m *DefaultManager) Load(ctx context.Context, path string) error {
 		return err
 	}
 
+	return m.RegisterPlugin(p)
+}
+
+// RegisterPlugin directly registers a pre-loaded plugin with the manager.
+// This is used for .so plugins that are loaded by external loaders.
+func (m *DefaultManager) RegisterPlugin(p Plugin) error {
 	m.mu.Lock()
 	m.plugins[p.Name()] = p
 	m.info[p.Name()] = &PluginInfo{

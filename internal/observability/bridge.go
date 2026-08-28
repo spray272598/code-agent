@@ -2,7 +2,7 @@ package observability
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -38,8 +38,6 @@ type ObservabilityEvent struct {
 }
 
 // ObservabilityBridge routes observability events to registered handlers.
-// Inspired by Grok Build's ObservabilityBridge, this provides a unified
-// event stream for metrics, tracing, and external observability pipelines.
 type ObservabilityBridge struct {
 	mu       sync.RWMutex
 	handlers []EventHandler
@@ -89,7 +87,7 @@ func (b *ObservabilityBridge) Emit(ctx context.Context, evt ObservabilityEvent) 
 		func(handler EventHandler) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[observability] handler panic: %v", r)
+					slog.Default().Error("observability handler panic", "error", r)
 				}
 			}()
 			handler.HandleEvent(ctx, evt)
@@ -139,8 +137,13 @@ type LogEventHandler struct {
 // HandleEvent logs the event.
 func (h LogEventHandler) HandleEvent(_ context.Context, evt ObservabilityEvent) {
 	if h.Verbose {
-		log.Printf("[observability] %s session=%s duration=%dms data=%v error=%s",
-			evt.Type, evt.SessionID, evt.DurationMs, evt.Data, evt.Error)
+		slog.Default().Debug("observability event",
+			"type", evt.Type,
+			"session_id", evt.SessionID,
+			"duration_ms", evt.DurationMs,
+			"data", evt.Data,
+			"error", evt.Error,
+		)
 	}
 }
 

@@ -50,11 +50,13 @@ import (
 	"github.com/spray272598/code-agent/internal/infrastructure/einoorch"
 	kmsinfra "github.com/spray272598/code-agent/internal/infrastructure/kms"
 	"github.com/spray272598/code-agent/internal/infrastructure/llm"
+	"github.com/spray272598/code-agent/internal/infrastructure/logger"
 	inframcp "github.com/spray272598/code-agent/internal/infrastructure/mcp"
 	"github.com/spray272598/code-agent/internal/infrastructure/mysql"
 	"github.com/spray272598/code-agent/internal/infrastructure/redisx"
 	"github.com/spray272598/code-agent/internal/infrastructure/repository"
 	lsandbox "github.com/spray272598/code-agent/internal/infrastructure/sandbox/linux"
+	skillmarket "github.com/spray272598/code-agent/internal/infrastructure/skill"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
 	sshinfra "github.com/spray272598/code-agent/internal/infrastructure/ssh"
@@ -101,8 +103,26 @@ func Build(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("nil config")
 	}
 
+	// Initialize structured logging (slog).
+	logLevel := cfg.Logging.Level
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	logger.Init(logLevel, "text")
+
 	// Domain must not import infrastructure/observability — wire the port here.
 	telemetry.Set(observability.DomainBridge{})
+
+	// Initialize OTel Metrics if enabled (replaces custom Prometheus counters).
+	if cfg.OTLP.Enabled && cfg.OTLP.MetricsEnabled {
+		shutdown, err := observability.SetupOTelMetrics(context.Background(), "code-agent")
+		if err != nil {
+			log.Printf("[bootstrap] otel metrics init failed: %v (fallback atomic counters)\n", err)
+		} else {
+			_ = shutdown
+			log.Printf("[bootstrap] otel metrics enabled\n")
+		}
+	}
 
 	var sessionRepo sessrepo.ISessionRepository
 	var messageRepo sessrepo.IMessageRepository
@@ -399,6 +419,21 @@ func Build(cfg *config.Config) (*App, error) {
 	if cfg.Skills.Enabled {
 		skillSvc = skill.NewService(cfg.Skills.Dir)
 		skillSvc.SetMarketplace(skill.NewLocalMarketplace(cfg.Skills.MarketDir))
+		// Remote skill marketplace (HTTP registry with optional signature verification).
+		if cfg.Skills.RemoteURL != "" {
+			var marketOpts []skillmarket.Option
+			if cfg.Skills.PublicKeyPath != "" {
+				pubKey, err := skillmarket.LoadEd25519PublicKey(cfg.Skills.PublicKeyPath)
+				if err != nil {
+					log.Printf("[bootstrap] skill remote pubkey: %v\n", err)
+				} else {
+					marketOpts = append(marketOpts, skillmarket.WithEd25519PublicKey(pubKey))
+				}
+			}
+			remoteMkt := skillmarket.NewRemoteMarketplace(cfg.Skills.RemoteURL, marketOpts...)
+			skillSvc.SetMarketplace(remoteMkt)
+			log.Printf("[bootstrap] skill remote marketplace: %s\n", cfg.Skills.RemoteURL)
+		}
 		// Register skill tools into the agent registry so skills become
 		// directly invocable as tools (e.g. skill_deploy, skill_review).
 		if skillTools := skillSvc.BuildSkillTools(); len(skillTools) > 0 {
@@ -569,6 +604,32 @@ func Build(cfg *config.Config) (*App, error) {
 			log.Printf("[bootstrap] mcp health → heartbeat integration active\n")
 		} else {
 			log.Printf("[bootstrap] mcp health → heartbeat skipped (no heartbeat manager)\n")
+		}
+		// MCP config hot-reload: watch mcp.json for changes and auto-reconnect.
+		if cfg.MCP.HotReload && cfg.MCP.ConfigFile != "" {
+			mcpWatcher := inframcp.NewConfigWatcher(cfg.MCP.ConfigFile,
+				func(ctx context.Context, path string) error {
+					log.Printf("[bootstrap] mcp config changed, reloading %s\n", path)
+					servers, err := inframcp.LoadServersFromFile(path)
+					if err != nil {
+						return fmt.Errorf("reload mcp config: %w", err)
+					}
+					for _, sc := range servers {
+						ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+						err := sysMgr.AddOrUpdate(ctx, sc)
+						cancel()
+						if err != nil {
+							log.Printf("[bootstrap] mcp hot-reload server %s: %v\n", sc.Name, err)
+						} else {
+							log.Printf("[bootstrap] mcp hot-reload server: %s\n", sc.Name)
+							mcpHealth.RegisterServer(sc)
+						}
+					}
+					return nil
+				},
+			)
+			mcpWatcher.Start(context.Background())
+			defer mcpWatcher.Stop()
 		}
 	}
 

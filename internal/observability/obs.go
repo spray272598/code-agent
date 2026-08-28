@@ -2,65 +2,93 @@ package observability
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 )
 
-type ctxKey string
-
-const RequestIDKey ctxKey = "request_id"
-
-// LogError records a failed side-effect that must not abort the user-facing path
-// (persist, audit, checkpoint). Prefer this over silently ignoring errors.
+// LogError logs an operation error with structured fields.
 func LogError(op string, err error) {
-	if err == nil {
-		return
-	}
-	log.Printf("[error] %s: %v\n", op, err)
+	slog.Default().Error("operation failed", "op", op, "error", err)
 }
 
-// LogErrorf formats and logs a non-fatal operational error.
-func LogErrorf(format string, args ...any) {
-	log.Printf("[error] "+format+"\n", args...)
+// LogErrorf logs an operation error with a format string.
+func LogErrorf(op, format string, args ...any) {
+	slog.Default().Error("operation failed: "+format, append([]any{"op", op}, args...)...)
 }
 
-type Logger struct {
-	mu sync.Mutex
+// TraceEvent logs a structured trace event.
+func TraceEvent(fields map[string]any) {
+	slog.Default().LogAttrs(context.Background(), slog.LevelDebug, "trace event",
+		slog.Any("data", fields),
+	)
 }
 
-func (l *Logger) Event(fields map[string]any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	log.Printf("[trace] %v\n", fields)
-}
-
-var Trace = &Logger{}
-
-func RequestIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rid := r.Header.Get("X-Request-Id")
-		if rid == "" {
-			rid = time.Now().Format("20060102T150405.000000")
-		}
-		w.Header().Set("X-Request-Id", rid)
-		ctx := context.WithValue(r.Context(), RequestIDKey, rid)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
+// RequestID is a convenience for extracting the request ID from context.
 func RequestID(ctx context.Context) string {
-	if v, ok := ctx.Value(RequestIDKey).(string); ok {
-		return v
+	if ctx == nil {
+		return ""
+	}
+	if v := ctx.Value(requestIDKey{}); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
 	}
 	return ""
 }
 
+type requestIDKey struct{}
+
+// ContextWithRequestID stores the request ID in context.
+func ContextWithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// RequestIDMiddleware generates a unique request ID and stores it in context.
+func RequestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			id = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+		ctx := ContextWithRequestID(r.Context(), id)
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// Trace is a helper for event logging via the ObservabilityBridge.
+var Trace = &traceHelper{}
+
+type traceHelper struct{}
+
+func (t *traceHelper) Event(fields map[string]any) {
+	TraceEvent(fields)
+}
+
+// AccessLog returns middleware that logs HTTP requests with structured fields.
 func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("[http] %s %s rid=%s dur=%v\n", r.Method, r.URL.Path, RequestID(r.Context()), time.Since(start))
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		slog.Default().Info("http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"request_id", RequestID(r.Context()),
+		)
 	})
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
 }
