@@ -524,6 +524,36 @@ func normalize(cfg *Config) {
 	}
 }
 
+// Validate checks configuration values and returns an error for invalid settings.
+// This should be called after normalize() to catch explicit invalid values.
+func Validate(cfg *Config) error {
+	if cfg.Server.Port < 0 || cfg.Server.Port > 65535 {
+		return fmt.Errorf("server.port must be between 0 and 65535, got %d", cfg.Server.Port)
+	}
+	if cfg.Agent.MaxSteps <= 0 || cfg.Agent.MaxSteps > 1000 {
+		return fmt.Errorf("agent.max_steps must be between 1 and 1000, got %d", cfg.Agent.MaxSteps)
+	}
+	if cfg.Agent.TokenBudget <= 0 || cfg.Agent.TokenBudget > 1000000 {
+		return fmt.Errorf("agent.token_budget must be between 1 and 1000000, got %d", cfg.Agent.TokenBudget)
+	}
+	if cfg.Agent.TimeoutSec <= 0 || cfg.Agent.TimeoutSec > 3600 {
+		return fmt.Errorf("agent.timeout_sec must be between 1 and 3600, got %d", cfg.Agent.TimeoutSec)
+	}
+	if cfg.RateLimit.PerMinute <= 0 || cfg.RateLimit.PerMinute > 10000 {
+		return fmt.Errorf("rate_limit.per_minute must be between 1 and 10000, got %d", cfg.RateLimit.PerMinute)
+	}
+	if cfg.Database.MySQL.Port < 0 || cfg.Database.MySQL.Port > 65535 {
+		return fmt.Errorf("database.mysql.port must be between 0 and 65535, got %d", cfg.Database.MySQL.Port)
+	}
+	if cfg.Redis.Port < 0 || cfg.Redis.Port > 65535 {
+		return fmt.Errorf("redis.port must be between 0 and 65535, got %d", cfg.Redis.Port)
+	}
+	if cfg.Security.MaxBodyBytes <= 0 {
+		return fmt.Errorf("security.max_body_bytes must be positive, got %d", cfg.Security.MaxBodyBytes)
+	}
+	return nil
+}
+
 // EinoGraphResumeEnabled returns whether graph-level interrupt resume is on (default true).
 func (c *Config) EinoGraphResumeEnabled() bool {
 	if c == nil {

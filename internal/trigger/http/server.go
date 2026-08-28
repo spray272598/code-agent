@@ -17,6 +17,7 @@ import (
 	"github.com/spray272598/code-agent/internal/application"
 	"github.com/spray272598/code-agent/internal/domain/codeindex"
 	"github.com/spray272598/code-agent/internal/domain/host"
+	"github.com/spray272598/code-agent/internal/types/common"
 	sseinfra "github.com/spray272598/code-agent/internal/infrastructure/sse"
 	"github.com/spray272598/code-agent/internal/observability"
 	"github.com/spray272598/code-agent/internal/trigger/ws"
@@ -310,11 +311,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 }
 
 func truncateStr(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
+	return common.TruncateStr(s, n)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -4,6 +4,8 @@ import (
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/spray272598/code-agent/internal/types/common"
 )
 
 // RetryDecision classifies an LLM HTTP error into an action for the caller.
@@ -211,20 +213,7 @@ func truncateBody(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// itoa is a minimal int-to-string without importing strconv.
+// itoa delegates to common.Itoa for int-to-string conversion.
 func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	if n < 0 {
-		return "-" + itoa(-n)
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+	return common.Itoa(n)
 }

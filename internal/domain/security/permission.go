@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/spray272598/code-agent/internal/types/common"
 )
 
 type Action string
@@ -895,10 +897,7 @@ func (g *Guard) incDeny(sessionID string) {
 }
 
 func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
+	return common.TruncateStr(s, maxLen)
 }
 
 func toolCategory(tool string) string {

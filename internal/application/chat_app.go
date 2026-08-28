@@ -719,22 +719,22 @@ func (a *ChatApp) ResumeSession(ctx context.Context, sessionID, message string) 
 	}
 	hint := ""
 	if snap.Step > 0 {
-		hint += fmt.Sprintf("上次中断于第 %d 步", snap.Step)
+		hint += fmt.Sprintf("Last interrupted at step %d", snap.Step)
 	}
 	if t, ok := snap.Meta["lastTool"]; ok {
 		if hint != "" {
-			hint += "，"
+			hint += ", "
 		}
-		hint += fmt.Sprintf("最后执行工具 %v", t)
+		hint += fmt.Sprintf("last executed tool: %v", t)
 	}
 	if hint != "" {
-		hint += "。"
+		hint += "."
 	}
 	if strings.TrimSpace(message) == "" {
-		message = "继续。"
+		message = "Continue."
 	}
 	if hint != "" {
-		message = message + "\n[断点上下文] " + hint + " 请从断点继续未完成的工作，不要重复已完成的步骤。"
+		message = message + "\n[Checkpoint context] " + hint + " Please continue unfinished work from the checkpoint, do not repeat completed steps."
 	}
 	req := ChatRequest{
 		SessionID: sessionID, UserID: snap.UserID, ProjectID: snap.ProjectID,

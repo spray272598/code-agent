@@ -69,8 +69,8 @@ func (s *AuthService) Signup(ctx context.Context, email, password, displayName s
 	if !validEmail(email) {
 		return nil, errors.New("invalid email")
 	}
-	if len(password) < 8 {
-		return nil, errors.New("password must be at least 8 characters")
+	if err := validatePassword(password); err != nil {
+		return nil, err
 	}
 	return s.createUser(ctx, email, password, displayName, auth.RoleOwner)
 }
@@ -256,5 +256,33 @@ func normalizeEmail(e string) string {
 }
 
 func validEmail(e string) bool {
-	return strings.Contains(e, "@") && strings.Contains(e, ".") && len(e) <= 254
+	if len(e) > 254 || !strings.Contains(e, "@") {
+		return false
+	}
+	parts := strings.SplitN(e, "@", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	return strings.Contains(parts[1], ".") && !strings.HasPrefix(parts[1], ".") && !strings.HasSuffix(parts[1], ".")
+}
+
+func validatePassword(password string) error {
+	if len(password) < 8 {
+		return errors.New("password must be at least 8 characters")
+	}
+	var hasUpper, hasLower, hasDigit bool
+	for _, c := range password {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		}
+	}
+	if !hasUpper || !hasLower || !hasDigit {
+		return errors.New("password must contain at least one uppercase letter, one lowercase letter, and one digit")
+	}
+	return nil
 }

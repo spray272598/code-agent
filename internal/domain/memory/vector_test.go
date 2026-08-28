@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/tenant"
 	"github.com/spray272598/code-agent/internal/domain/vector"
-	"github.com/spray272598/code-agent/internal/infrastructure/repository"
-	vectorinfra "github.com/spray272598/code-agent/internal/infrastructure/vector"
 )
 
 // stubEmbedder implements port.IEmbeddingPort. Vectors are deterministic so we
@@ -36,12 +36,182 @@ func (s stubEmbedder) Dims() int { return s.dim }
 // memEmbedder builds a 4-dim stub embedder for tests.
 func memEmbedder() port.IEmbeddingPort { return stubEmbedder{dim: 4} }
 
-// repoVector returns a fresh in-process vector index.
-func repoVector() vector.IVectorIndex { return vectorinfra.NewMemIndex() }
+// memVectorIndex is an in-memory vector index for testing.
+type memVectorIndex struct {
+	mu          sync.RWMutex
+	collections map[string]map[string]vector.Point
+	dims        int
+}
+
+func newMemVectorIndex(dims int) *memVectorIndex {
+	return &memVectorIndex{collections: make(map[string]map[string]vector.Point), dims: dims}
+}
+
+func (m *memVectorIndex) Ensure(_ context.Context, collection string, _ int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.collections[collection] == nil {
+		m.collections[collection] = make(map[string]vector.Point)
+	}
+	return nil
+}
+
+func (m *memVectorIndex) Upsert(_ context.Context, collection string, points []vector.Point) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.collections[collection] == nil {
+		m.collections[collection] = make(map[string]vector.Point)
+	}
+	for _, p := range points {
+		m.collections[collection][p.ID] = p
+	}
+	return nil
+}
+
+func (m *memVectorIndex) Search(_ context.Context, collection string, query []float32, topK int, filter map[string]any) ([]vector.Hit, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	items := m.collections[collection]
+	if items == nil {
+		return nil, nil
+	}
+	type scored struct {
+		id    string
+		score float32
+	}
+	var results []scored
+	for id, pt := range items {
+		// Apply filter
+		if filter != nil && !vector.MatchPayload(pt.Payload, filter) {
+			continue
+		}
+		var score float32
+		for i := 0; i < len(query) && i < len(pt.Vector); i++ {
+			score += query[i] * pt.Vector[i]
+		}
+		results = append(results, scored{id: id, score: score})
+	}
+	// Sort by score descending
+	for i := 0; i < len(results); i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[j].score > results[i].score {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+	if topK > len(results) {
+		topK = len(results)
+	}
+	var out []vector.Hit
+	for _, r := range results[:topK] {
+		pt := items[r.id]
+		out = append(out, vector.Hit{ID: r.id, Score: r.score, Payload: pt.Payload})
+	}
+	return out, nil
+}
+
+func (m *memVectorIndex) Delete(_ context.Context, collection string, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.collections[collection] != nil {
+		delete(m.collections[collection], id)
+	}
+	return nil
+}
+
+// memCoreRepo is an in-memory core repository for testing.
+type memCoreRepo struct {
+	mu       sync.RWMutex
+	memories map[int64]*memport.MemoryItem
+	nextID   int64
+}
+
+func newMemCoreRepo() *memCoreRepo {
+	return &memCoreRepo{memories: make(map[int64]*memport.MemoryItem)}
+}
+
+func (r *memCoreRepo) Save(_ context.Context, item *memport.MemoryItem) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if item.ID == 0 {
+		r.nextID++
+		item.ID = r.nextID
+	}
+	r.memories[item.ID] = item
+	return nil
+}
+
+func (r *memCoreRepo) List(_ context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []memport.MemoryItem
+	for _, item := range r.memories {
+		if item.UserID == userID && (projectID == "" || item.ProjectID == projectID) && (scope == "" || item.Scope == scope) {
+			out = append(out, *item)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *memCoreRepo) Search(_ context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []memport.MemoryItem
+	for _, item := range r.memories {
+		if item.UserID == userID && strings.Contains(item.Content, query) {
+			out = append(out, *item)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *memCoreRepo) Delete(_ context.Context, id int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.memories, id)
+	return nil
+}
+
+func (r *memCoreRepo) ListNoEmbedding(_ context.Context, limit int) ([]memport.MemoryItem, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []memport.MemoryItem
+	for _, item := range r.memories {
+		if len(item.Embedding) == 0 {
+			out = append(out, *item)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *memCoreRepo) Prune(_ context.Context, _ int, _ time.Time) (int, error) {
+	return 0, nil
+}
+
+func repoVector() vector.IVectorIndex { return newMemVectorIndex(4) }
+
+// noopVectorIndex is a no-op vector index for testing.
+type noopVectorIndex struct{}
+
+func (n *noopVectorIndex) Ensure(_ context.Context, _ string, _ int) error   { return nil }
+func (n *noopVectorIndex) Upsert(_ context.Context, _ string, _ []vector.Point) error { return nil }
+func (n *noopVectorIndex) Search(_ context.Context, _ string, _ []float32, _ int, _ map[string]any) ([]vector.Hit, error) {
+	return nil, nil
+}
+func (n *noopVectorIndex) Delete(_ context.Context, _ string, _ string) error { return nil }
 
 func TestSearch_UsesVectorWhenAvailable(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewMemoryCoreRepo()
+	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 	svc.SetEmbedder(memEmbedder())
 	svc.SetVectorIndex(repoVector(), "memories")
@@ -73,7 +243,7 @@ func TestSearch_UsesVectorWhenAvailable(t *testing.T) {
 
 func TestSearchCtx_RequiresTenant(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewMemoryCoreRepo()
+	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 
 	_, err := svc.SearchCtx(ctx, "", "anything", 5)
@@ -102,7 +272,7 @@ func TestSearchCtx_RequiresTenant(t *testing.T) {
 func TestSearch_VectorFilterStrict(t *testing.T) {
 	ctx := context.Background()
 	idx := repoVector()
-	svc := memory.NewService(repository.NewMemoryCoreRepo())
+	svc := memory.NewService(newMemCoreRepo())
 	svc.SetEmbedder(memEmbedder())
 	svc.SetVectorIndex(idx, "memories")
 
@@ -129,7 +299,7 @@ func TestSearch_VectorFilterStrict(t *testing.T) {
 
 func TestFindDuplicate_PrefersVector(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewMemoryCoreRepo()
+	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 	svc.SetEmbedder(memEmbedder())
 	svc.SetVectorIndex(repoVector(), "memories")
@@ -153,7 +323,7 @@ func TestFindDuplicate_PrefersVector(t *testing.T) {
 
 func TestBackfillVector_IndexesMemories(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewMemoryCoreRepo()
+	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 	// Save WITHOUT embedder/vector so items persist without embeddings.
 	for _, txt := range []string{"first memory", "second memory", "third memory"} {
@@ -178,7 +348,7 @@ func TestBackfillVector_IndexesMemories(t *testing.T) {
 
 func TestSearch_NoVector_KeywordFallback(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewMemoryCoreRepo()
+	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 	svc.SetEmbedder(memEmbedder())
 	if err := svc.Save(ctx, &memport.MemoryItem{
@@ -197,10 +367,10 @@ func TestSearch_NoVector_KeywordFallback(t *testing.T) {
 
 func TestSearch_NoopVector_KeywordFallback(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewMemoryCoreRepo()
+	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 	svc.SetEmbedder(memEmbedder())
-	svc.SetVectorIndex(vectorinfra.NoopIndex{}, "memories")
+	svc.SetVectorIndex(&noopVectorIndex{}, "memories")
 	if err := svc.Save(ctx, &memport.MemoryItem{
 		UserID: "alice", Scope: memport.ScopeUser, Content: "kubernetes everywhere", Importance: 50,
 	}); err != nil {
@@ -217,7 +387,7 @@ func TestSearch_NoopVector_KeywordFallback(t *testing.T) {
 
 func TestMemorySave_UpsertsVector(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewMemoryCoreRepo()
+	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 	idx := repoVector()
 	svc.SetEmbedder(memEmbedder())

@@ -1,6 +1,7 @@
 package security
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,26 @@ func NewJWTManager() *JWTManager {
 	return &JWTManager{
 		tokens: make(map[string]*TokenInfo),
 	}
+}
+
+// StartCleanup launches a background goroutine that periodically removes
+// expired tokens. The goroutine stops when the provided context is cancelled.
+func (m *JWTManager) StartCleanup(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.CleanupExpired()
+			}
+		}
+	}()
 }
 
 func (m *JWTManager) RegisterToken(key string, token string) error {

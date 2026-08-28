@@ -259,7 +259,29 @@ func (g *OpenAIGateway) readStream(r io.Reader, onDelta func(port.StreamDelta)) 
 			}
 		}
 	}
-	return &port.ChatResponse{Content: b.String(), TotalTokens: len(b.String()) / 4}, sc.Err()
+	return &port.ChatResponse{Content: b.String(), TotalTokens: estimateTokens(b.String())}, sc.Err()
+}
+
+// estimateTokens provides a rough token count estimate. For ASCII text, ~4 chars
+// per token is typical. CJK characters typically consume 1-2 tokens each, so we
+// use a weighted approach: count CJK runes separately and apply a 1.5x multiplier.
+func estimateTokens(s string) int {
+	if len(s) == 0 {
+		return 0
+	}
+	asciiCount := 0
+	cjkCount := 0
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF || r >= 0x3400 && r <= 0x4DBF || r >= 0x20000 && r <= 0x2A6DF {
+			cjkCount++
+		} else if r < 128 {
+			asciiCount++
+		} else {
+			// Other multi-byte chars (accented, etc.) - treat as ~2 chars
+			asciiCount += 2
+		}
+	}
+	return (asciiCount / 4) + int(float64(cjkCount)*1.5)
 }
 
 // extractStatus pulls the HTTP status code from an error message produced by do().

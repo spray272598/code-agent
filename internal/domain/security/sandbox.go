@@ -28,8 +28,8 @@ type platformSandbox interface {
 	execute(cmd *exec.Cmd) error
 }
 
-// OSLevelSandbox 是沙箱执行器的门面，持有具体的实现
-// 具体实现由 bootstrap 层注入（依赖倒置）
+// OSLevelSandbox is the facade for the sandbox executor, holding the concrete implementation.
+// The concrete implementation is injected via bootstrap (dependency inversion).
 type OSLevelSandbox struct {
 	mu         sync.Mutex
 	active     bool
@@ -40,12 +40,12 @@ type OSLevelSandbox struct {
 	platform   string
 	applied    bool
 	impl       platformSandbox
-	enhanced   SandboxEnforcer // 使用接口而非具体类型
+	enhanced   SandboxEnforcer // use interface rather than concrete type
 	useEnhanced bool
 }
 
-// NewOSLevelSandbox 创建沙箱执行器
-// enhancedEnforcer 由 bootstrap 层注入（可为 nil）
+// NewOSLevelSandbox creates a sandbox executor.
+// enhancedEnforcer is injected by bootstrap (may be nil).
 func NewOSLevelSandbox(audit *AuditLogger, enhancedEnforcer SandboxEnforcer) *OSLevelSandbox {
 	platform := runtime.GOOS
 	s := &OSLevelSandbox{
@@ -71,10 +71,10 @@ func (s *OSLevelSandbox) ApplyProfile(profile ProfileConfig, workspace string) e
 	s.profile = &profile
 	s.workspace = workspace
 
-	// 优先使用增强沙箱
+	// Prefer enhanced sandbox first
 	if s.useEnhanced && s.enhanced != nil {
 		if err := s.enhanced.ApplyProfile(profile, workspace); err != nil {
-			// 增强沙箱失败，回退到传统沙箱
+			// Enhanced sandbox failed, fall back to legacy sandbox
 			s.useEnhanced = false
 			s.enhanced = nil
 			s.impl = newPlatformSandbox(s.platform, s)
@@ -85,7 +85,7 @@ func (s *OSLevelSandbox) ApplyProfile(profile ProfileConfig, workspace string) e
 		}
 	}
 
-	// 传统沙箱逻辑
+	// Legacy sandbox logic
 	if s.impl != nil {
 		if err := s.impl.apply(profile, workspace); err != nil {
 			return fmt.Errorf("sandbox apply: %w", err)
@@ -125,12 +125,12 @@ func (s *OSLevelSandbox) Execute(cmd *exec.Cmd) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 优先使用增强沙箱
+	// Prefer enhanced sandbox first
 	if s.useEnhanced && s.enhanced != nil {
 		return s.enhanced.Execute(cmd)
 	}
 
-	// 传统执行
+	// Legacy execution
 	if s.impl != nil {
 		return s.impl.execute(cmd)
 	}
@@ -189,7 +189,7 @@ func looksNetworkCmd(cmdPath, arg string) bool {
 	if networkCmds[base] {
 		return true
 	}
-	// 检查参数中的网络特征
+	// Check for network patterns in arguments
 	suspicious := []string{"http://", "https://", "ftp://", "://"}
 	for _, s := range suspicious {
 		if strings.Contains(arg, s) {
@@ -198,5 +198,3 @@ func looksNetworkCmd(cmdPath, arg string) bool {
 	}
 	return false
 }
-
-// ... 其余函数保持不变
