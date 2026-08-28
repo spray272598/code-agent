@@ -6,20 +6,28 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/spray272598/code-agent/internal/domain/tenant"
 )
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	// Tenant scoping: derive userID from authenticated JWT.
+	t, ok := tenant.From(r.Context())
+	if !ok || t.UserID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPost:
 		var body struct {
-			UserID    string `json:"userId"`
 			ProjectID string `json:"projectId"`
 			Title     string `json:"title"`
 		}
 		if !decodeJSON(w, r, &body) {
 			return
 		}
-		sess, err := s.app.CreateSession(body.UserID, body.ProjectID, body.Title)
+		sess, err := s.app.CreateSession(t.UserID, body.ProjectID, body.Title)
 		if err != nil {
 			writeJSON(w, 500, errMap(err))
 			return
@@ -34,6 +42,11 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]any{"code": "404", "message": "not found"})
 			return
 		}
+		// Verify the session belongs to the authenticated user.
+		if sess.UserID != t.UserID {
+			writeJSON(w, 403, map[string]any{"code": "403", "message": "forbidden"})
+			return
+		}
 		writeJSON(w, 200, map[string]any{"code": "0000", "data": sess})
 	default:
 		writeJSON(w, 405, map[string]any{"code": "405", "message": "method"})
@@ -41,8 +54,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
-	list, err := s.app.ListSessions(userID)
+	// Tenant scoping: only list sessions for the authenticated user.
+	t, ok := tenant.From(r.Context())
+	if !ok || t.UserID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+	list, err := s.app.ListSessions(t.UserID)
 	if err != nil {
 		writeJSON(w, 500, errMap(err))
 		return

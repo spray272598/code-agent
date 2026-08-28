@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/tenant"
@@ -13,9 +14,16 @@ import (
 )
 
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
+	// Tenant scoping: derive userID from authenticated JWT, NOT from client input.
+	t, ok := tenant.From(r.Context())
+	if !ok || t.UserID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+	userID := t.UserID
+
 	switch r.Method {
 	case http.MethodGet:
-		userID := r.URL.Query().Get("userId")
 		projectID := r.URL.Query().Get("projectId")
 		scope := r.URL.Query().Get("scope")
 		q := r.URL.Query().Get("q")
@@ -36,7 +44,6 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"code": "0000", "data": list})
 	case http.MethodPost:
 		var body struct {
-			UserID     string `json:"userId"`
 			ProjectID  string `json:"projectId"`
 			Scope      string `json:"scope"`
 			Category   string `json:"category"`
@@ -49,7 +56,7 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		item := &memport.MemoryItem{
-			UserID: body.UserID, ProjectID: body.ProjectID,
+			UserID: userID, ProjectID: body.ProjectID,
 			Scope: memport.Scope(body.Scope), Category: body.Category,
 			Content: body.Content, Importance: body.Importance, Source: body.Source,
 		}
@@ -105,11 +112,26 @@ func (s *Server) handleHostDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBlobGet(w http.ResponseWriter, r *http.Request) {
+	// Tenant scoping: only allow authenticated users to access their own blobs.
+	t, ok := tenant.From(r.Context())
+	if !ok || t.UserID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "unauthenticated"})
+		return
+	}
+
 	key := r.URL.Query().Get("key")
 	if key == "" {
 		writeJSON(w, 400, map[string]any{"message": "key required"})
 		return
 	}
+
+	// Verify the blob key belongs to the authenticated user's namespace.
+	// Blob keys are stored as "user_id/path", so check the prefix.
+	if !strings.HasPrefix(key, t.UserID+"/") && !strings.HasPrefix(key, t.UserID+"_") {
+		writeJSON(w, 403, map[string]any{"code": "403", "message": "forbidden"})
+		return
+	}
+
 	data, err := s.app.GetBlob(r.Context(), key)
 	if err != nil {
 		writeJSON(w, 404, errMap(err))

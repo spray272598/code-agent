@@ -4,7 +4,8 @@ server:
   mode: "debug"
 
 # Platform JWT signing secret (HS256). Generate with `openssl rand -hex 32` and rotate regularly.
-jwt_secret: "change-me-dev-secret-please-rotate-32+chars!!"
+# Set via environment variable: JWT_SECRET
+jwt_secret: "${JWT_SECRET:-change-me-dev-secret-please-rotate-32+chars!!}"
 # jwt_secret_prev: ""   # set during secret rotation to keep old tokens valid
 
 # RFC8628 device authorization (Sprint 1.4) — used by TUI/web approval.
@@ -34,7 +35,8 @@ agent:
 llm:
   provider: "openai_compatible"
   model: "deepseek-ai/DeepSeek-V3"
-  api_key: "sk-wkmtytmwekwihpxccpkqlekddtpfksrveehxbhjlxwqsxkzi"              # set LLM_API_KEY + LLM_USE_MOCK=false for Eino primary path
+  # Set via environment variables: LLM_API_KEY, LLM_USE_MOCK
+  api_key: "${LLM_API_KEY:-}"              # set LLM_API_KEY + LLM_USE_MOCK=false for Eino primary path
   api_base: "https://api.siliconflow.cn/v1"
   use_mock: false           # true → native-offline for local/CI
 
@@ -46,8 +48,8 @@ database:
     host: "127.0.0.1"
     port: 3306
     database: "code_agent"
-    username: "root"
-    password: "123456"
+    username: "${MYSQL_USER:-root}"
+    password: "${MYSQL_PASSWORD:-}"
 
 redis:
   enabled: false
@@ -66,8 +68,8 @@ storage:
   enabled: true
   endpoint: "http://127.0.0.1:9000"
   bucket: "code-agent"
-  access_key: "minioadmin"
-  secret_key: "minioadmin"
+  access_key: "${MINIO_ACCESS_KEY:-minioadmin}"
+  secret_key: "${MINIO_SECRET_KEY:-minioadmin}"
   use_path_style: true
   local_fallback_dir: "./data/objects"
 
@@ -84,7 +86,7 @@ otlp:
 
 security:
   api_keys:
-    - "dev-key"
+    - "${API_KEY:-dev-key}"
   path_sandbox: true
   default_confirm_write: true
 

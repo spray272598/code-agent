@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -64,7 +65,12 @@ func Parse(token string, secrets ...[]byte) (*Claims, error) {
 	signed := parts[0] + "." + parts[1]
 	ok := false
 	for _, s := range secrets {
-		if s != nil && signHS256(signed, s) == parts[2] {
+		if s == nil {
+			continue
+		}
+		expected := signHS256(signed, s)
+		// Constant-time comparison prevents timing side-channel attacks.
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(parts[2])) == 1 {
 			ok = true
 			break
 		}

@@ -6,7 +6,7 @@ server:
   port: 8080
   mode: "debug"
 
-jwt_secret: "change-me-dev-secret-please-rotate-32+chars!!"
+jwt_secret: "${JWT_SECRET:-change-me-dev-secret-please-rotate-32+chars!!}"
 
 auth:
   verification_uri: "http://localhost:5173/device/approve"
