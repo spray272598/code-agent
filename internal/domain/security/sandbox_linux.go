@@ -33,7 +33,7 @@ func newPlatformSandbox(platform string, s *OSLevelSandbox) platformSandbox {
 	return &linuxPlatformSandbox{sandbox: s}
 }
 
-func (l *linuxPlatformSandbox) apply(profile ProfileConfig, workspace string) error {
+func (l *linuxPlatformSandbox) apply(profile ProfileConfig, workspace string) (EnforcementLevel, error) {
 	hasBwrap := commandExists(bwrapPath)
 	hasLandlock := commandExists(landlockPath)
 
@@ -41,14 +41,23 @@ func (l *linuxPlatformSandbox) apply(profile ProfileConfig, workspace string) er
 		if l.sandbox.audit != nil {
 			l.sandbox.audit.Warn(CategorySandbox, "sandbox", "neither bwrap nor landlock found, using in-process enforcement")
 		}
-		return nil
+		return LevelHeuristic, nil
 	}
 
 	if hasLandlock {
-		return l.applyLandlock(profile, workspace)
+		if err := l.applyLandlock(profile, workspace); err != nil {
+			return LevelNone, fmt.Errorf("apply landlock: %w", err)
+		}
+	} else {
+		if err := l.applyBwrap(profile, workspace); err != nil {
+			return LevelNone, fmt.Errorf("apply bwrap: %w", err)
+		}
 	}
 
-	return l.applyBwrap(profile, workspace)
+	if l.usingLandlock || l.usingBwrap {
+		return LevelKernel, nil
+	}
+	return LevelHeuristic, nil
 }
 
 func (l *linuxPlatformSandbox) applyBwrap(profile ProfileConfig, workspace string) error {

@@ -14,11 +14,11 @@ func newPlatformSandbox(platform string, s *OSLevelSandbox) platformSandbox {
 	return &defaultPlatformSandbox{sandbox: s}
 }
 
-func (d *defaultPlatformSandbox) apply(profile ProfileConfig, workspace string) error {
+func (d *defaultPlatformSandbox) apply(profile ProfileConfig, workspace string) (EnforcementLevel, error) {
 	if d.sandbox.audit != nil {
 		d.sandbox.audit.Info(CategorySandbox, "sandbox", platformInfo(d.sandbox.platform))
 	}
-	return nil
+	return LevelHeuristic, nil
 }
 
 func (d *defaultPlatformSandbox) execute(cmd *exec.Cmd) error {

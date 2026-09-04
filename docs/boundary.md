@@ -39,6 +39,18 @@ orchestrator 默认 = native（自研主路径）
 
 环境变量：`AGENT_ORCHESTRATOR=eino|native`，`LLM_API_KEY`，`LLM_USE_MOCK`。
 
+## 沙箱诚实降级（kernel sandbox honest degradation）
+
+沙箱隔离强度用 `EnforcementLevel` 如实上报，不再一律声称 "active"：
+
+- `kernel`：已启用 OS/内核级隔离（bwrap / Landlock / macOS seatbelt / Windows Job Object）。
+- `heuristic`：仅有进程内路径/网络启发式筛查（无内核隔离），命令照常执行但被过滤。
+- `none`：无任何隔离。
+
+启动时 `OSLevelSandbox.EnforcementLevel()` 决定真实等级；`bootstrap` 会**如实打印**当前等级。
+配置 `security.require_kernel_sandbox: true` 时，若内核级隔离不可用则**拒绝启动**（fail-closed），
+而非静默退化为无隔离；默认 `false`，允许退化为 `heuristic` 并告警。
+
 ## MCP 统一入口
 
 ```

@@ -219,6 +219,11 @@ type SecurityConfig struct {
 	// SandboxMode selects the enforcement tier: "workspace" (default),
 	// "readonly", or "strict". Mirrors Grok Build's kernel-enforced sandbox.
 	SandboxMode string `yaml:"sandbox_mode"`
+	// RequireKernelSandbox fails closed at startup when a real OS/kernel sandbox
+	// (Landlock/seccomp/bwrap/seatbelt/Job Object) cannot be enforced. When false
+	// (default) the harness honestly degrades to in-process heuristic enforcement
+	// (path/network screening) and logs the reduced isolation level.
+	RequireKernelSandbox bool `yaml:"require_kernel_sandbox"`
 	// CORSOrigins allowlist; empty = same-origin only (no ACAO). Use ["*"] only for local demos.
 	CORSOrigins []string `yaml:"cors_origins"`
 	// MaxBodyBytes request body limit (default 2MiB)

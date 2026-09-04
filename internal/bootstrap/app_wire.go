@@ -219,6 +219,19 @@ func (b *builder) wireFoundation() {
 	if enhancedEnforcer != nil {
 		b.perm.SetExternalSandboxEnforcer(enhancedEnforcer)
 	}
+
+	// Honest degradation: report the real sandbox enforcement level, and if the
+	// operator explicitly requires kernel isolation, refuse to start when it is
+	// unavailable instead of silently running unsandboxed.
+	kernelActive := enhancedEnforcer != nil && enhancedEnforcer.IsActive()
+	if cfg.Security.RequireKernelSandbox && !kernelActive {
+		log.Fatalf("[bootstrap] require_kernel_sandbox=true but no OS/kernel sandbox is available on %s; refusing to start (set require_kernel_sandbox=false to allow heuristic-only degradation)", runtime.GOOS)
+	}
+	if kernelActive {
+		log.Printf("[bootstrap] sandbox: kernel isolation ACTIVE (Landlock/seccomp/namespaces/cgroups via enhanced enforcer)\n")
+	} else {
+		log.Printf("[bootstrap] sandbox: kernel isolation NOT available on %s — degrading to in-process heuristic enforcement (path/network screening only). Set require_kernel_sandbox=true to refuse startup when kernel isolation is unavailable.\n", runtime.GOOS)
+	}
 }
 
 // wireTools registers the local/expanded/SSH tool set, the code index, the

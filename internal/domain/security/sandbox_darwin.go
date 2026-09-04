@@ -24,14 +24,14 @@ func newPlatformSandbox(platform string, s *OSLevelSandbox) platformSandbox {
 	return &darwinPlatformSandbox{sandbox: s}
 }
 
-func (d *darwinPlatformSandbox) apply(profile ProfileConfig, workspace string) error {
+func (d *darwinPlatformSandbox) apply(profile ProfileConfig, workspace string) (EnforcementLevel, error) {
 	hasSeatbelt := commandExists(seatbeltPath)
 
 	if !hasSeatbelt {
 		if d.sandbox.audit != nil {
 			d.sandbox.audit.Warn(CategorySandbox, "sandbox", "sandbox-exec not found, using in-process enforcement")
 		}
-		return nil
+		return LevelHeuristic, nil
 	}
 
 	profilePath := filepath.Join(os.TempDir(), "code-agent-sandbox.sbpl")
@@ -41,7 +41,7 @@ func (d *darwinPlatformSandbox) apply(profile ProfileConfig, workspace string) e
 		if d.sandbox.audit != nil {
 			d.sandbox.audit.Warn(CategorySandbox, "sandbox", "seatbelt profile write failed, using in-process enforcement")
 		}
-		return nil
+		return LevelHeuristic, nil
 	}
 
 	d.profilePath = profilePath
@@ -51,7 +51,7 @@ func (d *darwinPlatformSandbox) apply(profile ProfileConfig, workspace string) e
 		d.sandbox.audit.Info(CategorySandbox, "sandbox", fmt.Sprintf("macOS seatbelt profile written: %s", profilePath))
 	}
 
-	return nil
+	return LevelKernel, nil
 }
 
 func (d *darwinPlatformSandbox) execute(cmd *exec.Cmd) error {

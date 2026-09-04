@@ -41,14 +41,14 @@ func newPlatformSandbox(platform string, s *OSLevelSandbox) platformSandbox {
 	return &windowsPlatformSandbox{sandbox: s}
 }
 
-func (w *windowsPlatformSandbox) apply(profile ProfileConfig, workspace string) error {
+func (w *windowsPlatformSandbox) apply(profile ProfileConfig, workspace string) (EnforcementLevel, error) {
 	// Create a Windows Job Object
 	ret, _, _ := procCreateJobObj.Call(0, 0)
 	if ret == 0 {
 		if w.sandbox.audit != nil {
 			w.sandbox.audit.Warn(CategorySandbox, "sandbox", "CreateJobObject failed, using in-process enforcement")
 		}
-		return nil
+		return LevelHeuristic, nil
 	}
 	w.jobHandle = syscall.Handle(ret)
 
@@ -66,7 +66,7 @@ func (w *windowsPlatformSandbox) apply(profile ProfileConfig, workspace string) 
 	if w.sandbox.audit != nil {
 		w.sandbox.audit.Info(CategorySandbox, "sandbox", "Windows Job Object sandbox configured: kill-on-close enabled")
 	}
-	return nil
+	return LevelKernel, nil
 }
 
 func (w *windowsPlatformSandbox) execute(cmd *exec.Cmd) error {

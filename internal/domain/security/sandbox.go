@@ -17,6 +17,36 @@ var (
 	ErrSandboxNetworkBlocked = errors.New("sandbox: network access blocked")
 )
 
+// EnforcementLevel describes how strong the sandbox isolation actually is at
+// runtime. It exists so the harness can be HONEST about degradation instead of
+// reporting "sandbox active" when only in-process heuristics are in effect.
+type EnforcementLevel int
+
+const (
+	// LevelNone means no sandbox isolation is in effect.
+	LevelNone EnforcementLevel = iota
+	// LevelHeuristic means only in-process path/network heuristics screen
+	// commands; the OS/kernel isolation mechanism is unavailable.
+	LevelHeuristic
+	// LevelKernel means a real OS/kernel isolation mechanism is active
+	// (bwrap, Landlock, macOS seatbelt, or a Windows Job Object).
+	LevelKernel
+)
+
+// String renders the enforcement level for logs/status.
+func (l EnforcementLevel) String() string {
+	switch l {
+	case LevelNone:
+		return "none"
+	case LevelHeuristic:
+		return "heuristic"
+	case LevelKernel:
+		return "kernel"
+	default:
+		return "unknown"
+	}
+}
+
 type SandboxEnforcer interface {
 	ApplyProfile(profile ProfileConfig, workspace string) error
 	IsActive() bool
@@ -25,7 +55,7 @@ type SandboxEnforcer interface {
 }
 
 type platformSandbox interface {
-	apply(profile ProfileConfig, workspace string) error
+	apply(profile ProfileConfig, workspace string) (EnforcementLevel, error)
 	execute(cmd *exec.Cmd) error
 }
 
@@ -40,6 +70,7 @@ type OSLevelSandbox struct {
 	audit      *AuditLogger
 	platform   string
 	applied    bool
+	level      EnforcementLevel
 	impl       platformSandbox
 	enhanced   SandboxEnforcer // use interface rather than concrete type
 	useEnhanced bool
@@ -82,15 +113,18 @@ func (s *OSLevelSandbox) ApplyProfile(profile ProfileConfig, workspace string) e
 		} else {
 			s.active = true
 			s.applied = true
+			s.level = LevelKernel
 			return nil
 		}
 	}
 
 	// Legacy sandbox logic
 	if s.impl != nil {
-		if err := s.impl.apply(profile, workspace); err != nil {
+		lvl, err := s.impl.apply(profile, workspace)
+		if err != nil {
 			return fmt.Errorf("sandbox apply: %w", err)
 		}
+		s.level = lvl
 	}
 
 	cfg := DenyConfig{
@@ -101,7 +135,7 @@ func (s *OSLevelSandbox) ApplyProfile(profile ProfileConfig, workspace string) e
 		return fmt.Errorf("deny engine: %w", err)
 	}
 	s.denyEngine = engine
-	s.active = true
+	s.active = s.level != LevelNone
 	s.applied = true
 	return nil
 }
@@ -114,6 +148,22 @@ func (s *OSLevelSandbox) IsActive() bool {
 		return s.active && s.enhanced.IsActive()
 	}
 	return s.active
+}
+
+// EnforcementLevel returns the actual isolation strength currently in effect:
+// LevelKernel when an OS/kernel mechanism is active, LevelHeuristic when only
+// in-process path/network heuristics screen commands, and LevelNone when nothing
+// is enforced. This is the honest signal the bootstrap uses for degradation.
+func (s *OSLevelSandbox) EnforcementLevel() EnforcementLevel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.useEnhanced && s.enhanced != nil {
+		if s.active && s.enhanced.IsActive() {
+			return LevelKernel
+		}
+		return s.level
+	}
+	return s.level
 }
 
 func (s *OSLevelSandbox) LogViolation(target, operation string) {

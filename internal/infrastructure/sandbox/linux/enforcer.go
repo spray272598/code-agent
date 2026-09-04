@@ -147,9 +147,13 @@ func (e *EnhancedSandboxEnforcer) GetCapabilities() *SandboxCapabilities {
 	}
 }
 
-// IsEnhancedAvailable 检查增强沙箱是否可用
+// IsEnhancedAvailable reports whether the enhanced (kernel-level) sandbox was
+// successfully applied. It previously always returned false; it now reflects the
+// real state so callers can make honest degradation decisions.
 func (e *EnhancedSandboxEnforcer) IsEnhancedAvailable() bool {
-	return false
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.active && e.manager != nil && e.manager.IsActive()
 }
 
 // GetSandboxMode 获取当前沙箱模式
