@@ -308,8 +308,9 @@ func Default() *Config {
 		Agent: AgentConfig{
 			Name: "Code-Agent", MaxSteps: 20, TimeoutSec: 180,
 			TokenBudget: 32000, WorkspaceRoot: "./workspace",
-			// Primary: CloudWeGo Eino ReAct. Falls back to native when mock/no API key.
-			Orchestrator:          "eino",
+		// Primary: self-built native Loop. Eino is an opt-in backend (orchestrator=eino)
+		// that requires a real LLM key; otherwise we run the native Loop.
+		Orchestrator:          "native",
 			EinoStream:            false,
 			CompactThresholdRatio: 0.8,
 		},
@@ -503,7 +504,7 @@ func normalize(cfg *Config) {
 		cfg.Agent.WorkspaceRoot = "./workspace"
 	}
 	if strings.TrimSpace(cfg.Agent.Orchestrator) == "" {
-		cfg.Agent.Orchestrator = "eino"
+		cfg.Agent.Orchestrator = "native"
 	}
 	if cfg.Agent.EinoCheckPointDir == "" {
 		cfg.Agent.EinoCheckPointDir = "./data/eino-checkpoints"

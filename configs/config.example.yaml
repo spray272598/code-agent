@@ -9,8 +9,9 @@ agent:
   timeout_sec: 180
   token_budget: 32000
   workspace_root: "./workspace"
-  # Primary: eino (CloudWeGo ReAct). Offline/CI: set llm.use_mock=true → native-offline fallback.
-  orchestrator: "eino"
+  # Primary: self-built native Loop (works with mock or real LLM).
+  # Opt into CloudWeGo Eino with orchestrator: "eino" (requires a real LLM key).
+  orchestrator: "native"
   eino_stream: false
 
 llm:

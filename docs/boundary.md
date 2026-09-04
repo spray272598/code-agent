@@ -13,8 +13,8 @@
 | 大模型对话 | **Eino** | `einoorch` + `eino-ext/openai` |
 | 流式 token 拼装 | **Eino** | `ChatModel.Stream` / callbacks |
 | HTTP SSE / 心跳 / 断连取消 | **自研** | `trigger/http` |
-| ReAct / 多代理编排 | **Eino（主）** | `react.Agent` / `MultiAgent` |
-| Native Loop | **自研兜底** | mock / 无 Key 时 `native-offline` |
+| ReAct / 多代理编排 | **Native Loop（主）/ Eino（可选）** | `engine.Loop` / `einoorch.Runner` |
+| Native Loop | **自研主路径** | 默认编排；mock / 真实 LLM 均可运行 |
 | 限流 / 熔断 / 审计 | **自研** | Redis rate + Guard L5 + audit |
 | 权限沙箱 / HITL | **自研** | `security.Guard` + approve API + CLI |
 | GuardedTool 横切 | **自研** | validate→Guard→hook→cache→exec→audit |
@@ -32,9 +32,9 @@
 ## 运行时选择
 
 ```
-orchestrator 默认 = eino
-  ├─ 有 API Key 且 use_mock=false → Eino Runner
-  └─ 否则 → native-offline（本地演示/CI）
+orchestrator 默认 = native（自研主路径）
+  ├─ orchestrator=native（默认）→ Native Loop（mock / 真实 LLM 均可）
+  └─ orchestrator=eino 且有 API Key 且 use_mock=false → Eino Runner（否则诚实降级到 Native Loop）
 ```
 
 环境变量：`AGENT_ORCHESTRATOR=eino|native`，`LLM_API_KEY`，`LLM_USE_MOCK`。
@@ -59,4 +59,4 @@ MCP stdio Manager
 
 ## 面试表述
 
-> 生产默认 Eino 做 ReAct 与 tool-calling；Coding Agent 差异化在 GuardedTool 安全横切、Workspace 沙箱、会话与 Skill/Memory 产品层。无 Key 时自动 native-offline，方便本地与 CI。
+> 生产默认 Native Loop 做 ReAct 与 tool-calling；Eino 为可选后端（`orchestrator: eino` + 真实 Key）。无 Key 时仍用 Native Loop，方便本地与 CI。

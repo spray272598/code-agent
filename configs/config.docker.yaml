@@ -10,7 +10,7 @@ agent:
   timeout_sec: 180
   token_budget: 32000
   workspace_root: "/data/workspace"
-  orchestrator: "eino"
+  orchestrator: "native"
   eino_stream: false
   eino_graph_resume: true
   eino_checkpoint_dir: "/data/eino-checkpoints"

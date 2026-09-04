@@ -2,7 +2,7 @@
 
 > **定位**：类 Claude Code 的 **Coding Agent 运行时**（服务端 + CLI 客户端）  
 > **状态**：Phase 1–6 + Eino 混合编排 + 标准协议（JSON-RPC 2.0 / MCP / ACP）已落地  
-> **编排**：**默认 Eino ReAct**；无 Key/mock → `native-offline`。边界见 [boundary.md](./boundary.md)。  
+> **编排**：**默认 Native Loop（自研）**；Eino 为可选后端（`orchestrator: eino` + 真实 Key）。边界见 [boundary.md](./boundary.md)。 
 
 
 ---

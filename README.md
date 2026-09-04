@@ -21,7 +21,7 @@ A **Claude Code-like** Coding Agent runtime (Go): **Eino handles orchestration a
 ```
 CLI ──SSE──► Server(trigger)
                └─ ChatApp
-                    └─ Runner: Eino (primary) | native-offline (mock)
+                    └─ Runner: Native Loop (primary) | Eino (optional, orchestrator=eino)
                          └─ GuardedTool → domain tools + MCP
 ```
 

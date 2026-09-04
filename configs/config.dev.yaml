@@ -1,6 +1,6 @@
-# Sprint 2.1 dev override: use the offline mock LLM so the backend boots
-# without an external API key. Switch back to eino by setting LLM_API_KEY +
-# llm.use_mock=false in your shell.
+# Dev override: native Loop with the offline mock LLM so the backend boots
+# without an external API key. Opt into Eino with orchestrator: "eino" + a real
+# LLM key.
 server:
   host: "127.0.0.1"
   port: 8080
@@ -12,7 +12,7 @@ agent:
   timeout_sec: 60
   token_budget: 16000
   workspace_root: "./workspace"
-  orchestrator: "eino"
+  orchestrator: "native"
   eino_stream: true
 
 llm:

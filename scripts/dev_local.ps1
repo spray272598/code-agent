@@ -45,7 +45,7 @@ if (-not $NoBuild) {
 
 if ($RealLLM) {
   if (-not $env:LLM_API_KEY) {
-    Write-Host "WARN: -RealLLM but LLM_API_KEY empty; will fall back to native-offline" -ForegroundColor Yellow
+    Write-Host "WARN: -RealLLM but LLM_API_KEY empty; Native Loop will run with mock LLM" -ForegroundColor Yellow
   } else {
     $env:LLM_USE_MOCK = "false"
     Write-Host "LLM: real key set, orchestrator=eino expected" -ForegroundColor Green

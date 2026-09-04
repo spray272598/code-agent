@@ -592,21 +592,24 @@ func (b *builder) wireMCP() {
 	b.mcpHealth = mcpHealth
 }
 
-// wireRunner selects the orchestrator: Eino is primary; the native loop is the
-// offline/mock fallback. All tools (core + MCP) are wrapped with GuardedTool by
-// the runner.
+// wireRunner selects the agent orchestrator. The self-built native Loop is the
+// primary orchestrator (always available; works with a mock or real LLM). CloudWeGo
+// Eino is an OPTIONAL backend enabled only when orchestrator=eino AND a real LLM
+// key exists (Eino cannot run in mock/offline mode). When Eino is requested but
+// unavailable we honestly degrade to the native Loop instead of failing. All tools
+// (core + MCP) are wrapped with GuardedTool by the runner.
 func (b *builder) wireRunner() {
 	cfg := b.cfg
 
 	var runner engine.Runner
 	orch := strings.ToLower(strings.TrimSpace(cfg.Agent.Orchestrator))
-	if orch == "" || orch == "eino" || orch == "default" {
-		orch = "eino"
-	}
+
+	// Eino is opt-in and requires an explicit request plus a usable LLM key.
 	wantEino := orch == "eino"
 	canEino := wantEino && cfg.LLM.APIKey != "" && !cfg.LLM.UseMock
+
 	if wantEino && !canEino {
-		log.Printf("[bootstrap] orchestrator=eino requested but LLM mock/no key → native (offline/mock)\n")
+		log.Printf("[bootstrap] orchestrator=eino requested but LLM mock/no key → native (honest degradation)\n")
 	}
 	if canEino {
 		er := einoorch.NewRunner(einoorch.Config{
@@ -647,8 +650,8 @@ func (b *builder) wireRunner() {
 			loop.SetSubRunner(b.subRunner)
 		}
 		runner = loop
-		orch = "native-offline"
-		log.Printf("[bootstrap] orchestrator=native-offline (mock/no API key; Guard still on all tools)\n")
+		orch = "native"
+		log.Printf("[bootstrap] orchestrator=native (primary; works with mock or real LLM; Guard still on all tools)\n")
 	}
 
 	b.runner = runner

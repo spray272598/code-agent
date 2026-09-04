@@ -11,7 +11,7 @@
 | 域 | 状态 | 说明 |
 |----|------|------|
 | **账号（toC）** | ✅ 已落地 | 邮箱+密码注册/登录（bcrypt）、JWT（access+refresh）、邮箱验证、密码重置；`user_id` 隔离；SQLite/MySQL/memory 三后端 |
-| **编排** | ✅ 已落地 | Eino ReAct 主路径 + native-offline 兜底；`/team` 并行子代理；SSE 流式 |
+| **编排** | ✅ 已落地 | Native Loop 主路径 + Eino 可选后端；`/team` 并行子代理；SSE 流式 |
 | **安全** | ✅ 已落地 | 五层 Guard、路径/命令归一化、HITL、Hook abort、审计、Redis 限流 |
 | **本地工具** | ✅ 已落地 | read/write/edit/bash/glob/grep + memory + delegate；进程隔离 |
 | **远程 SSH** | ✅ 已落地 | `ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / **`ssh_terminal`（交互式 PTY 终端）**；连接凭据 KMS 加密存储 |

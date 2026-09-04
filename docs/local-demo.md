@@ -68,8 +68,8 @@ powershell -File scripts/eval_report.ps1 -MinPassRate 0.9 -OutFile reports/eval-
 
 | 模式 | 说明 |
 |------|------|
-| mock / 无 Key | `native-offline` + host 执行（仍有完整 Guard） |
-| RealLLM | `eino` 编排 + host 执行 + GuardedTool |
+| mock / 无 Key | `native`（默认编排）+ host 执行（仍有完整 Guard） |
+| RealLLM | `native`（默认）或 `eino`（可选，需 Key）+ host 执行 + GuardedTool |
 
 ## 手动双终端（不用脚本）
 

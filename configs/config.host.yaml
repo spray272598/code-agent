@@ -12,15 +12,15 @@ agent:
   timeout_sec: 180
   token_budget: 32000
   workspace_root: "./workspace"
-  orchestrator: "eino"
+  orchestrator: "native"
   eino_stream: false
 
 llm:
   provider: "openai_compatible"
   model: "deepseek-ai/DeepSeek-V3"
-  api_key: ""              # set LLM_API_KEY + LLM_USE_MOCK=false for Eino
+  api_key: ""              # set LLM_API_KEY + LLM_USE_MOCK=false to use a real LLM
   api_base: "https://api.siliconflow.cn/v1"
-  use_mock: true           # true → native-offline; false + key → Eino
+  use_mock: true           # true → mock LLM (native Loop still runs); false + key → real LLM
 
 database:
   type: "memory"
