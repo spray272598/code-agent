@@ -16,6 +16,7 @@ import (
 	"hash/fnv"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -286,12 +287,22 @@ func pointID(s string) uint64 {
 }
 
 // buildFilter converts domain filter key/values into Qdrant's filter DSL.
+//
+// Keys are sorted: Go randomises map iteration order, and letting that leak
+// into the request body makes payloads non-reproducible, which hurts debugging,
+// logging and any cache keyed on the filter.
 func buildFilter(f map[string]any) map[string]any {
-	must := make([]map[string]any, 0, len(f))
-	for k, v := range f {
+	keys := make([]string, 0, len(f))
+	for k := range f {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	must := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
 		must = append(must, map[string]any{
 			"key":   k,
-			"match": map[string]any{"value": v},
+			"match": map[string]any{"value": f[k]},
 		})
 	}
 	return map[string]any{"must": must}

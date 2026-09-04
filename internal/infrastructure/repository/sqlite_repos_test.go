@@ -13,11 +13,16 @@ import (
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/session/model"
 	"github.com/spray272598/code-agent/internal/domain/tenant"
+	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 )
 
 // openRepoTestSQLite opens a file-backed SQLite DB (same driver as the
 // production bootstrap) and creates the schema for the repos under test.
 // It never touches the user-visible ./data/code-agent.db instance.
+//
+// The schema comes from the production migrator rather than a local copy: a
+// hand-maintained duplicate drifts silently (core_memory once lost created_at
+// here) and then fails with an opaque "no such column" far from the real cause.
 func openRepoTestSQLite(t *testing.T) *sql.DB {
 	t.Helper()
 	path := t.TempDir() + "/repos.db"
@@ -27,27 +32,8 @@ func openRepoTestSQLite(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS chat_session (
-			id TEXT PRIMARY KEY, user_id TEXT, project_id TEXT, agent_id TEXT,
-			title TEXT, status TEXT, message_count INTEGER, token_used INTEGER,
-			working_dir TEXT, created_at TEXT, updated_at TEXT)`,
-		`CREATE TABLE IF NOT EXISTS chat_message (
-			id TEXT, session_id TEXT, role TEXT, content TEXT, tool_name TEXT,
-			tool_call_id TEXT, step INTEGER, token_count INTEGER, priority INTEGER, created_at TEXT)`,
-		`CREATE TABLE IF NOT EXISTS session_summary (
-			session_id TEXT PRIMARY KEY, summary TEXT, token_est INTEGER, updated_at TEXT)`,
-		`CREATE TABLE IF NOT EXISTS core_memory (
-			id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, project_id TEXT,
-			scope TEXT, category TEXT, content TEXT, importance INTEGER, source TEXT, embedding TEXT)`,
-		`CREATE TABLE IF NOT EXISTS audit_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, session_id TEXT,
-			action TEXT, tool TEXT, detail TEXT, decision TEXT, latency_ms INTEGER, created_at TEXT)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
+	if err := sqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 	return db
 }

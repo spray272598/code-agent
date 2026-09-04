@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -178,23 +179,151 @@ func isUnderWorkspace(path, workspace string) bool {
 	return strings.HasPrefix(absP, absW)
 }
 
+// networkCmds lists binaries whose sole purpose (or a dominant one) is network
+// access. Matched against a basename so "/usr/bin/curl" is caught too.
+var networkCmds = map[string]bool{
+	"curl": true, "wget": true, "ssh": true, "scp": true, "rsync": true,
+	"nc": true, "ncat": true, "netcat": true, "telnet": true, "ftp": true, "sftp": true,
+	"dig": true, "nslookup": true, "host": true, "whois": true,
+	"ping": true, "traceroute": true, "tracepath": true,
+	"rclone": true, "socat": true, "nc.openbsd": true, "sclient": true,
+}
+
+// cmdWrappers are prefix programs that merely decorate the real command
+// ("sudo curl ...", "timeout 30 wget ..."). They are peeled off so the
+// underlying binary can be classified.
+var cmdWrappers = map[string]bool{
+	"sudo": true, "nohup": true, "timeout": true, "env": true, "nice": true,
+	"setsid": true, "stdbuf": true, "xargs": true, "command": true, "time": true,
+}
+
+// shellInterpreters run an inline script; their payload needs script-level
+// inspection instead of simple binary-name matching.
+var shellInterpreters = map[string]bool{
+	"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
+	"pwsh": true, "powershell": true,
+}
+
+var pythonInterpreters = map[string]bool{"python": true, "python3": true, "python2": true, "py": true}
+var nodeInterpreters = map[string]bool{"node": true, "nodejs": true, "deno": true, "bun": true, "ts-node": true}
+
+// networkScriptPatterns detect network usage inside inline scripts passed to an
+// interpreter via -c / -e / -<<heredoc. Matched case-insensitively.
+var networkScriptPatterns = []*regexp.Regexp{
+	// Python: import socket / urllib / http.client / requests / httpx / aiohttp
+	regexp.MustCompile(`(?i)\b(?:import\s+socket|import\s+urllib|import\s+http\.client|import\s+requests|import\s+httpx|import\s+aiohttp|socket\.socket|urllib\.request|http\.client|requests\.(?:get|post|put|head)|httpx\.(?:get|post)|urlopen)\b`),
+	// Node: require('http'|'net'|'dns'|'tls'|'http2'|'dgram') / fetch( / axios / http.get
+	regexp.MustCompile(`(?i)(?:require\s*\(\s*['"](?:https?|net|dgram|dns|tls|http2)['"]\s*\)|from\s+['"](?:https?|net|dgram|dns|tls|http2)['"]|\bhttps?\.(?:get|request)\s*\(|\bfetch\s*\(|\baxios\b|\bnode-fetch\b)`),
+}
+
+// networkSchemePattern matches an explicit network URL in any argument.
+var networkSchemePattern = regexp.MustCompile(`(?i)\b(?:https?|ftps?|sftp|ssh|rsync|git)://`)
+
+// looksNetworkCmd reports whether the given command (cmdPath plus its full
+// argument string) appears to reach the network. It is a heuristic used by the
+// network-block profile: wrappers are stripped, the real binary is matched by
+// name, and inline interpreter scripts are scanned for network APIs.
 func looksNetworkCmd(cmdPath, arg string) bool {
-	networkCmds := map[string]bool{
-		"curl": true, "wget": true, "ssh": true, "scp": true, "rsync": true,
-		"nc": true, "netcat": true, "telnet": true, "ftp": true, "sftp": true,
-		"dig": true, "nslookup": true, "host": true, "whois": true,
-		"ping": true, "traceroute": true, "tracepath": true,
+	lower := strings.ToLower(arg)
+
+	// 1. The binary itself is a known network tool.
+	if networkCmds[filepath.Base(strings.ToLower(cmdPath))] {
+		return true
 	}
-	base := filepath.Base(cmdPath)
+
+	// 2. An explicit network URL anywhere in the argument list.
+	if networkSchemePattern.MatchString(arg) {
+		return true
+	}
+
+	fields := stripCmdWrappers(strings.Fields(arg))
+	if len(fields) == 0 {
+		return false
+	}
+	base := filepath.Base(strings.ToLower(fields[0]))
 	if networkCmds[base] {
 		return true
 	}
-	// Check for network patterns in arguments
-	suspicious := []string{"http://", "https://", "ftp://", "://"}
-	for _, s := range suspicious {
-		if strings.Contains(arg, s) {
+
+	// 3. Shell one-liners: /dev/tcp, /dev/udp, or an embedded network tool.
+	if shellInterpreters[base] {
+		if strings.Contains(lower, "/dev/tcp/") || strings.Contains(lower, "/dev/udp/") {
 			return true
 		}
+		for _, f := range fields[1:] {
+			if networkCmds[filepath.Base(strings.ToLower(f))] || networkSchemePattern.MatchString(f) {
+				return true
+			}
+		}
+		return false
 	}
-	return false
+
+	// 4. Inline scripts handed to an interpreter.
+	if pythonInterpreters[base] || nodeInterpreters[base] {
+		for _, p := range networkScriptPatterns {
+			if p.MatchString(arg) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 5. Fall back to the generic URL scan.
+	return networkSchemePattern.MatchString(arg)
+}
+
+// stripCmdWrappers removes leading wrapper programs (sudo, nohup, timeout, env,
+// nice, ...) together with their own options and operands, returning the tokens
+// of the real command.
+func stripCmdWrappers(fields []string) []string {
+	for len(fields) > 0 {
+		if !cmdWrappers[filepath.Base(strings.ToLower(fields[0]))] {
+			break
+		}
+		fields = fields[1:]
+		// Skip the wrapper's options and operands: `sudo -u root`, `env FOO=bar`,
+		// `timeout 30s`, `nice -n 5`.
+		for len(fields) > 0 {
+			tok := fields[0]
+			if strings.HasPrefix(tok, "-") || strings.Contains(tok, "=") || looksLikeDuration(tok) {
+				fields = fields[1:]
+				continue
+			}
+			break
+		}
+	}
+	return fields
+}
+
+// looksLikeDuration reports whether tok is a bare duration/number operand such
+// as the "30" or "30s" in `timeout 30s curl ...`.
+func looksLikeDuration(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	body := tok
+	if n := len(body); n > 0 {
+		switch body[n-1] {
+		case 's', 'm', 'h', 'd':
+			body = body[:n-1]
+		}
+	}
+	if body == "" {
+		return false
+	}
+	dots := 0
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c == '.' {
+			dots++
+			if dots > 1 {
+				return false
+			}
+			continue
+		}
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

@@ -26,6 +26,27 @@ type CheckpointService struct {
 	workspace  string
 }
 
+// defaultRunTimeoutSec is the per-run budget used when no positive timeout is
+// configured. It must never be zero: context.WithTimeout(ctx, 0) returns an
+// already-expired context, which would cancel every run at step 0.
+const defaultRunTimeoutSec = 180
+
+// runTimeout returns the wall-clock budget for a single agent run. A missing or
+// non-positive configuration degrades to defaultRunTimeoutSec rather than to a
+// zero deadline that would fail every request instantly.
+func (cs *CheckpointService) runTimeout() time.Duration {
+	if cs == nil || cs.timeoutSec <= 0 {
+		return defaultRunTimeoutSec * time.Second
+	}
+	return time.Duration(cs.timeoutSec) * time.Second
+}
+
+// lockTTL is the Redis run-lock lifetime: the run budget plus slack so a lock
+// never expires while its run is still legitimately executing.
+func (cs *CheckpointService) lockTTL() time.Duration {
+	return cs.runTimeout() + 15*time.Second
+}
+
 func (cs *CheckpointService) markRun(session *sessmodel.Session, req ChatRequest, status string, pending *security.PendingConfirm, errClass string) {
 	if cs.ckStore == nil || session == nil {
 		return
@@ -253,8 +274,7 @@ func (cs *CheckpointService) acquireRunLock(ctx context.Context, sessionID strin
 		return func() {}, nil
 	}
 	val := newID("lock")
-	ttl := time.Duration(cs.timeoutSec)*time.Second + 15*time.Second
-	ok, err := cs.redis.TryLock(ctx, "run:lock:"+sessionID, val, ttl)
+	ok, err := cs.redis.TryLock(ctx, "run:lock:"+sessionID, val, cs.lockTTL())
 	if err != nil {
 		return func() {}, nil
 	}

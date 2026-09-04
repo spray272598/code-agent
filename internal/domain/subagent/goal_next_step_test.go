@@ -6,6 +6,32 @@ import (
 	"testing"
 )
 
+// newSymlink creates linkPath -> target and returns the link path.
+//
+// It skips the test when the platform cannot produce a real symlink. Some
+// Windows configurations (no developer mode, no SeCreateSymbolicLinkPrivilege,
+// or a filtering filesystem layer) make os.Symlink return nil while writing a
+// plain empty file instead of a reparse point. Asserting against that would
+// fail for the wrong reason, so verify the link actually materialised.
+func newSymlink(t *testing.T, target, linkPath string) string {
+	t.Helper()
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Skipf("cannot create symlink (needs developer mode or admin on Windows): %v", err)
+		return ""
+	}
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		t.Skipf("cannot stat created symlink: %v", err)
+		return ""
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Skipf("platform did not create a real symlink at %s (mode %v); "+
+			"symlink rejection cannot be exercised here", linkPath, info.Mode())
+		return ""
+	}
+	return linkPath
+}
+
 func TestFirstUncheckedPlanItem(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -151,14 +177,9 @@ func TestResolveGoalNextStep_SymlinkRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := os.Symlink(realPath, linkPath)
-	if err != nil {
-		t.Skipf("cannot create symlink (may need admin): %v", err)
-		return
-	}
+	newSymlink(t, realPath, linkPath)
 
-	_, err = ResolveGoalNextStep(linkPath)
-	if err == nil {
+	if _, err := ResolveGoalNextStep(linkPath); err == nil {
 		t.Error("expected error for symlink")
 	}
 }
@@ -279,11 +300,7 @@ func TestSymlinkCheck(t *testing.T) {
 		t.Errorf("SymlinkCheck on regular file should pass: %v", err)
 	}
 
-	err := os.Symlink(realPath, linkPath)
-	if err != nil {
-		t.Skipf("cannot create symlink: %v", err)
-		return
-	}
+	newSymlink(t, realPath, linkPath)
 
 	if err := SymlinkCheck(linkPath); err == nil {
 		t.Error("SymlinkCheck should reject symlinks")

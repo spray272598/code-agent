@@ -54,10 +54,13 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      # Per-shard timeout of 10m replaces the old global 120s which the suite
-      # already exceeded locally (>5min). Sharding keeps each job fast.
+      # -race is mandatory, not optional: the agent core runs concurrent tool
+      # batches, subagent goroutines and streamed SSE writes, so data races are a
+      # real failure mode here rather than a theoretical one. Per-shard timeout
+      # of 15m accounts for the ~2-5x slowdown the race detector introduces over
+      # the previous 10m budget.
       - name: Test ${{ matrix.shard }}
-        run: go test ${{ matrix.packages }} -count=1 -timeout 10m -coverprofile=cover/coverage-${{ matrix.shard }}.out -covermode=atomic
+        run: go test -race ${{ matrix.packages }} -count=1 -timeout 15m -coverprofile=cover/coverage-${{ matrix.shard }}.out -covermode=atomic
 
       - name: Coverage summary (${{ matrix.shard }})
         run: |

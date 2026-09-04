@@ -40,6 +40,15 @@ func Open(path string, autoMigrate bool) (*sql.DB, error) {
 	return db, nil
 }
 
+// Migrate applies the canonical schema to an already-open database.
+//
+// Exported so tests can build fixtures against the exact production DDL instead
+// of a hand-maintained copy: a duplicated CREATE TABLE drifts silently, and the
+// drift only surfaces as a confusing "no such column" at query time.
+func Migrate(db *sql.DB) error {
+	return migrate(db)
+}
+
 func migrate(db *sql.DB) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS chat_session (

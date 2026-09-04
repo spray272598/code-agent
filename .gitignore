@@ -61,3 +61,6 @@ web/dist/
 
 # Local tool directories
 .workbuddy/
+
+# editor/agent scratch
+.zcode/

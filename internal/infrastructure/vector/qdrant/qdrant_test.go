@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -219,8 +221,39 @@ func TestBuildFilter(t *testing.T) {
 	if !ok || len(must) != 2 {
 		t.Fatalf("unexpected filter shape: %v", f)
 	}
-	if must[0]["key"] != "user_id" || must[0]["match"].(map[string]any)["value"] != "u1" {
-		t.Fatalf("filter key/value not mapped: %v", must[0])
+	// Look up by key rather than by index: the assertion must not depend on
+	// iteration order even though buildFilter now sorts.
+	got := make(map[string]any, len(must))
+	for _, m := range must {
+		match, ok := m["match"].(map[string]any)
+		if !ok {
+			t.Fatalf("clause missing match: %v", m)
+		}
+		got[m["key"].(string)] = match["value"]
+	}
+	if got["user_id"] != "u1" || got["scope"] != "global" {
+		t.Fatalf("filter key/value not mapped: %v", got)
+	}
+}
+
+// TestBuildFilterDeterministic guards request-body stability across runs.
+// Go randomises map iteration order, so an unsorted buildFilter flips the
+// clause order roughly half the time.
+func TestBuildFilterDeterministic(t *testing.T) {
+	in := map[string]any{"user_id": "u1", "scope": "global", "kind": "code", "lang": "go"}
+	want := buildFilter(in)
+	for i := 0; i < 50; i++ {
+		got := buildFilter(in)
+		if !reflect.DeepEqual(want, got) {
+			t.Fatalf("buildFilter not deterministic on iteration %d:\n want %v\n got  %v", i, want, got)
+		}
+	}
+	keys := make([]string, 0, len(in))
+	for _, m := range want["must"].([]map[string]any) {
+		keys = append(keys, m["key"].(string))
+	}
+	if !sort.StringsAreSorted(keys) {
+		t.Fatalf("filter keys not sorted: %v", keys)
 	}
 }
 

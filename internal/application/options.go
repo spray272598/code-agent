@@ -106,14 +106,23 @@ func WithKeyStore(k *auth.KeyStore) Option {
 }
 
 // WithCheckpoint injects durable interrupt store + run registry.
+//
+// It must mutate the service created by New rather than replace it: the
+// constructor seeds timeoutSec/workspace/redis from CoreDeps, and those fields
+// drive the per-run context deadline. Wholesale replacement silently zeroed the
+// timeout, which made every request fail immediately with
+// "context deadline exceeded".
 func WithCheckpoint(store checkpoint.Store, runs *checkpoint.RunRegistry) Option {
 	return func(a *ChatApp) {
 		if runs == nil {
 			runs = checkpoint.NewRunRegistry()
 		}
-		a.cp = &CheckpointService{
-			ckStore: store, runs: runs, perm: a.perm,
+		if a.cp == nil {
+			a.cp = &CheckpointService{perm: a.perm}
 		}
+		a.cp.ckStore = store
+		a.cp.runs = runs
+		a.cp.perm = a.perm
 	}
 }
 

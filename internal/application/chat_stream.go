@@ -97,8 +97,7 @@ func (a *ChatApp) acquireRunLock(ctx context.Context, sessionID string) (func(),
 		return func() {}, nil
 	}
 	val := newID("lock")
-	ttl := time.Duration(a.cp.timeoutSec)*time.Second + 15*time.Second
-	ok, err := a.redis.TryLock(ctx, "run:lock:"+sessionID, val, ttl)
+	ok, err := a.redis.TryLock(ctx, "run:lock:"+sessionID, val, a.cp.lockTTL())
 	if err != nil {
 		// lock errors must not block runs
 		return func() {}, nil
@@ -129,7 +128,7 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 		forceCompact = fc
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.cp.timeoutSec)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), a.cp.runTimeout())
 	defer cancel()
 
 	session, err := a.resolveSession(req)
@@ -252,7 +251,7 @@ func (a *ChatApp) ChatStream(parentCtx context.Context, req ChatRequest) (<-chan
 		return nil, nil, err
 	}
 	// nest timeout under request ctx — cancel on client disconnect OR timeout OR CancelSession
-	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(a.cp.timeoutSec)*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, a.cp.runTimeout())
 	if err := a.checkRate(ctx, req.UserID); err != nil {
 		cancel()
 		return nil, nil, err
