@@ -87,7 +87,6 @@ func migrate(db *sql.DB) error {
 )`,
 		`CREATE TABLE IF NOT EXISTS core_memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT NOT NULL,
   project_id TEXT NOT NULL DEFAULT '',
   scope TEXT NOT NULL DEFAULT 'user',
   category TEXT NOT NULL DEFAULT 'general',
@@ -97,8 +96,7 @@ func migrate(db *sql.DB) error {
   embedding TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 )`,
-		`CREATE INDEX IF NOT EXISTS idx_mem_user ON core_memory(user_id, scope)`,
-		`ALTER TABLE core_memory ADD COLUMN embedding TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_mem_proj ON core_memory(project_id, scope)`,
 		`CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL DEFAULT '',

@@ -6,14 +6,6 @@ server:
   port: 8080
   mode: "debug"
 
-jwt_secret: "${JWT_SECRET:-change-me-dev-secret-please-rotate-32+chars!!}"
-
-auth:
-  verification_uri: "http://localhost:5173/device/approve"
-  device_code_ttl_sec: 600
-  device_poll_interval_sec: 5
-  user_code_len: 8
-
 agent:
   name: "Code-Agent"
   max_steps: 10

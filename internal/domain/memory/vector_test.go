@@ -11,7 +11,6 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
-	"github.com/spray272598/code-agent/internal/domain/tenant"
 	"github.com/spray272598/code-agent/internal/domain/vector"
 )
 
@@ -141,12 +140,12 @@ func (r *memCoreRepo) Save(_ context.Context, item *memport.MemoryItem) error {
 	return nil
 }
 
-func (r *memCoreRepo) List(_ context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+func (r *memCoreRepo) List(_ context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var out []memport.MemoryItem
 	for _, item := range r.memories {
-		if item.UserID == userID && (projectID == "" || item.ProjectID == projectID) && (scope == "" || item.Scope == scope) {
+		if (projectID == "" || item.ProjectID == projectID) && (scope == "" || item.Scope == scope) {
 			out = append(out, *item)
 			if limit > 0 && len(out) >= limit {
 				break
@@ -156,12 +155,12 @@ func (r *memCoreRepo) List(_ context.Context, userID, projectID string, scope me
 	return out, nil
 }
 
-func (r *memCoreRepo) Search(_ context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+func (r *memCoreRepo) Search(_ context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var out []memport.MemoryItem
 	for _, item := range r.memories {
-		if item.UserID == userID && strings.Contains(item.Content, query) {
+		if (projectID == "" || item.ProjectID == projectID) && strings.Contains(item.Content, query) {
 			out = append(out, *item)
 			if limit > 0 && len(out) >= limit {
 				break
@@ -203,7 +202,9 @@ func repoVector() vector.IVectorIndex { return newMemVectorIndex(4) }
 type noopVectorIndex struct{}
 
 func (n *noopVectorIndex) Ensure(_ context.Context, _ string, _ int) error   { return nil }
-func (n *noopVectorIndex) Upsert(_ context.Context, _ string, _ []vector.Point) error { return nil }
+func (n *noopVectorIndex) Upsert(_ context.Context, _ string, _ []vector.Point) error {
+	return nil
+}
 func (n *noopVectorIndex) Search(_ context.Context, _ string, _ []float32, _ int, _ map[string]any) ([]vector.Hit, error) {
 	return nil, nil
 }
@@ -217,54 +218,53 @@ func TestSearch_UsesVectorWhenAvailable(t *testing.T) {
 	svc.SetVectorIndex(repoVector(), "memories")
 
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "proj", Scope: memport.ScopeUser, Category: "pref",
 		Content: "go test preferred", Importance: 80,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "bob", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "other", Scope: memport.ScopeUser, Category: "pref",
 		Content: "python pytest preferred", Importance: 80,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	items, err := svc.Search(ctx, "alice", "", "go test", 5)
+	items, err := svc.Search(ctx, "proj", "go test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(items) == 0 {
 		t.Fatalf("expected at least one hit")
 	}
-	if items[0].UserID != "alice" {
-		t.Fatalf("first hit must belong to alice, got %q", items[0].UserID)
+	if !strings.Contains(items[0].Content, "go test") {
+		t.Fatalf("first hit should be the go-test memory, got %q", items[0].Content)
 	}
 }
 
-func TestSearchCtx_RequiresTenant(t *testing.T) {
+func TestSearchCtx_RequiresProject(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemCoreRepo()
 	svc := memory.NewService(repo)
 
 	_, err := svc.SearchCtx(ctx, "", "anything", 5)
-	if !errors.Is(err, memory.ErrTenantMissing) {
-		t.Fatalf("expected ErrTenantMissing, got %v", err)
+	if !errors.Is(err, memory.ErrProjectMissing) {
+		t.Fatalf("expected ErrProjectMissing, got %v", err)
 	}
 
-	ctx2 := tenant.With(ctx, tenant.Tenant{UserID: "alice"})
 	svc.SetEmbedder(memEmbedder())
 	svc.SetVectorIndex(repoVector(), "memories")
-	if err := svc.Save(ctx2, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Category: "x",
+	if err := svc.Save(ctx, &memport.MemoryItem{
+		ProjectID: "proj", Scope: memport.ScopeUser, Category: "x",
 		Content: "go modules rocks", Importance: 70,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	items, err := svc.SearchCtx(ctx2, "", "go modules", 5)
+	items, err := svc.SearchCtx(ctx, "proj", "go modules", 5)
 	if err != nil {
 		t.Fatalf("SearchCtx: %v", err)
 	}
-	if len(items) == 0 || items[0].UserID != "alice" {
+	if len(items) == 0 || items[0].ProjectID != "proj" {
 		t.Fatalf("unexpected items: %+v", items)
 	}
 }
@@ -277,21 +277,21 @@ func TestSearch_VectorFilterStrict(t *testing.T) {
 	svc.SetVectorIndex(idx, "memories")
 
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Content: "alpha bravo charlie", Importance: 50,
+		ProjectID: "alice", Scope: memport.ScopeUser, Content: "alpha bravo charlie", Importance: 50,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "bob", Scope: memport.ScopeUser, Content: "alpha bravo charlie", Importance: 50,
+		ProjectID: "bob", Scope: memport.ScopeUser, Content: "alpha bravo charlie", Importance: 50,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	hits, _ := idx.Search(ctx, "memories", []float32{1, 1, 1, 1}, 10, map[string]any{"user_id": "alice"})
+	hits, _ := idx.Search(ctx, "memories", []float32{1, 1, 1, 1}, 10, map[string]any{"project_id": "alice"})
 	if len(hits) == 0 {
 		t.Fatalf("expected hits")
 	}
 	for _, h := range hits {
-		if got := h.Payload["user_id"]; got != "alice" {
+		if got := h.Payload["project_id"]; got != "alice" {
 			t.Fatalf("filter leaked: hit %+v", h)
 		}
 	}
@@ -305,17 +305,17 @@ func TestFindDuplicate_PrefersVector(t *testing.T) {
 	svc.SetVectorIndex(repoVector(), "memories")
 
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Content: "use go modules", Importance: 60,
+		ProjectID: "proj", Scope: memport.ScopeUser, Content: "use go modules", Importance: 60,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// Identical content → dedupe via vector.
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Content: "use go modules", Importance: 60,
+		ProjectID: "proj", Scope: memport.ScopeUser, Content: "use go modules", Importance: 60,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	items, _ := svc.List(ctx, "alice", "", memport.ScopeUser, 50)
+	items, _ := svc.List(ctx, "proj", memport.ScopeUser, 50)
 	if len(items) != 1 {
 		t.Fatalf("expected dedupe to keep 1, got %d", len(items))
 	}
@@ -328,7 +328,7 @@ func TestBackfillVector_IndexesMemories(t *testing.T) {
 	// Save WITHOUT embedder/vector so items persist without embeddings.
 	for _, txt := range []string{"first memory", "second memory", "third memory"} {
 		if err := svc.Save(ctx, &memport.MemoryItem{
-			UserID: "alice", Scope: memport.ScopeUser, Content: txt, Importance: 50,
+			ProjectID: "proj", Scope: memport.ScopeUser, Content: txt, Importance: 50,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -340,7 +340,7 @@ func TestBackfillVector_IndexesMemories(t *testing.T) {
 	if n := svc.BackfillVector(ctx, 50); n < 1 {
 		t.Fatalf("BackfillVector returned %d, expected ≥1", n)
 	}
-	hits, _ := idx.Search(ctx, "memories", []float32{1, 1, 1, 1}, 10, map[string]any{"user_id": "alice"})
+	hits, _ := idx.Search(ctx, "memories", []float32{1, 1, 1, 1}, 10, map[string]any{"project_id": "proj"})
 	if len(hits) == 0 {
 		t.Fatalf("expected hits after backfill, got 0")
 	}
@@ -352,11 +352,11 @@ func TestSearch_NoVector_KeywordFallback(t *testing.T) {
 	svc := memory.NewService(repo)
 	svc.SetEmbedder(memEmbedder())
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Content: "go test is fine", Importance: 50,
+		ProjectID: "proj", Scope: memport.ScopeUser, Content: "go test is fine", Importance: 50,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	items, err := svc.Search(ctx, "alice", "", "go test", 5)
+	items, err := svc.Search(ctx, "proj", "go test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,11 +372,11 @@ func TestSearch_NoopVector_KeywordFallback(t *testing.T) {
 	svc.SetEmbedder(memEmbedder())
 	svc.SetVectorIndex(&noopVectorIndex{}, "memories")
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Content: "kubernetes everywhere", Importance: 50,
+		ProjectID: "proj", Scope: memport.ScopeUser, Content: "kubernetes everywhere", Importance: 50,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	items, err := svc.Search(ctx, "alice", "", "kubernetes", 5)
+	items, err := svc.Search(ctx, "proj", "kubernetes", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,15 +394,15 @@ func TestMemorySave_UpsertsVector(t *testing.T) {
 	svc.SetVectorIndex(idx, "memories")
 
 	if err := svc.Save(ctx, &memport.MemoryItem{
-		UserID: "alice", Scope: memport.ScopeUser, Content: strings.Repeat("x", 8), Importance: 60,
+		ProjectID: "proj", Scope: memport.ScopeUser, Content: strings.Repeat("x", 8), Importance: 60,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	hits, _ := idx.Search(ctx, "memories", []float32{1, 1, 1, 1}, 5, map[string]any{"user_id": "alice"})
+	hits, _ := idx.Search(ctx, "memories", []float32{1, 1, 1, 1}, 5, map[string]any{"project_id": "proj"})
 	if len(hits) != 1 {
 		t.Fatalf("expected 1 vector entry, got %d", len(hits))
 	}
-	if hits[0].Payload["user_id"] != "alice" {
-		t.Fatalf("payload missing user_id: %+v", hits[0].Payload)
+	if hits[0].Payload["project_id"] != "proj" {
+		t.Fatalf("payload missing project_id: %+v", hits[0].Payload)
 	}
 }

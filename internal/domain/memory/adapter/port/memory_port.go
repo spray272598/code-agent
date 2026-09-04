@@ -17,10 +17,12 @@ const (
 )
 
 // MemoryItem is a durable memory unit.
+//
+// The harness is single-operator (no accounts/tenants), so memory is scoped by
+// ProjectID only. The historical UserID dimension has been removed.
 type MemoryItem struct {
-	ID         int64
-	UserID     string
-	ProjectID  string
+	ID        int64
+	ProjectID string
 	Scope      Scope
 	Category   string
 	Content    string
@@ -35,8 +37,8 @@ type MemoryItem struct {
 // IMemoryRepository is implemented in infrastructure/repository.
 type IMemoryRepository interface {
 	Save(ctx context.Context, item *MemoryItem) error
-	List(ctx context.Context, userID, projectID string, scope Scope, limit int) ([]MemoryItem, error)
-	Search(ctx context.Context, userID, projectID, query string, limit int) ([]MemoryItem, error)
+	List(ctx context.Context, projectID string, scope Scope, limit int) ([]MemoryItem, error)
+	Search(ctx context.Context, projectID, query string, limit int) ([]MemoryItem, error)
 	Delete(ctx context.Context, id int64) error
 	// ListNoEmbedding returns memories that have no stored embedding, for backfill.
 	ListNoEmbedding(ctx context.Context, limit int) ([]MemoryItem, error)

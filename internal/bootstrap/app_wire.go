@@ -21,11 +21,11 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/host"
 	"github.com/spray272598/code-agent/internal/domain/intent"
 	"github.com/spray272598/code-agent/internal/domain/kms"
-	"github.com/spray272598/code-agent/internal/domain/llmkey"
 	mcpcache "github.com/spray272598/code-agent/internal/domain/mcp/cache"
 	mcphealth "github.com/spray272598/code-agent/internal/domain/mcp/health"
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 	mcpsvc "github.com/spray272598/code-agent/internal/domain/mcp/service"
+	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/memory"
 	"github.com/spray272598/code-agent/internal/domain/security"
 	"github.com/spray272598/code-agent/internal/domain/skill"
@@ -86,7 +86,8 @@ type builder struct {
 	hooks         *hook.Bus
 	skillSvc      *skill.Service
 	specSvc       *spec.Service
-	mcpFactory    *inframcp.UserFactory
+	mcpFactory    mcpport.IMCPManagerFactory
+	mcpSysMgr     *inframcp.Manager
 	mcpBridge     *mcpsvc.ToolBridge
 	mcpHealth     *mcphealth.MCPHealthMonitor
 	sshPool       *sshinfra.Pool
@@ -104,13 +105,12 @@ type App struct {
 	Tools          *tool.MapRegistry
 	Perm           *security.Guard
 	Redis          *redisx.Client
-	MCP            *inframcp.UserFactory
+	MCP            mcpport.IMCPManagerFactory
 	MCPHealth      *mcphealth.MCPHealthMonitor
 	Skills         *skill.Service
 	Memory         *memory.Service
 	Hooks          *hook.Bus
 	KMS            kms.CryptoSealer
-	LLMKey         llmkey.Repository
 	Blobs          blob.Store
 	Index          *codeindex.Index
 	CKStore        checkpoint.Store
@@ -120,11 +120,6 @@ type App struct {
 	HostHub        *wshub.HostHub
 	SSHTerminalHub *wshub.SSHTerminalHub
 	SSHPool        *sshinfra.Pool
-
-	// Account repos (Sprint 1.1)
-	UserRepo    auth.UserRepository
-	DeviceRepo  auth.DeviceRepository
-	RefreshRepo auth.RefreshTokenRepository
 
 	Closer func()
 }
@@ -483,25 +478,24 @@ func (b *builder) wireMemoryEmbedding() {
 	}
 }
 
-// wireMCP builds the per-user MCP factory, the tool bridge and the health
-// monitor, and seeds the system tenant from mcp.json / the demo binary.
+// wireMCP builds the single-operator MCP Manager, the tool bridge and the health
+// monitor, and seeds the one Manager from mcp.json / the demo binary.
 func (b *builder) wireMCP() {
 	cfg := b.cfg
 	if !cfg.MCP.Enabled {
 		return
 	}
 
-	mcpFactory := inframcp.NewUserFactory(func(userID string) *inframcp.Manager {
-		return inframcp.NewUserManager(userID)
-	})
-	// system manager: bootstrap-loaded servers (cfg.MCP.ConfigFile, demo)
-	sysMgr := inframcp.NewUserManager("")
+	// Single operator: one Manager for the whole process, wrapped in an
+	// IMCPManagerFactory so HTTP handlers / tools still resolve via For(ctx).
+	sysMgr := inframcp.NewManager()
+	mcpFactory := mcpport.NewSingleManagerFactory(sysMgr)
 	// ToolCache with 30s TTL / 256 entries for deduplicating read-only MCP calls.
 	mcpCache := mcpcache.NewToolCache(30*time.Second, 256)
 	mcpBridge := mcpsvc.NewToolBridgeWithFactory(mcpFactory, b.reg).WithCache(mcpCache)
 	// Health monitor with background PING checks every 15s.
 	mcpHealth := mcphealth.NewMCPHealthMonitor(15*time.Second, func(ctx context.Context, name string) error {
-		mgr, err := mcpFactory.ForUserID("")
+		mgr, err := mcpFactory.For(ctx)
 		if err != nil {
 			return err
 		}
@@ -521,9 +515,6 @@ func (b *builder) wireMCP() {
 			mcpHealth.UpdateToolCount(name, count)
 		}
 	})
-	// prime the cache with the system manager under the "" key so
-	// ForUserID("") returns the seeded one
-	mcpFactory.PrimeSystem(sysMgr)
 	// auto-load servers from mcp.json (VS Code style) if configured
 	if cfg.MCP.ConfigFile != "" {
 		servers, err := inframcp.LoadServersFromFile(cfg.MCP.ConfigFile)
@@ -596,6 +587,7 @@ func (b *builder) wireMCP() {
 	}
 
 	b.mcpFactory = mcpFactory
+	b.mcpSysMgr = sysMgr
 	b.mcpBridge = mcpBridge
 	b.mcpHealth = mcpHealth
 }
@@ -696,21 +688,6 @@ func (b *builder) wireChat() *App {
 	// per-step checkpoint snapshots (crash/restart resume)
 	chat.SetHooks(b.hooks)
 
-	// auth service (Sprint 1.2): signup, email verification, and credential
-	// auth. JWT issuance arrives in Sprint 1.3.
-	chat.SetAuthService(application.NewAuthService(b.repos.UserRepo, nil))
-
-	// token service (Sprint 1.3): HS256 access tokens + rotating refresh tokens.
-	chat.SetTokenService(application.NewTokenService(b.repos.UserRepo, b.repos.RefreshRepo, []byte(cfg.JWTSecret), []byte(cfg.JWTSecretPrev)))
-
-	// device authorization service (Sprint 1.4): RFC8628 device flow for the TUI.
-	chat.SetDeviceService(application.NewDeviceService(
-		b.repos.DeviceRepo, b.repos.UserRepo, chat.TokenService(),
-		cfg.Auth.VerificationURI,
-		time.Duration(cfg.Auth.DeviceCodeTTLSec)*time.Second,
-		time.Duration(cfg.Auth.DevicePollIntervalSec)*time.Second,
-	))
-
 	// rehydrate HITL pendings from durable checkpoints (cross-process interrupt)
 	if n, err := chat.RestoreCheckpoints(context.Background()); err != nil {
 		log.Printf("[bootstrap] restore checkpoints: %v\n", err)
@@ -754,17 +731,13 @@ func (b *builder) wireChat() *App {
 		Host: b.hostExec, Bridge: b.hostBridge, HostHub: b.hostHub,
 		SSHTerminalHub: sshTermHub,
 		SSHPool:        b.sshPool,
-		UserRepo:       b.repos.UserRepo,
-		DeviceRepo:     b.repos.DeviceRepo,
-		RefreshRepo:    b.repos.RefreshRepo,
 		KMS:            b.sealer,
-		LLMKey:         b.repos.LLMKeyRepo,
 		Closer: func() {
 			if b.mcpHealth != nil {
 				b.mcpHealth.Stop()
 			}
-			if b.mcpFactory != nil {
-				b.mcpFactory.ResetAll()
+			if b.mcpSysMgr != nil {
+				_ = b.mcpSysMgr.Close()
 			}
 			if b.sshPool != nil {
 				b.sshPool.CloseAll()

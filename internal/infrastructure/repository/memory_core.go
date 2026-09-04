@@ -66,15 +66,12 @@ func (r *MemoryCoreRepo) Save(_ context.Context, item *memport.MemoryItem) error
 	return nil
 }
 
-func (r *MemoryCoreRepo) List(_ context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+func (r *MemoryCoreRepo) List(_ context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var out []memport.MemoryItem
 	for i := len(r.data) - 1; i >= 0; i-- {
 		it := r.data[i].item
-		if it.UserID != userID {
-			continue
-		}
 		if scope != "" && it.Scope != scope {
 			continue
 		}
@@ -96,7 +93,7 @@ func (r *MemoryCoreRepo) List(_ context.Context, userID, projectID string, scope
 	return out, nil
 }
 
-func (r *MemoryCoreRepo) Search(_ context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+func (r *MemoryCoreRepo) Search(_ context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	tokens := memport.Tokenize(query)
@@ -122,9 +119,6 @@ func (r *MemoryCoreRepo) Search(_ context.Context, userID, projectID, query stri
 	var ranked []scored
 	for i, mi := range r.data {
 		it := mi.item
-		if it.UserID != userID {
-			continue
-		}
 		if it.Scope == memport.ScopeProject && projectID != "" && it.ProjectID != projectID {
 			continue
 		}

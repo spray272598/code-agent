@@ -3,17 +3,10 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"sync"
 
 	"github.com/spray272598/code-agent/internal/domain/audit"
-	"github.com/spray272598/code-agent/internal/domain/tenant"
 )
-
-// ErrTenantMissing is returned by ListForUser implementations when ctx does
-// not carry a tenant.Tenant (Sprint 1.6 invariant: business code must not
-// query multi-tenant repositories outside an authenticated request).
-var ErrTenantMissing = errors.New("tenant missing from context")
 
 // MemoryAuditRepo in-process audit ring buffer.
 type MemoryAuditRepo struct {
@@ -45,8 +38,8 @@ func (r *MemoryAuditRepo) ListBySession(_ context.Context, userID, sessionID str
 	var out []audit.Entry
 	for i := len(r.data) - 1; i >= 0 && len(out) < limit; i-- {
 		e := r.data[i]
-		// Multi-tenant isolation (Sprint 1.7): always filter by userID; sessionID is optional.
-		if e.UserID != userID {
+		// Single-operator harness: an empty userID means "match any actor".
+		if userID != "" && e.UserID != userID {
 			continue
 		}
 		if sessionID != "" && e.SessionID != sessionID {
@@ -57,15 +50,10 @@ func (r *MemoryAuditRepo) ListBySession(_ context.Context, userID, sessionID str
 	return out, nil
 }
 
-// ListForUser is the ctx-driven (Sprint 1.6) form. Returns ErrTenantMissing if
-// ctx has no tenant.Tenant — refusing to leak rows to a missing/unauthenticated
-// caller is the safe default.
+// ListForUser is the ctx-driven form. The harness has no accounts, so it simply
+// returns every actor's entries for the session (single-operator).
 func (r *MemoryAuditRepo) ListForUser(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
-	t, ok := tenant.From(ctx)
-	if !ok || t.UserID == "" {
-		return nil, ErrTenantMissing
-	}
-	return r.ListBySession(ctx, t.UserID, sessionID, limit)
+	return r.ListBySession(ctx, "", sessionID, limit)
 }
 
 // MySQLAuditRepo persists to audit_log.
@@ -88,9 +76,13 @@ func (r *MySQLAuditRepo) ListBySession(ctx context.Context, userID, sessionID st
 	if limit <= 0 {
 		limit = 100
 	}
-	// Multi-tenant isolation (Sprint 1.7): always scope by user_id; session_id is an optional refinement.
-	q := `SELECT user_id, session_id, action, tool, IFNULL(detail,''), decision FROM audit_log WHERE user_id=?`
-	args := []any{userID}
+	// Single-operator harness: an empty userID matches every actor; session_id is an optional refinement.
+	q := `SELECT user_id, session_id, action, tool, IFNULL(detail,''), decision FROM audit_log WHERE 1=1`
+	args := []any{}
+	if userID != "" {
+		q += ` AND user_id=?`
+		args = append(args, userID)
+	}
 	if sessionID != "" {
 		q += ` AND session_id=?`
 		args = append(args, sessionID)
@@ -113,14 +105,10 @@ func (r *MySQLAuditRepo) ListBySession(ctx context.Context, userID, sessionID st
 	return out, rows.Err()
 }
 
-// ListForUser is the ctx-driven (Sprint 1.6) form: extracts the tenant from
-// ctx and delegates to ListBySession so the isolation rule lives in one place.
+// ListForUser is the ctx-driven form: the harness has no accounts, so it returns
+// every actor's entries for the session (single-operator).
 func (r *MySQLAuditRepo) ListForUser(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
-	t, ok := tenant.From(ctx)
-	if !ok || t.UserID == "" {
-		return nil, ErrTenantMissing
-	}
-	return r.ListBySession(ctx, t.UserID, sessionID, limit)
+	return r.ListBySession(ctx, "", sessionID, limit)
 }
 
 func itoa(n int64) string {

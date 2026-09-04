@@ -2,7 +2,7 @@ import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { api, getAccessToken } from "@/lib/api";
+import { api, getApiKey } from "@/lib/api";
 
 interface SSHConnection {
   Name: string;
@@ -35,7 +35,7 @@ export default function SSHTerminal() {
     if (!connName || status === "connecting" || status === "open") return;
     cleanupRef.current?.();
 
-    const token = getAccessToken() ?? "";
+    const token = getApiKey();
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const url =
       `${proto}://${window.location.host}/ws/ssh` +

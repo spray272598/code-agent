@@ -84,12 +84,12 @@ func (t *MemorySaveTool) Execute(ctx context.Context, args map[string]any) (tool
 			imp = n
 		}
 	}
-	userID, defaultProj := t.Ctx.identity()
+	_, defaultProj := t.Ctx.identity()
 	if proj == "" {
 		proj = defaultProj
 	}
 	item := &memport.MemoryItem{
-		UserID: userID, ProjectID: proj, Scope: scope,
+		ProjectID: proj, Scope: scope,
 		Category: cat, Content: content, Importance: imp, Source: "tool",
 	}
 	if err := t.Ctx.Svc.Save(ctx, item); err != nil {
@@ -128,8 +128,8 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]any) (to
 	if v, ok := args["limit"].(float64); ok {
 		limit = int(v)
 	}
-	userID, projectID := t.Ctx.identity()
-	items, err := t.Ctx.Svc.Search(ctx, userID, projectID, q, limit)
+	_, projectID := t.Ctx.identity()
+	items, err := t.Ctx.Svc.Search(ctx, projectID, q, limit)
 	if err != nil {
 		return tool.Result{Text: err.Error(), IsError: true}, nil
 	}

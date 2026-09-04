@@ -98,7 +98,7 @@ func (f *FlushState) Stats() (count int64, lastTime time.Time, failures int64) {
 	return f.flushCount, f.lastFlushTime, f.failedAttempts
 }
 
-func (s *Service) FlushConversation(ctx context.Context, userID, projectID string, turns []ConversationTurn, cfg FlushConfig) (*FlushResult, error) {
+func (s *Service) FlushConversation(ctx context.Context, projectID string, turns []ConversationTurn, cfg FlushConfig) (*FlushResult, error) {
 	start := time.Now()
 	result := &FlushResult{}
 
@@ -111,7 +111,7 @@ func (s *Service) FlushConversation(ctx context.Context, userID, projectID strin
 		content := extractWindowContent(window)
 
 		if cfg.AutoExtract {
-			items := s.extractFacts(content, userID, projectID, cfg.MinImportance)
+			items := s.extractFacts(content, projectID, cfg.MinImportance)
 			for _, item := range items {
 				if err := s.Save(ctx, item); err == nil {
 					result.Flushed++
@@ -120,7 +120,6 @@ func (s *Service) FlushConversation(ctx context.Context, userID, projectID strin
 			result.Extracted = len(items)
 		} else {
 			item := &memport.MemoryItem{
-				UserID:     userID,
 				ProjectID:  projectID,
 				Scope:      memport.ScopeProject,
 				Category:   "conversation_flush",
@@ -174,7 +173,7 @@ func extractWindowContent(window []ConversationTurn) string {
 	return b.String()
 }
 
-func (s *Service) extractFacts(content, userID, projectID string, minImportance int) []*memport.MemoryItem {
+func (s *Service) extractFacts(content, projectID string, minImportance int) []*memport.MemoryItem {
 	var items []*memport.MemoryItem
 
 	if s.extractor != nil {
@@ -194,7 +193,6 @@ func (s *Service) extractFacts(content, userID, projectID string, minImportance 
 	for _, rule := range rules {
 		if strings.Contains(content, rule.prefix) {
 			items = append(items, &memport.MemoryItem{
-				UserID:     userID,
 				ProjectID:  projectID,
 				Scope:      memport.ScopeProject,
 				Category:   rule.category,

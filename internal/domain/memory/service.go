@@ -12,14 +12,12 @@ import (
 
 	"github.com/spray272598/code-agent/internal/domain/agent/adapter/port"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
-	"github.com/spray272598/code-agent/internal/domain/tenant"
 	"github.com/spray272598/code-agent/internal/domain/vector"
 )
 
-// ErrTenantMissing is returned by ctx-driven entry points (SearchCtx) when the
-// caller is not authenticated. Business code that flows through authJWT never
-// sees this; tests and admin tools must inject a tenant via tenant.With.
-var ErrTenantMissing = errors.New("tenant missing from context")
+// ErrProjectMissing is returned by ctx-driven entry points (SearchCtx) when no
+// project scope is supplied.
+var ErrProjectMissing = errors.New("project scope required")
 
 // Service long-term memory: user + project scopes (walicode CoreMemory inspired).
 type Service struct {
@@ -55,9 +53,6 @@ func (s *Service) SetEmbedder(e port.IEmbeddingPort) { s.embedder = e }
 func (s *Service) Save(ctx context.Context, item *memport.MemoryItem) error {
 	if s == nil || s.repo == nil || item == nil {
 		return fmt.Errorf("memory unavailable")
-	}
-	if item.UserID == "" {
-		return fmt.Errorf("userId required")
 	}
 	item.Content = strings.TrimSpace(item.Content)
 	if item.Content == "" {
@@ -152,16 +147,15 @@ func TemporalDecay(createdAt time.Time, source string) float64 {
 }
 
 // findDuplicate returns the ID of the most semantically similar existing memory
-// (within user+project scope) when its similarity exceeds dupThreshold.
-// Sprint 1.10: prefers the vector index with a strict user_id payload filter
-// (multi-tenant safe); on ErrUnavailable or any error falls back to the
-// in-process cosine over List.
+// (within project scope) when its similarity exceeds dupThreshold.
+// Sprint 1.10: prefers the vector index with a project_id payload filter; on
+// ErrUnavailable or any error falls back to the in-process cosine over List.
 func (s *Service) findDuplicate(ctx context.Context, item *memport.MemoryItem, emb []float32) (int64, bool) {
 	if s.embedder == nil || len(emb) == 0 {
 		return 0, false
 	}
-	if s.vector != nil && s.collection != "" && item.UserID != "" {
-		filter := map[string]any{"user_id": item.UserID}
+	if s.vector != nil && s.collection != "" && item.ProjectID != "" {
+		filter := map[string]any{"project_id": item.ProjectID}
 		hits, err := s.vector.Search(ctx, s.collection, emb, 5, filter)
 		if err == nil {
 			for _, h := range hits {
@@ -178,7 +172,7 @@ func (s *Service) findDuplicate(ctx context.Context, item *memport.MemoryItem, e
 		}
 		// fall through to legacy path
 	}
-	existing, err := s.List(ctx, item.UserID, item.ProjectID, "", 200)
+	existing, err := s.List(ctx, item.ProjectID, "", 200)
 	if err != nil || len(existing) == 0 {
 		return 0, false
 	}
@@ -198,14 +192,14 @@ func (s *Service) findDuplicate(ctx context.Context, item *memport.MemoryItem, e
 	return 0, false
 }
 
-func (s *Service) List(ctx context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+func (s *Service) List(ctx context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
 	if s == nil || s.repo == nil {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 20
 	}
-	return s.repo.List(ctx, userID, projectID, scope, limit)
+	return s.repo.List(ctx, projectID, scope, limit)
 }
 
 // Backfill computes embeddings for stored memories that lack one (e.g. saved
@@ -251,7 +245,7 @@ func (s *Service) Prune(ctx context.Context, minImportance int, olderThan time.T
 	return n
 }
 
-func (s *Service) Search(ctx context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+func (s *Service) Search(ctx context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
 	if s == nil || s.repo == nil {
 		return nil, nil
 	}
@@ -266,7 +260,7 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		if keywordQuery == "" {
 			keywordQuery = query
 		}
-		return s.repo.Search(ctx, userID, projectID, keywordQuery, limit)
+		return s.repo.Search(ctx, projectID, keywordQuery, limit)
 	}
 
 	qvecs, err := s.embedder.Embed(ctx, []string{query})
@@ -275,7 +269,7 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 		if keywordQuery == "" {
 			keywordQuery = query
 		}
-		return s.repo.Search(ctx, userID, projectID, keywordQuery, limit)
+		return s.repo.Search(ctx, projectID, keywordQuery, limit)
 	}
 	qvec := qvecs[0]
 
@@ -283,17 +277,17 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 	if recallQuery == "" {
 		recallQuery = query
 	}
-	candidates, err := s.repo.Search(ctx, userID, projectID, recallQuery, limit*4)
+	candidates, err := s.repo.Search(ctx, projectID, recallQuery, limit*4)
 	if err != nil {
-		candidates, _ = s.repo.List(ctx, userID, projectID, "", limit*4)
+		candidates, _ = s.repo.List(ctx, projectID, "", limit*4)
 	}
 	if len(candidates) == 0 {
 		return nil, nil
 	}
 
 	var idOrder map[int64]float32
-	if s.vector != nil && s.collection != "" && userID != "" {
-		filter := map[string]any{"user_id": userID}
+	if s.vector != nil && s.collection != "" && projectID != "" {
+		filter := map[string]any{"project_id": projectID}
 		hits, verr := s.vector.Search(ctx, s.collection, qvec, limit*4, filter)
 		if verr == nil {
 			idOrder = make(map[int64]float32, len(hits))
@@ -342,14 +336,13 @@ func (s *Service) Search(ctx context.Context, userID, projectID, query string, l
 	return out, nil
 }
 
-// SearchCtx is the ctx-driven (Sprint 1.6/1.10) entry point: derives userID
-// from tenant.From(ctx). Returns ErrTenantMissing when ctx is unauthenticated.
+// SearchCtx is the ctx-driven entry point for HTTP handlers. The harness has no
+// accounts, so it resolves the project-scoped memory directly.
 func (s *Service) SearchCtx(ctx context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
-	t, ok := tenant.From(ctx)
-	if !ok || t.UserID == "" {
-		return nil, ErrTenantMissing
+	if projectID == "" {
+		return nil, ErrProjectMissing
 	}
-	return s.Search(ctx, t.UserID, projectID, query, limit)
+	return s.Search(ctx, projectID, query, limit)
 }
 
 // BackfillVector (Sprint 1.11) ensures the dense-vector index reflects every
@@ -374,9 +367,6 @@ func (s *Service) BackfillVector(ctx context.Context, limit int) int {
 	}
 	n := 0
 	for _, it := range items {
-		if it.UserID == "" {
-			continue
-		}
 		if len(it.Embedding) == 0 {
 			if s.embedder == nil {
 				continue
@@ -406,7 +396,7 @@ func (s *Service) indexOne(ctx context.Context, item *memport.MemoryItem) {
 	if s.vector == nil || s.collection == "" || item == nil {
 		return
 	}
-	if item.UserID == "" || len(item.Embedding) == 0 {
+	if len(item.Embedding) == 0 {
 		return
 	}
 	if err := s.vector.Upsert(ctx, s.collection, []vector.Point{pointOf(item)}); err != nil && !errors.Is(err, vector.ErrUnavailable) {
@@ -419,16 +409,15 @@ func pointOf(it *memport.MemoryItem) vector.Point {
 		ID:     strconv.FormatInt(it.ID, 10),
 		Vector: it.Embedding,
 		Payload: map[string]any{
-			"user_id":    it.UserID,
 			"project_id": it.ProjectID,
 			"scope":      string(it.Scope),
 		},
 	}
 }
 
-// FormatForPrompt retrieves top memories for user+project and formats for system prompt.
-func (s *Service) FormatForPrompt(ctx context.Context, userID, projectID, query string, limit int) string {
-	if s == nil || s.repo == nil || userID == "" {
+// FormatForPrompt retrieves top memories for the project and formats for system prompt.
+func (s *Service) FormatForPrompt(ctx context.Context, projectID, query string, limit int) string {
+	if s == nil || s.repo == nil || projectID == "" {
 		return ""
 	}
 	if limit <= 0 {
@@ -436,22 +425,22 @@ func (s *Service) FormatForPrompt(ctx context.Context, userID, projectID, query 
 	}
 	var items []memport.MemoryItem
 	if query != "" {
-		found, err := s.Search(ctx, userID, projectID, query, limit)
+		found, err := s.Search(ctx, projectID, query, limit)
 		if err == nil {
 			items = found
 		}
 	}
 	if len(items) < limit {
 		// merge user + project lists by importance
-		userItems, _ := s.List(ctx, userID, "", memport.ScopeUser, limit)
-		projItems, _ := s.List(ctx, userID, projectID, memport.ScopeProject, limit)
+		userItems, _ := s.List(ctx, "", memport.ScopeUser, limit)
+		projItems, _ := s.List(ctx, projectID, memport.ScopeProject, limit)
 		items = mergeUnique(items, userItems, projItems, limit)
 	}
 	if len(items) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("## Long-term memory (user + project)\n")
+	b.WriteString("## Long-term memory\n")
 	b.WriteString("Respect these facts/preferences unless the user overrides them.\n")
 	for _, it := range items {
 		b.WriteString(fmt.Sprintf("- [%s|%s|imp=%d] %s\n", it.Scope, it.Category, it.Importance, it.Content))
@@ -482,8 +471,8 @@ func looksMemoryIntent(text string) bool {
 // Strategy: a cheap trigger pre-filter first; then, when an LLM extractor is
 // configured, delegate to it for precise semantic judgment + structured output;
 // finally fall back to the legacy raw-text save when the LLM is absent or fails.
-func (s *Service) MaybeExtractFromUserCorrection(ctx context.Context, userID, projectID, sessionID, text string) {
-	if s == nil || s.repo == nil || userID == "" || text == "" {
+func (s *Service) MaybeExtractFromUserCorrection(ctx context.Context, projectID, sessionID, text string) {
+	if s == nil || s.repo == nil || projectID == "" || text == "" {
 		return
 	}
 	// cheap pre-filter: skip obviously non-memory turns without any LLM cost
@@ -507,7 +496,7 @@ func (s *Service) MaybeExtractFromUserCorrection(ctx context.Context, userID, pr
 					imp = 100
 				}
 				if err := s.Save(ctx, &memport.MemoryItem{
-					UserID: userID, ProjectID: projectID, Scope: memport.ScopeUser,
+					ProjectID: projectID, Scope: memport.ScopeUser,
 					Category: it.Category, Content: it.Content,
 					Importance: imp, Source: "auto:" + sessionID,
 				}); err != nil {
@@ -522,7 +511,7 @@ func (s *Service) MaybeExtractFromUserCorrection(ctx context.Context, userID, pr
 
 	// rule fallback: keep legacy behavior (raw text) so memory never regresses
 	if err := s.Save(ctx, &memport.MemoryItem{
-		UserID: userID, ProjectID: projectID, Scope: memport.ScopeUser,
+		ProjectID: projectID, Scope: memport.ScopeUser,
 		Category: "correction", Content: truncateRunes(text, 300),
 		Importance: 70, Source: "auto:" + sessionID,
 	}); err != nil {

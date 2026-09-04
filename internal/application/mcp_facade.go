@@ -8,7 +8,7 @@ import (
 )
 
 type MCPFacade struct {
-	factory mcpport.IUserMCPManagerFactory
+	factory mcpport.IMCPManagerFactory
 }
 
 func (m *MCPFacade) MCPFor(ctx context.Context) (mcpport.IMCPManagerPort, error) {

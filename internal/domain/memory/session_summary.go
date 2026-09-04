@@ -136,7 +136,7 @@ func NewTitleGenerator(summary *SessionSummary, memSvc *Service) *TitleGenerator
 	return &TitleGenerator{summary: summary, memSvc: memSvc}
 }
 
-func (tg *TitleGenerator) Update(ctx context.Context, sessionID, userID, projectID string, messages []struct{ Role, Content string }, turnCount int) error {
+func (tg *TitleGenerator) Update(ctx context.Context, sessionID, projectID string, messages []struct{ Role, Content string }, turnCount int) error {
 	if !tg.summary.ShouldRefresh(sessionID, turnCount) {
 		return nil
 	}
@@ -149,7 +149,7 @@ func (tg *TitleGenerator) Update(ctx context.Context, sessionID, userID, project
 			tg.summary.UpdateWatermark(sessionID, turnCount)
 			if tg.memSvc != nil {
 				_ = tg.memSvc.Save(ctx, &memport.MemoryItem{
-					UserID: userID, ProjectID: projectID,
+					ProjectID: projectID,
 					Scope: memport.ScopeProject, Category: "session_title",
 					Content:    fmt.Sprintf("Session %s: %s", sessionID, newTitle),
 					Importance: 30, Source: "title_gen",

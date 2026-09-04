@@ -113,7 +113,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		l.memCtx.Bind(session.UserID, session.ProjectID)
 	}
 	if l.memSvc != nil && !continuing {
-		l.memSvc.MaybeExtractFromUserCorrection(ctx, session.UserID, session.ProjectID, session.ID, userInput)
+		l.memSvc.MaybeExtractFromUserCorrection(ctx, session.ProjectID, session.ID, userInput)
 	}
 
 	var activeSkill *skill.Skill
@@ -306,7 +306,7 @@ func (l *Loop) Run(ctx context.Context, session *sessmodel.Session, userInput st
 		l.sysCacheVal = sys
 	}
 	if l.memSvc != nil {
-		memBlock := l.memSvc.FormatForPrompt(ctx, session.UserID, session.ProjectID, userInput, 8)
+		memBlock := l.memSvc.FormatForPrompt(ctx, session.ProjectID, userInput, 8)
 		if memBlock != "" {
 			sys += "\n" + memBlock
 			publish(&Event{Type: EventThought, Content: "memory injected", Timestamp: now()})

@@ -36,7 +36,7 @@ type ScoredItem struct {
 	Score float64
 }
 
-func (s *Service) HybridSearch(ctx context.Context, userID, projectID, query string, opts SearchOptions) ([]ScoredItem, error) {
+func (s *Service) HybridSearch(ctx context.Context, projectID, query string, opts SearchOptions) ([]ScoredItem, error) {
 	if s == nil || s.repo == nil {
 		return nil, nil
 	}
@@ -45,7 +45,7 @@ func (s *Service) HybridSearch(ctx context.Context, userID, projectID, query str
 	var vectorResults []ScoredItem
 
 	if opts.UseFTS {
-		items, err := s.repo.Search(ctx, userID, projectID, query, opts.Limit*2)
+		items, err := s.repo.Search(ctx, projectID, query, opts.Limit*2)
 		if err == nil {
 			for _, it := range items {
 				score := computeFTSScore(query, it)
@@ -57,7 +57,7 @@ func (s *Service) HybridSearch(ctx context.Context, userID, projectID, query str
 	}
 
 	if opts.UseVector && s.vector != nil && s.embedder != nil {
-		vectorResults = s.vectorSearch(ctx, userID, projectID, query, opts)
+		vectorResults = s.vectorSearch(ctx, projectID, query, opts)
 	}
 
 	merged := mergeSearchResults(ftsResults, vectorResults, opts)
@@ -117,7 +117,7 @@ func computeFTSScore(query string, item memport.MemoryItem) float64 {
 	return score
 }
 
-func (s *Service) vectorSearch(ctx context.Context, userID, projectID, query string, opts SearchOptions) []ScoredItem {
+func (s *Service) vectorSearch(ctx context.Context, projectID, query string, opts SearchOptions) []ScoredItem {
 	if s.vector == nil || s.embedder == nil {
 		return nil
 	}
@@ -129,7 +129,6 @@ func (s *Service) vectorSearch(ctx context.Context, userID, projectID, query str
 	queryVec := vecs[0]
 
 	results, err := s.vector.Search(ctx, s.collection, queryVec, opts.Limit*2, map[string]any{
-		"user_id":    userID,
 		"project_id": projectID,
 	})
 	if err != nil {
@@ -155,7 +154,7 @@ func (s *Service) vectorSearch(ctx context.Context, userID, projectID, query str
 		}
 
 		item := memport.MemoryItem{
-			ID: id, UserID: userID, ProjectID: projectID,
+			ID: id, ProjectID: projectID,
 			Content: content, Category: category, Importance: importance,
 			Scope: memport.ScopeProject,
 		}
@@ -195,8 +194,8 @@ func mergeSearchResults(fts, vector []ScoredItem, opts SearchOptions) []ScoredIt
 	return merged
 }
 
-func (s *Service) FormatForPromptExtended(ctx context.Context, userID, projectID, query string, limit int, opts SearchOptions) string {
-	if s == nil || userID == "" {
+func (s *Service) FormatForPromptExtended(ctx context.Context, projectID, query string, limit int, opts SearchOptions) string {
+	if s == nil {
 		return ""
 	}
 	if limit <= 0 {
@@ -204,7 +203,7 @@ func (s *Service) FormatForPromptExtended(ctx context.Context, userID, projectID
 	}
 	opts.Limit = limit
 
-	scored, err := s.HybridSearch(ctx, userID, projectID, query, opts)
+	scored, err := s.HybridSearch(ctx, projectID, query, opts)
 	if err != nil || len(scored) == 0 {
 		return ""
 	}

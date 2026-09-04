@@ -93,8 +93,8 @@ func (p *PromptBuilder) Build(ctx context.Context, userID, projectID, userInput 
 	}
 
 	var dyn []string
-	if p.mem != nil && userID != "" {
-		if block := p.mem.FormatForPrompt(ctx, userID, projectID, userInput, 8); block != "" {
+	if p.mem != nil {
+		if block := p.mem.FormatForPrompt(ctx, projectID, userInput, 8); block != "" {
 			dyn = append(dyn, block)
 		}
 	}

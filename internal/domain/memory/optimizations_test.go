@@ -257,17 +257,17 @@ func TestSearch_WithTemporalDecay(t *testing.T) {
 	recent := time.Now()
 
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 		Content: "go test backend deployment pipeline", Importance: 80,
 		Source: "session", CreatedAt: old,
 	})
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 		Content: "go test frontend component testing", Importance: 80,
 		Source: "session", CreatedAt: recent,
 	})
 
-	items, err := svc.Search(ctx, "u1", "", "go test", 5)
+	items, err := svc.Search(ctx, "p1", "go test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,17 +283,17 @@ func TestSearch_WithSourceWeighting(t *testing.T) {
 	svc.SetEmbedder(dimEmbedder(64))
 
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 		Content: "project uses go modules always for backend", Importance: 70,
 		Source: "global", CreatedAt: time.Now(),
 	})
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 		Content: "sessions rely on go modules for frontend", Importance: 70,
 		Source: "session", CreatedAt: time.Now(),
 	})
 
-	items, err := svc.Search(ctx, "u1", "", "go modules", 5)
+	items, err := svc.Search(ctx, "p1", "go modules", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,11 +308,11 @@ func TestSearch_KeywordFallback_UsesExpandedQuery(t *testing.T) {
 	svc := memory.NewService(repo)
 
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 		Content: "prefer go test", Importance: 80, Source: "manual",
 	})
 
-	items, err := svc.Search(ctx, "u1", "", "prefer go test", 5)
+	items, err := svc.Search(ctx, "p1", "prefer go test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,12 +338,12 @@ func TestSearch_MMR_Diversity(t *testing.T) {
 	}
 	for _, c := range memories {
 		svc.Save(ctx, &memport.MemoryItem{
-			UserID: "u1", Scope: memport.ScopeUser, Category: "test",
+			ProjectID: "p1", Scope: memport.ScopeUser, Category: "test",
 			Content: c.content, Importance: 60, Source: c.source,
 		})
 	}
 
-	items, err := svc.Search(ctx, "u1", "", "go test", 5)
+	items, err := svc.Search(ctx, "p1", "go test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,18 +361,18 @@ func TestSearch_EvergreenExemptFromDecay(t *testing.T) {
 	old := time.Now().Add(-120 * 24 * time.Hour)
 
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "fact",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "fact",
 		Content: "project uses go modules always for backend", Importance: 90,
 		Source: "project", CreatedAt: old,
 	})
 
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "fact",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "fact",
 		Content: "sessions rely on go modules for frontend", Importance: 90,
 		Source: "session", CreatedAt: old,
 	})
 
-	items, err := svc.Search(ctx, "u1", "", "go modules", 5)
+	items, err := svc.Search(ctx, "p1", "go modules", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,13 +450,13 @@ func TestSearch_Integration_AllOptimizations(t *testing.T) {
 
 	for _, m := range memories {
 		svc.Save(ctx, &memport.MemoryItem{
-			UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+			ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 			Content: m.content, Importance: m.imp,
 			Source: m.source, CreatedAt: m.createdAt,
 		})
 	}
 
-	items, err := svc.Search(ctx, "u1", "", "go test", 10)
+	items, err := svc.Search(ctx, "p1", "go test", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,11 +479,11 @@ func TestSearch_NoEmbedder_ExpandedKeyword(t *testing.T) {
 	svc := memory.NewService(repo)
 
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 		Content: "prefer go test over manual testing", Importance: 80,
 	})
 
-	items, err := svc.Search(ctx, "u1", "", "prefer go test", 5)
+	items, err := svc.Search(ctx, "p1", "prefer go test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,11 +498,11 @@ func TestExpandQuery_IntegrationInSearch(t *testing.T) {
 	svc := memory.NewService(repo)
 
 	svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", Scope: memport.ScopeUser, Category: "pref",
+		ProjectID: "p1", Scope: memport.ScopeUser, Category: "pref",
 		Content: "use go test for testing", Importance: 80,
 	})
 
-	items, err := svc.Search(ctx, "u1", "", "the go test", 5)
+	items, err := svc.Search(ctx, "p1", "the go test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}

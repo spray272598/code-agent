@@ -8,7 +8,6 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/session/model"
-	"github.com/spray272598/code-agent/internal/domain/tenant"
 )
 
 // --- Session ---
@@ -181,9 +180,9 @@ func (r *SQLiteMemoryRepo) Save(ctx context.Context, item *memport.MemoryItem) e
 	emb := memport.EncodeEmbedding(item.Embedding)
 	if item.ID == 0 {
 		res, err := r.db.ExecContext(ctx, `
-INSERT INTO core_memory (user_id,project_id,scope,category,content,importance,source,embedding,created_at)
-VALUES (?,?,?,?,?,?,?,?,?)`,
-			item.UserID, item.ProjectID, string(item.Scope), item.Category, item.Content,
+INSERT INTO core_memory (project_id,scope,category,content,importance,source,embedding,created_at)
+VALUES (?,?,?,?,?,?,?,?)`,
+			item.ProjectID, string(item.Scope), item.Category, item.Content,
 			item.Importance, item.Source, emb, time.Now().Format(time.RFC3339Nano))
 		if err != nil {
 			return err
@@ -198,19 +197,19 @@ UPDATE core_memory SET content=?, importance=?, category=?, scope=?, embedding=?
 	return err
 }
 
-func (r *SQLiteMemoryRepo) List(ctx context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+func (r *SQLiteMemoryRepo) List(ctx context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	q := `SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory WHERE user_id=?`
-	args := []any{userID}
+	q := `SELECT id,project_id,scope,category,content,importance,source,embedding FROM core_memory WHERE 1=1`
+	args := []any{}
+	if projectID != "" {
+		q += ` AND project_id=?`
+		args = append(args, projectID)
+	}
 	if scope != "" {
 		q += ` AND scope=?`
 		args = append(args, string(scope))
-	}
-	if scope == memport.ScopeProject && projectID != "" {
-		q += ` AND project_id=?`
-		args = append(args, projectID)
 	}
 	q += ` ORDER BY importance DESC LIMIT ?`
 	args = append(args, limit)
@@ -222,15 +221,17 @@ func (r *SQLiteMemoryRepo) List(ctx context.Context, userID, projectID string, s
 	return scanMemRows(rows)
 }
 
-func (r *SQLiteMemoryRepo) Search(ctx context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+func (r *SQLiteMemoryRepo) Search(ctx context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	// FTS-lite: LIKE over content; score by importance
+	// FTS-lite: LIKE over content; score by importance. Single-operator: all
+	// user- and project-scoped memories are visible.
+	like := "%" + query + "%"
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory
-WHERE user_id=? AND content LIKE ?
-ORDER BY importance DESC LIMIT ?`, userID, "%"+query+"%", limit)
+SELECT id,project_id,scope,category,content,importance,source,embedding FROM core_memory
+WHERE (scope='user' OR (scope='project' AND (project_id=? OR project_id='' OR ?= ''))) AND content LIKE ?
+ORDER BY importance DESC LIMIT ?`, projectID, projectID, like, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +258,7 @@ func (r *SQLiteMemoryRepo) ListNoEmbedding(ctx context.Context, limit int) ([]me
 		limit = 100
 	}
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory
+SELECT id,project_id,scope,category,content,importance,source,embedding FROM core_memory
 WHERE embedding='' OR embedding IS NULL LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -287,7 +288,7 @@ func scanMemRows(rows *sql.Rows) ([]memport.MemoryItem, error) {
 	for rows.Next() {
 		var it memport.MemoryItem
 		var scope, emb string
-		if err := rows.Scan(&it.ID, &it.UserID, &it.ProjectID, &scope, &it.Category, &it.Content, &it.Importance, &it.Source, &emb); err != nil {
+		if err := rows.Scan(&it.ID, &it.ProjectID, &scope, &it.Category, &it.Content, &it.Importance, &it.Source, &emb); err != nil {
 			return nil, err
 		}
 		it.Scope = memport.Scope(scope)
@@ -316,9 +317,13 @@ func (r *SQLiteAuditRepo) ListBySession(ctx context.Context, userID, sessionID s
 	if limit <= 0 {
 		limit = 100
 	}
-	// Multi-tenant isolation (Sprint 1.7): always scope by user_id; session_id is optional.
-	q := `SELECT user_id,session_id,action,tool,detail,decision,latency_ms,created_at FROM audit_log WHERE user_id=?`
-	args := []any{userID}
+	// Single-operator harness: an empty userID matches every actor; session_id is optional.
+	q := `SELECT user_id,session_id,action,tool,detail,decision,latency_ms,created_at FROM audit_log WHERE 1=1`
+	args := []any{}
+	if userID != "" {
+		q += ` AND user_id=?`
+		args = append(args, userID)
+	}
 	if sessionID != "" {
 		q += ` AND session_id=?`
 		args = append(args, sessionID)
@@ -342,12 +347,9 @@ func (r *SQLiteAuditRepo) ListBySession(ctx context.Context, userID, sessionID s
 	return out, rows.Err()
 }
 
-// ListForUser is the ctx-driven (Sprint 1.6) form. Delegates to ListBySession
-// once the tenant is resolved.
+// ListForUser is the ctx-driven (Sprint 1.6) form. In the single-operator
+// harness there is no tenant dimension, so it delegates directly to
+// ListBySession with an empty userID filter.
 func (r *SQLiteAuditRepo) ListForUser(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
-	t, ok := tenant.From(ctx)
-	if !ok || t.UserID == "" {
-		return nil, ErrTenantMissing
-	}
-	return r.ListBySession(ctx, t.UserID, sessionID, limit)
+	return r.ListBySession(ctx, "", sessionID, limit)
 }

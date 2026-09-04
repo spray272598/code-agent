@@ -30,7 +30,7 @@ type RecoveryResult struct {
 	Duration       time.Duration
 }
 
-func (r *CompactionRecovery) AfterCompaction(ctx context.Context, userID, projectID, query string) (*RecoveryResult, error) {
+func (r *CompactionRecovery) AfterCompaction(ctx context.Context, projectID, query string) (*RecoveryResult, error) {
 	start := time.Now()
 	result := &RecoveryResult{}
 
@@ -40,7 +40,7 @@ func (r *CompactionRecovery) AfterCompaction(ctx context.Context, userID, projec
 
 	opts := DefaultSearchOptions()
 	opts.MinScore = r.minScore
-	scored, err := r.memSvc.HybridSearch(ctx, userID, projectID, query, opts)
+	scored, err := r.memSvc.HybridSearch(ctx, projectID, query, opts)
 	if err != nil {
 		return result, err
 	}
@@ -58,8 +58,8 @@ func (r *CompactionRecovery) AfterCompaction(ctx context.Context, userID, projec
 		checkpointHits := 0
 		for _, sid := range sessions {
 			entries, _ := r.checkpoints.List(ctx, sid)
-			for _, e := range entries {
-				if e.UserID == userID && len(recoveredIDs) < r.maxLookback*2 {
+			for range entries {
+				if len(recoveredIDs) < r.maxLookback*2 {
 					checkpointHits++
 				}
 			}
@@ -71,14 +71,14 @@ func (r *CompactionRecovery) AfterCompaction(ctx context.Context, userID, projec
 	}
 
 	if len(items) > 0 {
-		result.RecoveredText = r.memSvc.FormatForPromptExtended(ctx, userID, projectID, query, len(items), opts)
+		result.RecoveredText = r.memSvc.FormatForPromptExtended(ctx, projectID, query, len(items), opts)
 	}
 
 	result.Duration = time.Since(start)
 	return result, nil
 }
 
-func (r *CompactionRecovery) RecoverSessionContext(ctx context.Context, userID, projectID, sessionID, query string) ([]memport.MemoryItem, error) {
+func (r *CompactionRecovery) RecoverSessionContext(ctx context.Context, projectID, sessionID, query string) ([]memport.MemoryItem, error) {
 	if r.checkpoints == nil {
 		return nil, nil
 	}
@@ -91,7 +91,7 @@ func (r *CompactionRecovery) RecoverSessionContext(ctx context.Context, userID, 
 	var items []memport.MemoryItem
 	for _, e := range entries {
 		items = append(items, memport.MemoryItem{
-			UserID: userID, ProjectID: projectID,
+			ProjectID: projectID,
 			Content: e.Content, Category: e.Category,
 			Importance: 60, Scope: memport.ScopeProject,
 			Source: "compaction_recovery",

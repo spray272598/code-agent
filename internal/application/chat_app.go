@@ -14,7 +14,6 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/blob"
 	"github.com/spray272598/code-agent/internal/domain/checkpoint"
 	"github.com/spray272598/code-agent/internal/domain/hook"
-	"github.com/spray272598/code-agent/internal/domain/llmkey"
 	mcpport "github.com/spray272598/code-agent/internal/domain/mcp/adapter/port"
 	mcpmodel "github.com/spray272598/code-agent/internal/domain/mcp/model"
 	"github.com/spray272598/code-agent/internal/domain/memory"
@@ -42,15 +41,11 @@ type ChatApp struct {
 	slash       *slash.Registry
 	memSvc      *memory.Service
 	auditRepo   audit.Repository
-	llmKeyRepo  llmkey.Repository
 	blobs       blob.Store
 	summaryRepo sessrepo.ISummaryRepository
 	workspace   string
 	keys        *auth.KeyStore
-	authSvc     *AuthService
-	tokenSvc    *TokenService
-	deviceSvc   *DeviceService
-	mcpFactory  mcpport.IUserMCPManagerFactory
+	mcpFactory  mcpport.IMCPManagerFactory
 
 	// Extracted services
 	cp      *CheckpointService
@@ -61,42 +56,23 @@ type ChatApp struct {
 }
 
 // Set* methods retained for gradual migration; prefer application.Option.
-func (a *ChatApp) SetSkills(s *skill.Service)    { a.skills = s }
-func (a *ChatApp) SetMemory(s *memory.Service)   { a.memSvc = s }
-func (a *ChatApp) SetAudit(r audit.Repository)   { a.auditRepo = r }
-func (a *ChatApp) SetLLMKey(r llmkey.Repository) { a.llmKeyRepo = r }
-func (a *ChatApp) SetBlobStore(s blob.Store)     { a.blobs = s }
+func (a *ChatApp) SetSkills(s *skill.Service)  { a.skills = s }
+func (a *ChatApp) SetMemory(s *memory.Service) { a.memSvc = s }
+func (a *ChatApp) SetAudit(r audit.Repository) { a.auditRepo = r }
+func (a *ChatApp) SetBlobStore(s blob.Store)   { a.blobs = s }
 
 // MCP delegation methods
-func (a *ChatApp) SetMCPFactory(f mcpport.IUserMCPManagerFactory) {
+func (a *ChatApp) SetMCPFactory(f mcpport.IMCPManagerFactory) {
 	a.mcpFactory = f
 	a.mcpFace = &MCPFacade{factory: f}
 }
-func (a *ChatApp) MCPFactory() mcpport.IUserMCPManagerFactory { return a.mcpFactory }
+func (a *ChatApp) MCPFactory() mcpport.IMCPManagerFactory { return a.mcpFactory }
 func (a *ChatApp) MCPFor(ctx context.Context) (mcpport.IMCPManagerPort, error) {
 	if a.mcpFace == nil {
 		return nil, fmt.Errorf("mcp factory not configured")
 	}
 	return a.mcpFace.MCPFor(ctx)
 }
-
-// SetAuthService injects the multi-tenant auth service (Sprint 1.2).
-func (a *ChatApp) SetAuthService(s *AuthService) { a.authSvc = s }
-
-// AuthService returns the multi-tenant auth service, or nil if not configured.
-func (a *ChatApp) AuthService() *AuthService { return a.authSvc }
-
-// SetTokenService injects the JWT/refresh token service (Sprint 1.3).
-func (a *ChatApp) SetTokenService(s *TokenService) { a.tokenSvc = s }
-
-// TokenService returns the token service, or nil if not configured.
-func (a *ChatApp) TokenService() *TokenService { return a.tokenSvc }
-
-// SetDeviceService injects the RFC8628 device authorization service (Sprint 1.4).
-func (a *ChatApp) SetDeviceService(s *DeviceService) { a.deviceSvc = s }
-
-// DeviceService returns the device authorization service, or nil if not configured.
-func (a *ChatApp) DeviceService() *DeviceService { return a.deviceSvc }
 
 // SSH delegation methods
 func (a *ChatApp) SetSSH(pool *sshinfra.Pool, repo sshport.IConnectionRepository) {
@@ -137,7 +113,6 @@ func (a *ChatApp) Skills() *skill.Service    { return a.skills }
 func (a *ChatApp) Memory() *memory.Service   { return a.memSvc }
 func (a *ChatApp) Audit() audit.Repository   { return a.auditRepo }
 func (a *ChatApp) Blobs() blob.Store         { return a.blobs }
-func (a *ChatApp) LLMKey() llmkey.Repository { return a.llmKeyRepo }
 
 func (a *ChatApp) GetBlob(ctx context.Context, key string) ([]byte, error) {
 	if a.blobs == nil {
@@ -153,9 +128,9 @@ func (a *ChatApp) ListAudit(ctx context.Context, userID, sessionID string, limit
 	return a.auditRepo.ListBySession(ctx, userID, sessionID, limit)
 }
 
-// ListAuditCtx is the ctx-driven (Sprint 1.6) form: the userID is taken from
-// tenant.From(ctx). Use this from HTTP handlers that already passed through
-// authJWT so the principal's userID is the only valid filter.
+// ListAuditCtx is the ctx-driven form. In the single-operator harness there is
+// no tenant, so it delegates to the audit repo's ListForUser which matches every
+// actor for the given session.
 func (a *ChatApp) ListAuditCtx(ctx context.Context, sessionID string, limit int) ([]audit.Entry, error) {
 	if a.auditRepo == nil {
 		return nil, nil
@@ -171,18 +146,18 @@ func (a *ChatApp) SaveMemory(ctx context.Context, item *memport.MemoryItem) erro
 	return a.memSvc.Save(ctx, item)
 }
 
-func (a *ChatApp) ListMemory(ctx context.Context, userID, projectID, scope string, limit int) ([]memport.MemoryItem, error) {
+func (a *ChatApp) ListMemory(ctx context.Context, projectID, scope string, limit int) ([]memport.MemoryItem, error) {
 	if a.memSvc == nil {
 		return nil, nil
 	}
-	return a.memSvc.List(ctx, userID, projectID, memport.Scope(scope), limit)
+	return a.memSvc.List(ctx, projectID, memport.Scope(scope), limit)
 }
 
-func (a *ChatApp) SearchMemory(ctx context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+func (a *ChatApp) SearchMemory(ctx context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
 	if a.memSvc == nil {
 		return nil, nil
 	}
-	return a.memSvc.Search(ctx, userID, projectID, query, limit)
+	return a.memSvc.Search(ctx, projectID, query, limit)
 }
 
 // InstallMCP installs/updates an MCP server via domain port.
@@ -192,7 +167,7 @@ func (a *ChatApp) InstallMCP(ctx context.Context, name, transport, command strin
 	}
 	mgr, err := a.mcpFactory.For(ctx)
 	if err != nil {
-		return fmt.Errorf("mcp tenant: %w", err)
+		return fmt.Errorf("mcp: %w", err)
 	}
 	if transport == "" {
 		transport = "stdio"

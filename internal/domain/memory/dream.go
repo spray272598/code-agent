@@ -49,11 +49,11 @@ type DreamResult struct {
 	Duration     time.Duration
 }
 
-func (s *Service) RunDreamConsolidation(ctx context.Context, cfg DreamConfig, userID, projectID string) (*DreamResult, error) {
+func (s *Service) RunDreamConsolidation(ctx context.Context, cfg DreamConfig, projectID string) (*DreamResult, error) {
 	start := time.Now()
 	result := &DreamResult{}
 
-	items, err := s.repo.List(ctx, userID, projectID, memport.ScopeProject, cfg.ConsolidateMax)
+	items, err := s.repo.List(ctx, projectID, memport.ScopeProject, cfg.ConsolidateMax)
 	if err != nil || len(items) < cfg.MinMemories {
 		return result, nil
 	}
@@ -80,7 +80,6 @@ func (s *Service) RunDreamConsolidation(ctx context.Context, cfg DreamConfig, us
 
 	if summary != "" {
 		item := &memport.MemoryItem{
-			UserID:     userID,
 			ProjectID:  projectID,
 			Scope:      memport.ScopeProject,
 			Category:   "dream_consolidation",
@@ -146,16 +145,16 @@ func ruleBasedConsolidate(contents []string) string {
 	return b.String()
 }
 
-func (s *Service) MaybeRunDreamConsolidation(ctx context.Context, cfg DreamConfig, userID, projectID string, sessionCount int) (*DreamResult, error) {
+func (s *Service) MaybeRunDreamConsolidation(ctx context.Context, cfg DreamConfig, projectID string, sessionCount int) (*DreamResult, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
 	if sessionCount < cfg.MinSessions {
 		return nil, nil
 	}
-	items, err := s.repo.List(ctx, userID, projectID, memport.ScopeProject, cfg.MinMemories+1)
+	items, err := s.repo.List(ctx, projectID, memport.ScopeProject, cfg.MinMemories+1)
 	if err != nil || len(items) < cfg.MinMemories {
 		return nil, nil
 	}
-	return s.RunDreamConsolidation(ctx, cfg, userID, projectID)
+	return s.RunDreamConsolidation(ctx, cfg, projectID)
 }

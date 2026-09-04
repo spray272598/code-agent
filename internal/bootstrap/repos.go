@@ -5,9 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/spray272598/code-agent/internal/domain/auth"
 	"github.com/spray272598/code-agent/internal/domain/kms"
-	"github.com/spray272598/code-agent/internal/domain/llmkey"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	sessrepo "github.com/spray272598/code-agent/internal/domain/session/adapter/repository"
 	"github.com/spray272598/code-agent/internal/domain/audit"
@@ -18,35 +16,30 @@ import (
 )
 
 // repos holds all repository instances created from the database.
+// The single-operator harness has no account/tenant layer, so there are no
+// user/device/refresh-token/llm-key repositories.
 type repos struct {
-	SessionRepo  sessrepo.ISessionRepository
-	MessageRepo  sessrepo.IMessageRepository
-	MemRepo      memport.IMemoryRepository
-	AuditRepo    audit.Repository
-	SummaryRepo  sessrepo.ISummaryRepository
-	UserRepo     auth.UserRepository
-	DeviceRepo   auth.DeviceRepository
-	RefreshRepo  auth.RefreshTokenRepository
-	LLMKeyRepo   llmkey.Repository
-	DB           *sql.DB
-	Closer       func()
-	dbType       string
+	SessionRepo sessrepo.ISessionRepository
+	MessageRepo sessrepo.IMessageRepository
+	MemRepo     memport.IMemoryRepository
+	AuditRepo   audit.Repository
+	SummaryRepo sessrepo.ISummaryRepository
+	DB          *sql.DB
+	Closer      func()
+	dbType      string
 }
 
 // buildRepos creates all repositories based on the database config.
 // Eliminates the 3x repeated switch pattern in Build().
 func buildRepos(cfg *config.Config, sealer kms.CryptoSealer) repos {
 	r := repos{
-		SessionRepo:  repository.NewMemorySessionRepo(),
-		MessageRepo:  repository.NewMemoryMessageRepo(),
-		MemRepo:      repository.NewMemoryCoreRepo(),
-		AuditRepo:    repository.NewMemoryAuditRepo(),
-		SummaryRepo:  repository.NewMemorySummaryRepo(),
-		UserRepo:     repository.NewMemoryUserRepo(),
-		DeviceRepo:   repository.NewMemoryDeviceRepo(),
-		RefreshRepo:  repository.NewMemoryRefreshTokenRepo(),
-		Closer:       func() {},
-		dbType:       "memory",
+		SessionRepo: repository.NewMemorySessionRepo(),
+		MessageRepo: repository.NewMemoryMessageRepo(),
+		MemRepo:     repository.NewMemoryCoreRepo(),
+		AuditRepo:   repository.NewMemoryAuditRepo(),
+		SummaryRepo: repository.NewMemorySummaryRepo(),
+		Closer:      func() {},
+		dbType:      "memory",
 	}
 
 	switch strings.ToLower(cfg.Database.Type) {
@@ -54,8 +47,6 @@ func buildRepos(cfg *config.Config, sealer kms.CryptoSealer) repos {
 		r = buildMySQL(cfg, sealer)
 	case "sqlite", "sqlite3":
 		r = buildSQLite(cfg, sealer)
-	default:
-		r.LLMKeyRepo = repository.NewMemoryLLMKeyRepo(sealer)
 	}
 
 	return r
@@ -71,10 +62,6 @@ func buildMySQL(cfg *config.Config, sealer kms.CryptoSealer) repos {
 		r.MemRepo = repository.NewMemoryCoreRepo()
 		r.AuditRepo = repository.NewMemoryAuditRepo()
 		r.SummaryRepo = repository.NewMemorySummaryRepo()
-		r.UserRepo = repository.NewMemoryUserRepo()
-		r.DeviceRepo = repository.NewMemoryDeviceRepo()
-		r.RefreshRepo = repository.NewMemoryRefreshTokenRepo()
-		r.LLMKeyRepo = repository.NewMemoryLLMKeyRepo(sealer)
 		r.Closer = func() {}
 		r.dbType = "memory"
 		return r
@@ -86,10 +73,6 @@ func buildMySQL(cfg *config.Config, sealer kms.CryptoSealer) repos {
 	r.MemRepo = repository.NewMySQLMemoryRepo(opened)
 	r.AuditRepo = repository.NewMySQLAuditRepo(opened)
 	r.SummaryRepo = repository.NewMySQLSummaryRepo(opened)
-	r.UserRepo = repository.NewMySQLUserRepo(opened)
-	r.DeviceRepo = repository.NewMySQLDeviceRepo(opened)
-	r.RefreshRepo = repository.NewMySQLRefreshTokenRepo(opened)
-	r.LLMKeyRepo = repository.NewMySQLLLMKeyRepo(opened, sealer)
 	r.Closer = func() { _ = opened.Close() }
 	return r
 }
@@ -108,10 +91,6 @@ func buildSQLite(cfg *config.Config, sealer kms.CryptoSealer) repos {
 		r.MemRepo = repository.NewMemoryCoreRepo()
 		r.AuditRepo = repository.NewMemoryAuditRepo()
 		r.SummaryRepo = repository.NewMemorySummaryRepo()
-		r.UserRepo = repository.NewMemoryUserRepo()
-		r.DeviceRepo = repository.NewMemoryDeviceRepo()
-		r.RefreshRepo = repository.NewMemoryRefreshTokenRepo()
-		r.LLMKeyRepo = repository.NewMemoryLLMKeyRepo(sealer)
 		r.Closer = func() {}
 		r.dbType = "memory"
 		return r
@@ -123,10 +102,6 @@ func buildSQLite(cfg *config.Config, sealer kms.CryptoSealer) repos {
 	r.MemRepo = repository.NewSQLiteMemoryRepo(opened)
 	r.AuditRepo = repository.NewSQLiteAuditRepo(opened)
 	r.SummaryRepo = repository.NewSQLiteSummaryRepo(opened)
-	r.UserRepo = repository.NewSQLiteUserRepo(opened)
-	r.DeviceRepo = repository.NewSQLiteDeviceRepo(opened)
-	r.RefreshRepo = repository.NewSQLiteRefreshTokenRepo(opened)
-	r.LLMKeyRepo = repository.NewSQLiteLLMKeyRepo(opened, sealer)
 	r.Closer = func() { _ = opened.Close() }
 	log.Printf("[bootstrap] sqlite path=%s\n", path)
 	return r

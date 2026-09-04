@@ -106,18 +106,13 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/permission/pending", s.handlePermPending)
 	mux.HandleFunc("/api/v1/permission/approve", s.handlePermApprove)
 	mux.HandleFunc("/api/v1/permission/reject", s.handlePermReject)
-	// MCP endpoints — Sprint 1.6: per-user. The factory resolves the Manager for
-	// the authenticated tenant; cross-tenant reads return ErrTenantMismatch.
-	mux.HandleFunc("/api/v1/mcp/servers", s.authJWT(s.handleMCPServers))
-	mux.HandleFunc("/api/v1/mcp/health", s.authJWT(s.handleMCPHealth))
-	mux.HandleFunc("/api/v1/mcp/tools", s.authJWT(s.handleMCPTools))
 	mux.HandleFunc("/api/v1/skills", s.handleSkills)
 	mux.HandleFunc("/api/v1/skills/install", s.handleSkillInstall)
 	mux.HandleFunc("/api/v1/skills/uninstall", s.handleSkillUninstall)
 	mux.HandleFunc("/api/v1/skills/reload", s.handleSkillReload)
 	mux.HandleFunc("/api/v1/memory", s.handleMemory)
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
-	mux.HandleFunc("/api/v1/audit", s.authJWT(s.handleAudit))
+	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/blobs", s.handleBlobGet)
 	mux.HandleFunc("/api/v1/usage", s.handleUsage)
 	mux.HandleFunc("/api/v1/session/plan/explore", s.handlePlanExplore)
@@ -138,21 +133,12 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/docs", s.handleSwaggerUI)
 
-	// auth (Sprint 1.2): public endpoints
-	mux.HandleFunc("/api/v1/auth/signup", s.handleSignup)
-	mux.HandleFunc("/api/v1/auth/verify", s.handleVerify)
-	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
-	mux.HandleFunc("/api/v1/auth/refresh", s.handleRefresh)
-	mux.HandleFunc("/api/v1/auth/forgot-password", s.handleForgotPassword)
-	mux.HandleFunc("/api/v1/auth/reset-password", s.handleResetPassword)
-	mux.HandleFunc("/api/v1/me", s.authJWT(s.handleMe))
-	mux.HandleFunc("/api/v1/me/profile", s.authJWT(s.handleUpdateProfile))
-	mux.HandleFunc("/api/v1/me/password", s.authJWT(s.handleChangePassword))
+	// MCP endpoints — single operator, no per-user manager factory. The host gRPC
+	// / ws layer and this HTTP surface share the one Manager wired at startup.
+	mux.HandleFunc("/api/v1/mcp/servers", s.handleMCPServers)
+	mux.HandleFunc("/api/v1/mcp/health", s.handleMCPHealth)
+	mux.HandleFunc("/api/v1/mcp/tools", s.handleMCPTools)
 
-	// device authorization (RFC8628, Sprint 1.4)
-	mux.HandleFunc("/api/v1/device/code", s.handleDeviceCode)
-	mux.HandleFunc("/api/v1/device/token", s.handleDeviceToken)
-	mux.HandleFunc("/api/v1/device/approve", s.authJWT(s.handleDeviceApprove))
 	mux.HandleFunc("/metrics", observability.WritePrometheus) // Prometheus scrape (auth-skipped)
 	if s.hostHub != nil {
 		mux.Handle("/ws/host", s.hostHub)
@@ -163,7 +149,7 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 		log.Printf("[http] ssh terminal ws: /ws/ssh?token=&connection=<name>&cols=&rows=\n")
 	}
 
-	handler := s.corsMiddleware(limitBody(s.maxBody, auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(observability.RequestSpanMiddleware(mux))))))
+	handler := s.corsMiddleware(limitBody(s.maxBody, auth(s.app, observability.AccessLog(observability.RequestIDMiddleware(mux)))))
 	s.srv = &http.Server{
 		Addr:              s.addr,
 		Handler:           handler,
@@ -214,30 +200,24 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
 }
 
+// auth enforces the single-credential model: an API key (header X-API-Key or a
+// Bearer token). When no keys are configured the gate is open (local/dev mode);
+// otherwise the static key must match. There is no account system, no JWT, and
+// no per-user tenant — the harness is single-operator.
 func auth(app *application.ChatApp, next http.Handler) http.Handler {
+	public := map[string]bool{
+		"/health":             true,
+		"/metrics":            true,
+		"/ws/host":            true,
+		"/ws/ssh":             true,
+		"/api/v1/openapi.json": true,
+		"/docs":               true,
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// public / health / metrics / openapi / host ws (ws auth itself)
-		switch r.URL.Path {
-		case "/health", "/metrics", "/ws/host", "/ws/ssh", "/api/v1/openapi.json", "/docs",
-			"/api/v1/auth/signup", "/api/v1/auth/verify", "/api/v1/auth/login", "/api/v1/auth/refresh",
-			"/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
-			"/api/v1/device/code", "/api/v1/device/token":
+		if public[r.URL.Path] {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// 1) Bearer JWT is the primary credential (Sprint 1.3+). The gateway only
-		//    decides allow/deny; downstream authJWT re-validates and injects the
-		//    principal for /api/v1/me and /api/v1/device/approve.
-		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-			if tok := app.TokenService(); tok != nil {
-				if _, err := tok.Validate(strings.TrimPrefix(h, "Bearer ")); err == nil {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-		}
-		// 2) API key fallback (dev / host-agent). With no keys configured this opens
-		//    the gate (dev mode); in production it validates the static key.
 		key := r.Header.Get("X-API-Key")
 		if key == "" {
 			if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {

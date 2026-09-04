@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"testing"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/spray272598/code-agent/internal/domain/audit"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
 	"github.com/spray272598/code-agent/internal/domain/session/model"
-	"github.com/spray272598/code-agent/internal/domain/tenant"
 	"github.com/spray272598/code-agent/internal/infrastructure/sqlite"
 )
 
@@ -154,7 +152,7 @@ func TestSQLiteMemoryRepo_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	item := &memport.MemoryItem{
-		UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+		ProjectID: "p1", Scope: memport.ScopeProject,
 		Category: "c", Content: "hello world", Importance: 5, Source: "test",
 	}
 	if err := repo.Save(ctx, item); err != nil {
@@ -171,7 +169,7 @@ func TestSQLiteMemoryRepo_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := repo.List(ctx, "u1", "p1", memport.ScopeProject, 0)
+	list, err := repo.List(ctx, "p1", memport.ScopeProject, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,14 +177,14 @@ func TestSQLiteMemoryRepo_RoundTrip(t *testing.T) {
 		t.Fatalf("List mismatch: %+v", list)
 	}
 
-	hits, err := repo.Search(ctx, "u1", "p1", "hello", 0)
+	hits, err := repo.Search(ctx, "p1", "hello", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(hits) != 1 {
 		t.Fatalf("Search want 1, got %d", len(hits))
 	}
-	none, err := repo.Search(ctx, "u1", "p1", "zzz", 0)
+	none, err := repo.Search(ctx, "p1", "zzz", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,13 +200,13 @@ func TestSQLiteMemoryRepo_RoundTrip(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("Prune want 1, got %d", n)
 	}
-	after, _ := repo.List(ctx, "u1", "p1", memport.ScopeProject, 0)
+	after, _ := repo.List(ctx, "p1", memport.ScopeProject, 0)
 	if len(after) != 0 {
 		t.Fatalf("after prune want 0, got %d", len(after))
 	}
 
 	// re-insert then Delete by id
-	item2 := &memport.MemoryItem{UserID: "u1", Scope: memport.ScopeUser, Content: "x", Importance: 1}
+	item2 := &memport.MemoryItem{Scope: memport.ScopeUser, Content: "x", Importance: 1}
 	if err := repo.Save(ctx, item2); err != nil {
 		t.Fatal(err)
 	}
@@ -245,18 +243,13 @@ func TestSQLiteAuditRepo_RoundTrip(t *testing.T) {
 		t.Fatalf("ListBySession mismatch: %+v", bySession)
 	}
 
-	// tenant-scoped form works
-	tenCtx := tenant.With(ctx, tenant.Tenant{UserID: "u1"})
-	byUser, err := repo.ListForUser(tenCtx, "s1", 0)
+	// single-operator form: ListForUser delegates to ListBySession for the
+	// given session and matches every actor regardless of operator identity.
+	byUser, err := repo.ListForUser(ctx, "s1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(byUser) != 1 {
 		t.Fatalf("ListForUser want 1, got %d", len(byUser))
-	}
-
-	// missing tenant -> ErrTenantMissing
-	if _, err := repo.ListForUser(context.Background(), "s1", 0); !errors.Is(err, ErrTenantMissing) {
-		t.Fatalf("expected ErrTenantMissing, got %v", err)
 	}
 }

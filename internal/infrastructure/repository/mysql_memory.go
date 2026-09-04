@@ -21,9 +21,9 @@ UPDATE core_memory SET content=?, importance=?, category=?, scope=?, embedding=?
 		return err
 	}
 	res, err := r.db.ExecContext(ctx, `
-INSERT INTO core_memory (user_id, project_id, scope, category, content, importance, source, embedding)
-VALUES (?,?,?,?,?,?,?,?)`,
-		item.UserID, item.ProjectID, string(item.Scope), item.Category, item.Content, item.Importance, item.Source, emb)
+INSERT INTO core_memory (project_id, scope, category, content, importance, source, embedding)
+VALUES (?,?,?,?,?,?,?)`,
+		item.ProjectID, string(item.Scope), item.Category, item.Content, item.Importance, item.Source, emb)
 	if err != nil {
 		return err
 	}
@@ -32,33 +32,34 @@ VALUES (?,?,?,?,?,?,?,?)`,
 	return nil
 }
 
-func (r *MySQLMemoryRepo) List(ctx context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+func (r *MySQLMemoryRepo) List(ctx context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	q := `SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory WHERE user_id=?`
-	args := []any{userID}
+	q := `SELECT id,project_id,scope,category,content,importance,source,embedding FROM core_memory WHERE 1=1`
+	args := []any{}
+	if projectID != "" {
+		q += ` AND project_id=?`
+		args = append(args, projectID)
+	}
 	if scope != "" {
 		q += ` AND scope=?`
 		args = append(args, string(scope))
-	}
-	if scope == memport.ScopeProject && projectID != "" {
-		q += ` AND project_id=?`
-		args = append(args, projectID)
 	}
 	q += ` ORDER BY importance DESC, id DESC LIMIT ?`
 	args = append(args, limit)
 	return r.scan(ctx, q, args...)
 }
 
-func (r *MySQLMemoryRepo) Search(ctx context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+func (r *MySQLMemoryRepo) Search(ctx context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	// LIKE fallback; importance as soft rank
-	q := `SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory
-WHERE user_id=? AND (scope='user' OR (scope='project' AND (project_id=? OR project_id='' OR ?= '')))`
-	args := []any{userID, projectID, projectID}
+	// LIKE fallback; importance as soft rank. Single-operator: return user- and
+	// project-scoped memories (no per-user isolation).
+	q := `SELECT id,project_id,scope,category,content,importance,source,embedding FROM core_memory
+WHERE (scope='user' OR (scope='project' AND (project_id=? OR project_id='' OR ?= '')))`
+	args := []any{projectID, projectID}
 	if query != "" {
 		q += ` AND (content LIKE ? OR category LIKE ?)`
 		like := "%" + query + "%"
@@ -73,7 +74,7 @@ func (r *MySQLMemoryRepo) ListNoEmbedding(ctx context.Context, limit int) ([]mem
 	if limit <= 0 {
 		limit = 100
 	}
-	q := `SELECT id,user_id,project_id,scope,category,content,importance,source,embedding FROM core_memory
+	q := `SELECT id,project_id,scope,category,content,importance,source,embedding FROM core_memory
 WHERE embedding IS NULL OR embedding='' LIMIT ?`
 	return r.scan(ctx, q, limit)
 }
@@ -104,7 +105,7 @@ func (r *MySQLMemoryRepo) scan(ctx context.Context, q string, args ...any) ([]me
 	for rows.Next() {
 		var it memport.MemoryItem
 		var scope, emb string
-		if err := rows.Scan(&it.ID, &it.UserID, &it.ProjectID, &scope, &it.Category, &it.Content, &it.Importance, &it.Source, &emb); err != nil {
+		if err := rows.Scan(&it.ID, &it.ProjectID, &scope, &it.Category, &it.Content, &it.Importance, &it.Source, &emb); err != nil {
 			return nil, err
 		}
 		it.Scope = memport.Scope(scope)

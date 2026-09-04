@@ -20,7 +20,7 @@ import (
 type ToolBridge struct {
 	mu       sync.Mutex
 	manager  mcpport.IMCPManagerPort
-	factory  mcpport.IUserMCPManagerFactory
+	factory  mcpport.IMCPManagerFactory
 	registry *tool.MapRegistry
 	mcpNames map[string]bool
 	cache    *mcpcache.ToolCache
@@ -34,7 +34,7 @@ func NewToolBridge(manager mcpport.IMCPManagerPort, registry *tool.MapRegistry) 
 
 // NewToolBridgeWithFactory stores the per-user factory on the bridge so
 // MCPTool.Execute can resolve the right Manager for the authenticated tenant.
-func NewToolBridgeWithFactory(f mcpport.IUserMCPManagerFactory, registry *tool.MapRegistry) *ToolBridge {
+func NewToolBridgeWithFactory(f mcpport.IMCPManagerFactory, registry *tool.MapRegistry) *ToolBridge {
 	return &ToolBridge{factory: f, registry: registry, mcpNames: map[string]bool{}}
 }
 
@@ -94,7 +94,7 @@ type IToolResolver interface {
 type (
 	directResolver  struct{ mgr mcpport.IMCPManagerPort }
 	factoryResolver struct {
-		f mcpport.IUserMCPManagerFactory
+		f mcpport.IMCPManagerFactory
 	}
 )
 

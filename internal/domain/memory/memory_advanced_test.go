@@ -21,12 +21,9 @@ func (r *fakeRepo) Save(_ context.Context, item *memport.MemoryItem) error {
 	return nil
 }
 
-func (r *fakeRepo) List(_ context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+func (r *fakeRepo) List(_ context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
 	var out []memport.MemoryItem
 	for _, it := range r.items {
-		if userID != "" && it.UserID != userID {
-			continue
-		}
 		if projectID != "" && it.ProjectID != projectID {
 			continue
 		}
@@ -41,10 +38,10 @@ func (r *fakeRepo) List(_ context.Context, userID, projectID string, scope mempo
 	return out, nil
 }
 
-func (r *fakeRepo) Search(_ context.Context, userID, projectID, query string, limit int) ([]memport.MemoryItem, error) {
+func (r *fakeRepo) Search(_ context.Context, projectID, query string, limit int) ([]memport.MemoryItem, error) {
 	var out []memport.MemoryItem
 	for _, it := range r.items {
-		if it.UserID == userID && (projectID == "" || it.ProjectID == projectID) {
+		if projectID == "" || it.ProjectID == projectID {
 			if len(query) == 0 || contains(it.Content, query) {
 				out = append(out, it)
 			}
@@ -113,7 +110,7 @@ func TestDreamConsolidation(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		_ = svc.Save(ctx, &memport.MemoryItem{
-			UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+			ProjectID: "p1", Scope: memport.ScopeProject,
 			Category: "test", Content: "memory item " + string(rune('a'+i)),
 			Importance: 50, Source: "test",
 		})
@@ -121,7 +118,7 @@ func TestDreamConsolidation(t *testing.T) {
 
 	cfg := DefaultDreamConfig()
 	cfg.MinMemories = 3
-	result, err := svc.RunDreamConsolidation(ctx, cfg, "u1", "p1")
+	result, err := svc.RunDreamConsolidation(ctx, cfg, "p1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +136,7 @@ func TestDreamMaybeRun(t *testing.T) {
 	cfg.MinSessions = 5
 	cfg.MinMemories = 2
 
-	result, err := svc.MaybeRunDreamConsolidation(ctx, cfg, "u1", "p1", 2)
+	result, err := svc.MaybeRunDreamConsolidation(ctx, cfg, "p1", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,11 +145,11 @@ func TestDreamMaybeRun(t *testing.T) {
 	}
 
 	_ = svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+		ProjectID: "p1", Scope: memport.ScopeProject,
 		Category: "test", Content: "test content", Importance: 50, Source: "test",
 	})
 
-	result, err = svc.MaybeRunDreamConsolidation(ctx, cfg, "u1", "p1", 10)
+	result, err = svc.MaybeRunDreamConsolidation(ctx, cfg, "p1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +169,7 @@ func TestFlushConversation(t *testing.T) {
 
 	cfg := DefaultFlushConfig()
 	cfg.AutoExtract = true
-	result, err := svc.FlushConversation(ctx, "u1", "p1", turns, cfg)
+	result, err := svc.FlushConversation(ctx, "p1", turns, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,18 +252,18 @@ func TestHybridSearch(t *testing.T) {
 	ctx := context.Background()
 
 	_ = svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+		ProjectID: "p1", Scope: memport.ScopeProject,
 		Category: "architecture", Content: "use Go for backend",
 		Importance: 80, Source: "test",
 	})
 	_ = svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+		ProjectID: "p1", Scope: memport.ScopeProject,
 		Category: "preference", Content: "always prefer clean code",
 		Importance: 60, Source: "test",
 	})
 
 	opts := DefaultSearchOptions()
-	scored, err := svc.HybridSearch(ctx, "u1", "p1", "Go", opts)
+	scored, err := svc.HybridSearch(ctx, "p1", "Go", opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,13 +279,13 @@ func TestFormatForPromptExtended(t *testing.T) {
 	ctx := context.Background()
 
 	_ = svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+		ProjectID: "p1", Scope: memport.ScopeProject,
 		Category: "arch", Content: "use Go with Gin framework",
 		Importance: 70, Source: "test",
 	})
 
 	opts := DefaultSearchOptions()
-	block := svc.FormatForPromptExtended(ctx, "u1", "p1", "Go", 5, opts)
+	block := svc.FormatForPromptExtended(ctx, "p1", "Go", 5, opts)
 	if block == "" {
 		t.Fatal("should return memory block")
 	}
@@ -332,7 +329,7 @@ func TestCompactionRecovery(t *testing.T) {
 	ctx := context.Background()
 
 	_ = svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+		ProjectID: "p1", Scope: memport.ScopeProject,
 		Category: "task", Content: "working on API endpoint",
 		Importance: 60, Source: "test",
 	})
@@ -345,13 +342,13 @@ func TestCompactionRecovery(t *testing.T) {
 	})
 
 	recovery := NewCompactionRecovery(svc, store)
-	result, err := recovery.AfterCompaction(ctx, "u1", "p1", "API endpoint")
+	result, err := recovery.AfterCompaction(ctx, "p1", "API endpoint")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("recovered=%d checkpointHits=%d", result.RecoveredItems, result.CheckpointHits)
 
-	items, err := recovery.RecoverSessionContext(ctx, "u1", "p1", "s1", "")
+	items, err := recovery.RecoverSessionContext(ctx, "p1", "s1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,12 +365,12 @@ func TestMemoryBackend(t *testing.T) {
 	backend := NewServiceBackend(svc)
 
 	_ = svc.Save(ctx, &memport.MemoryItem{
-		UserID: "u1", ProjectID: "p1", Scope: memport.ScopeProject,
+		ProjectID: "p1", Scope: memport.ScopeProject,
 		Category: "test", Content: "backend test",
 		Importance: 50, Source: "test",
 	})
 
-	items, _ := backend.List(ctx, "u1", "p1", memport.ScopeProject, 10)
+	items, _ := backend.List(ctx, "p1", memport.ScopeProject, 10)
 	if len(items) < 1 {
 		t.Fatal("backend list failed")
 	}

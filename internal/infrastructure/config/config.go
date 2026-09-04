@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -38,26 +39,6 @@ type Config struct {
 	// provider: "mem" (default, in-process) | "qdrant" (remote). Qdrant is only
 	// used when embedding is also enabled (LLM.EmbeddingEnabled).
 	Vector VectorConfig `yaml:"vector"`
-	// JWTSecret signs platform access/refresh tokens (HS256). Rotate by moving the
-	// current value to JWTSecretPrev and setting a new JWTSecret; tokens signed with
-	// either secret remain valid during the overlap window.
-	JWTSecret     string `yaml:"jwt_secret"`
-	JWTSecretPrev string `yaml:"jwt_secret_prev"`
-	// Auth holds RFC8628 device-flow / web-approval settings (Sprint 1.4).
-	Auth AuthConfig `yaml:"auth"`
-}
-
-// AuthConfig device authorization (RFC8628) settings.
-type AuthConfig struct {
-	// VerificationURI is where the user enters the user_code in a browser
-	// (e.g. https://app.example.com/devices/verify).
-	VerificationURI string `yaml:"verification_uri"`
-	// DeviceCodeTTLSec is how long a device_code/user_code stays valid.
-	DeviceCodeTTLSec int `yaml:"device_code_ttl_sec"`
-	// DevicePollIntervalSec is the minimum seconds between device token polls.
-	DevicePollIntervalSec int `yaml:"device_poll_interval_sec"`
-	// UserCodeLen is the length (before formatting) of the human user_code.
-	UserCodeLen int `yaml:"user_code_len"`
 }
 
 // SSHConfig SSH remote operations toggle.
@@ -335,14 +316,14 @@ func Default() *Config {
 		LLM: LLMConfig{UseMock: true, Model: "deepseek-ai/DeepSeek-V3"},
 		Database: DatabaseConfig{
 			Type: "mysql", AutoMigrate: true, SchemaPath: "scripts/sql/01_schema.sql",
-			MySQL: MySQLConfig{Host: "127.0.0.1", Port: 3306, Database: "code_agent", Username: "root", Password: "${MYSQL_PASSWORD}"},
+			MySQL: MySQLConfig{Host: "127.0.0.1", Port: 3306, Database: "code_agent", Username: "root", Password: "changeme"},
 		},
 		Redis:      RedisConfig{Enabled: true, Host: "127.0.0.1", Port: 6379},
 		RateLimit:  RateLimitConfig{Enabled: true, PerMinute: 60},
 		TokenQuota: TokenQuotaConfig{Enabled: true, PerUserPerDay: 2000000},
 		Storage: StorageConfig{
 			Enabled: true, Endpoint: "http://127.0.0.1:9000", Bucket: "code-agent",
-			AccessKey: "${MINIO_ACCESS_KEY}", SecretKey: "${MINIO_SECRET_KEY}", UsePathStyle: true,
+			AccessKey: "minioadmin", SecretKey: "minioadmin", UsePathStyle: true,
 			LocalFallbackDir: "./data/objects",
 		},
 		Security: SecurityConfig{
@@ -360,12 +341,6 @@ func Default() *Config {
 		Host:     HostConfig{Mode: "server", PreferHost: false},
 		Vector:   VectorConfig{Provider: "mem", Collection: "codeagent"},
 		OTLP:     OTLPConfig{Enabled: false, Endpoint: "localhost:4318", Insecure: true, Service: "code-agent"},
-		Auth: AuthConfig{
-			VerificationURI:       "http://localhost:3000/devices/verify",
-			DeviceCodeTTLSec:      300,
-			DevicePollIntervalSec: 5,
-			UserCodeLen:           8,
-		},
 	}
 }
 
@@ -377,13 +352,39 @@ func Load(path string) (*Config, error) {
 			if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("read config: %w", err)
 			}
-		} else if err := yaml.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("parse config: %w", err)
+		} else {
+			// Resolve ${VAR} and ${VAR:-default} references against the process
+			// environment so secrets stay out of committed config files.
+			data = expandEnvPlaceholders(data)
+			if err := yaml.Unmarshal(data, cfg); err != nil {
+				return nil, fmt.Errorf("parse config: %w", err)
+			}
 		}
 	}
 	applyEnv(cfg)
 	normalize(cfg)
 	return cfg, nil
+}
+
+// placeholderRe matches ${VAR} and ${VAR:-default}. The default (after ":-") is
+// used when VAR is unset or empty, matching shell parameter-expansion semantics.
+var placeholderRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
+
+// expandEnvPlaceholders resolves ${VAR} / ${VAR:-default} in raw config bytes
+// using the process environment. Unknown vars with no default expand to empty.
+func expandEnvPlaceholders(data []byte) []byte {
+	return placeholderRe.ReplaceAllFunc(data, func(match []byte) []byte {
+		m := placeholderRe.FindSubmatch(match)
+		name := string(m[1])
+		def := ""
+		if len(m) >= 3 && m[2] != nil {
+			def = string(m[2])
+		}
+		if v, ok := os.LookupEnv(name); ok && v != "" {
+			return []byte(v)
+		}
+		return []byte(def)
+	})
 }
 
 func applyEnv(cfg *Config) {
@@ -550,19 +551,6 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Security.MaxBodyBytes <= 0 {
 		return fmt.Errorf("security.max_body_bytes must be positive, got %d", cfg.Security.MaxBodyBytes)
-	}
-
-	// Validate required credentials are not placeholders.
-	if cfg.Database.Type == "mysql" && cfg.Database.MySQL.Password == "${MYSQL_PASSWORD}" {
-		return fmt.Errorf("database.mysql.password must be set (set MYSQL_PASSWORD env or update config)")
-	}
-	if cfg.Storage.Enabled && (cfg.Storage.AccessKey == "${MINIO_ACCESS_KEY}" || cfg.Storage.SecretKey == "${MINIO_SECRET_KEY}") {
-		return fmt.Errorf("storage.access_key/secret_key must be set (set MINIO_ACCESS_KEY/MINIO_SECRET_KEY env or update config)")
-	}
-	for i, key := range cfg.Security.APIKeys {
-		if key == "${API_KEY}" {
-			return fmt.Errorf("security.api_keys[%d] must be set (set API_KEY env or update config)", i)
-		}
 	}
 
 	return nil

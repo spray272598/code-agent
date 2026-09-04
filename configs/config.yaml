@@ -3,18 +3,6 @@ server:
   port: 8080
   mode: "debug"
 
-# Platform JWT signing secret (HS256). Generate with `openssl rand -hex 32` and rotate regularly.
-# Set via environment variable: JWT_SECRET
-jwt_secret: "${JWT_SECRET:-change-me-dev-secret-please-rotate-32+chars!!}"
-# jwt_secret_prev: ""   # set during secret rotation to keep old tokens valid
-
-# RFC8628 device authorization (Sprint 1.4) — used by TUI/web approval.
-auth:
-  verification_uri: "http://localhost:3000/devices/verify"  # where the user enters the user_code
-  device_code_ttl_sec: 300     # device_code/user_code validity window
-  device_poll_interval_sec: 5  # minimum seconds between device token polls
-  user_code_len: 8             # user_code length before formatting (ABCD-1234)
-
 agent:
   name: "Code-Agent"
   max_steps: 20

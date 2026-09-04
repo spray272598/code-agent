@@ -23,6 +23,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err := config.Validate(cfg); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 
 	// OTLP tracing (optional)
 	ctx := context.Background()

@@ -6,18 +6,14 @@ package http
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/spray272598/code-agent/internal/domain/tenant"
 )
 
-func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	// Tenant scoping: derive userID from authenticated JWT.
-	t, ok := tenant.From(r.Context())
-	if !ok || t.UserID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "unauthenticated"})
-		return
-	}
+// operatorID is the single operator identity used by this harness. There is no
+// account system and no per-user tenant; the API-key gate (see auth()) already
+// authenticates the only caller, so every session/audit row is owned by it.
+const operatorID = "operator"
 
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		var body struct {
@@ -27,7 +23,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &body) {
 			return
 		}
-		sess, err := s.app.CreateSession(t.UserID, body.ProjectID, body.Title)
+		sess, err := s.app.CreateSession(operatorID, body.ProjectID, body.Title)
 		if err != nil {
 			writeJSON(w, 500, errMap(err))
 			return
@@ -42,11 +38,6 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]any{"code": "404", "message": "not found"})
 			return
 		}
-		// Verify the session belongs to the authenticated user.
-		if sess.UserID != t.UserID {
-			writeJSON(w, 403, map[string]any{"code": "403", "message": "forbidden"})
-			return
-		}
 		writeJSON(w, 200, map[string]any{"code": "0000", "data": sess})
 	default:
 		writeJSON(w, 405, map[string]any{"code": "405", "message": "method"})
@@ -54,13 +45,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
-	// Tenant scoping: only list sessions for the authenticated user.
-	t, ok := tenant.From(r.Context())
-	if !ok || t.UserID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "401", "message": "unauthenticated"})
-		return
-	}
-	list, err := s.app.ListSessions(t.UserID)
+	list, err := s.app.ListSessions(operatorID)
 	if err != nil {
 		writeJSON(w, 500, errMap(err))
 		return

@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"errors"
 
 	"github.com/spray272598/code-agent/internal/domain/mcp/model"
 )
@@ -48,15 +49,29 @@ type FactoryMetric struct {
 	Returns int64
 }
 
-// IUserMCPManagerFactory is the Sprint 1.6 multi-tenant MCP abstraction.
-// For(ctx) derives the userID from tenant.From(ctx) and returns the Manager
-// that owns that user's MCP tool space. Callers MUST stamp the userID on ctx
-// via mcp.WithAssertedUser before invoking CallTool so the Manager's runtime
-// tenant assertion passes.
-type IUserMCPManagerFactory interface {
+// IMCPManagerFactory resolves the (single, operator-scoped) MCP Manager for a
+// request context. The harness has no accounts or tenants, so there is exactly
+// one Manager; the factory exists only to keep the call site uniform with the
+// domain layer and to allow tests to inject a stub.
+type IMCPManagerFactory interface {
 	For(ctx context.Context) (IMCPManagerPort, error)
-	ForUserID(userID string) (IMCPManagerPort, error)
-	Metrics() FactoryMetric
-	Count() int
-	ResetAll()
 }
+
+// NewSingleManagerFactory wraps one Manager into an IMCPManagerFactory. Used by
+// bootstrap (the system Manager) and by tests. It is the post-tenant replacement
+// for the old per-user UserFactory, which minted one Manager per account.
+func NewSingleManagerFactory(mgr IMCPManagerPort) IMCPManagerFactory {
+	return &singleManagerFactory{inner: mgr}
+}
+
+type singleManagerFactory struct{ inner IMCPManagerPort }
+
+func (f *singleManagerFactory) For(_ context.Context) (IMCPManagerPort, error) {
+	if f.inner == nil {
+		return nil, ErrNoMCPManager
+	}
+	return f.inner, nil
+}
+
+// ErrNoMCPManager is returned when no Manager was wired.
+var ErrNoMCPManager = errors.New("mcp manager not configured")

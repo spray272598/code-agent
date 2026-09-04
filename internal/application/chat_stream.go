@@ -32,17 +32,11 @@ func (a *ChatApp) slashCtx() slash.Context {
 			}
 			return b.String()
 		},
-		ListMCP: func(sctx slash.Context) string {
+		ListMCP: func(_ slash.Context) string {
 			if a.mcpFactory == nil {
 				return "(mcp disabled)"
 			}
-			// ListMCP is the per-user view from within the agent session. The
-			// slash handler context carries the session's userID; build a tenant
-			// ctx and let the factory resolve this user's Manager.
-			if sctx.UserID == "" {
-				return "(no session)"
-			}
-			mgr, err := a.mcpFactory.ForUserID(sctx.UserID)
+			mgr, err := a.mcpFactory.For(context.Background())
 			if err != nil || mgr == nil {
 				return "(mcp disabled)"
 			}
@@ -397,14 +391,13 @@ func (a *ChatApp) RunBackground(ctx context.Context, req ChatRequest, onEvent fu
 				if a.summaryRepo != nil && a.memSvc != nil &&
 					(ev.Type == engine.EventCompress || ev.Type == engine.EventDone) {
 					if s, gerr := a.summaryRepo.Get(ctx, session.ID); gerr == nil && s != "" {
-						_ = a.memSvc.Save(ctx, &memport.MemoryItem{
-							UserID:     session.UserID,
-							ProjectID:  session.ProjectID,
-							Scope:      memport.ScopeProject,
-							Content:    s,
-							Category:   "task_progress",
-							Importance: 60,
-						})
+					_ = a.memSvc.Save(ctx, &memport.MemoryItem{
+						ProjectID:  session.ProjectID,
+						Scope:      memport.ScopeProject,
+						Content:    s,
+						Category:   "task_progress",
+						Importance: 60,
+					})
 					}
 				}
 				if onEvent != nil {

@@ -8,9 +8,9 @@ import (
 )
 
 type MemoryBackend interface {
-	Search(ctx context.Context, userID, projectID, query string, opts SearchOptions) ([]ScoredItem, error)
+	Search(ctx context.Context, projectID, query string, opts SearchOptions) ([]ScoredItem, error)
 	Get(ctx context.Context, id int64) (*memport.MemoryItem, error)
-	List(ctx context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error)
+	List(ctx context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error)
 	Save(ctx context.Context, item *memport.MemoryItem) error
 	Delete(ctx context.Context, id int64) error
 	TotalChunks(ctx context.Context) (int64, error)
@@ -26,12 +26,12 @@ func NewServiceBackend(svc *Service) *ServiceBackend {
 	return &ServiceBackend{svc: svc}
 }
 
-func (b *ServiceBackend) Search(ctx context.Context, userID, projectID, query string, opts SearchOptions) ([]ScoredItem, error) {
-	return b.svc.HybridSearch(ctx, userID, projectID, query, opts)
+func (b *ServiceBackend) Search(ctx context.Context, projectID, query string, opts SearchOptions) ([]ScoredItem, error) {
+	return b.svc.HybridSearch(ctx, projectID, query, opts)
 }
 
 func (b *ServiceBackend) Get(ctx context.Context, id int64) (*memport.MemoryItem, error) {
-	items, err := b.svc.repo.List(ctx, "", "", memport.ScopeUser, 10000)
+	items, err := b.svc.repo.List(ctx, "", memport.ScopeUser, 10000)
 	if err != nil {
 		return nil, err
 	}
@@ -43,8 +43,8 @@ func (b *ServiceBackend) Get(ctx context.Context, id int64) (*memport.MemoryItem
 	return nil, nil
 }
 
-func (b *ServiceBackend) List(ctx context.Context, userID, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
-	return b.svc.repo.List(ctx, userID, projectID, scope, limit)
+func (b *ServiceBackend) List(ctx context.Context, projectID string, scope memport.Scope, limit int) ([]memport.MemoryItem, error) {
+	return b.svc.repo.List(ctx, projectID, scope, limit)
 }
 
 func (b *ServiceBackend) Save(ctx context.Context, item *memport.MemoryItem) error {
@@ -56,7 +56,7 @@ func (b *ServiceBackend) Delete(ctx context.Context, id int64) error {
 }
 
 func (b *ServiceBackend) TotalChunks(ctx context.Context) (int64, error) {
-	items, err := b.svc.repo.List(ctx, "", "", "", 100000)
+	items, err := b.svc.repo.List(ctx, "", "", 100000)
 	if err != nil {
 		return 0, err
 	}
