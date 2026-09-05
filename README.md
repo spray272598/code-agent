@@ -82,7 +82,7 @@ go run ./cmd/server -config configs/config.yaml
 go run ./cmd/cli --base http://127.0.0.1:8080 --key dev-key
 ```
 
-### Production/Real Model (Native Loop Primary; Eino Optional)
+### Production / Real Model (Native Loop Primary; Eino Optional)
 
 ```bash
 # PowerShell
@@ -118,22 +118,22 @@ llm:
 
 ## Auth (API-Key)
 
-单 operator 开源 harness，**无账号 / 密码 / JWT / 多租户**；运行身份为 operator（恒定 `operator`），不作为隔离维度：
+Single-operator open-source harness — **no account / password / JWT / multi-tenancy**; the running identity is the operator (constant `"operator"`), and is not used as an isolation dimension:
 
-- 鉴权：HTTP 请求头 `X-API-Key: <key>`（默认 `dev-key`，生产经环境变量注入，绝不提交仓库）
-- Server 校验通过后放行，其余路径一致走 Guard（五层权限）
-- 连接管理、记忆、SSH 资源等统一以 operator 为归属，无 `org_id` / `user_id` 隔离层
-- 详见 [docs/design.md](docs/design.md) §5.3；本地一键见 [docs/local-demo.md](docs/local-demo.md)
+- Authentication: HTTP header `X-API-Key: <key>` (default `dev-key`; in production inject via environment variable, never commit to the repo)
+- After the Server validates the key, the request proceeds; every other path consistently goes through the Guard (5-layer permission)
+- Connection management, memory, and SSH resources are all attributed to the operator — there is no `org_id` / `user_id` isolation layer
+- See [docs/design.md](docs/design.md) §5.3; local one-click in [docs/local-demo.md](docs/local-demo.md)
 
 ## Capabilities
 
 - **Auth (API-Key)**: single-operator; no account/password/JWT; Server validates `X-API-Key` header (no organization concept)
-- **Orchestration**: Eino ReAct + callbacks→SSE; `/team` parallel sub-agents; native Loop fallback; **plan-execute-reflect** visualization + interruptible replanning (3.5)
+- **Orchestration**: Native Loop ReAct + callbacks→SSE; `/team` parallel sub-agents; Eino optional backend; **plan-execute-reflect** visualization + interruptible replanning (3.5)
 - **Security**: 5-layer Guard, path/command normalization, HITL, Hook abort, audit, Redis rate limiting; **sandbox 3 modes** (readonly / workspace / strict, 5.1)
-- **LLM Reliability**: Pure function retry classifier `ClassifyLLMError` (21 table-driven unit tests); 429 exponential backoff±20% jitter respecting Retry-After; 400 context overflow→compress then resubmit (`ErrContextOverflow`); 401/403 propagate to auth layer (`ErrAuth`)
-- **Tool Parallelism**: Per-path write lock replacing allRead binary split—tool calls writing same file serialize via `locks[path]`, different files/reads run fully parallel; bash uses global mutex
-- **Stall Detection**: Loop consecutive duplicate tool signature → `same==1` injects nudge prompt for model self-correction, `same>=3` hard stop with reflection + error
-- **Context Safety**: `SelectSafeSplit` with `min_compactable` lower bound (skip LLM summarization when compactable zone too small) + snap protection
+- **LLM Reliability**: Pure function retry classifier `ClassifyLLMError` (21 table-driven unit tests); 429 exponential backoff ±20% jitter respecting Retry-After; 400 context overflow→compress then resubmit (`ErrContextOverflow`); 401/403 propagate to auth layer (`ErrAuth`)
+- **Tool Parallelism**: Per-path write lock replacing allRead binary split—tool calls writing the same file serialize via `locks[path]`, different files/reads run fully parallel; bash uses a global mutex
+- **Stall Detection**: Loop consecutive duplicate tool signature → `same==1` injects a nudge prompt for model self-correction, `same>=3` hard stop with reflection + error
+- **Context Safety**: `SelectSafeSplit` with `min_compactable` lower bound (skip LLM summarization when the compactable zone is too small) + snap protection
 - **Tools (Local Workspace)**: read/write/edit/bash/glob/grep + `apply_patch` (structured diff) + `lint`/`codecov` + `memory` + `delegate` (5.2)
 - **Tools (Remote SSH)**: `ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_terminal` (interactive PTY); connection credentials encrypted via KMS
 - **MCP**: stdio/HTTP hot-swap, `server__tool` registration, **same GuardedTool cross-cutting as core tools**; **MCP Server** exposes tools/resources/prompts to external clients
@@ -141,7 +141,7 @@ llm:
 - **Context Management**: Async compression (configurable threshold `compact_threshold_ratio`) + long-task cross-segment memory solidification + PlanMode exploration isolation + sub-agent window isolation writeback
 - **Ecosystem**: Usage monitoring dashboard `/api/v1/usage`; Plan read-only exploration state machine; Headless background long tasks
 - **Skill / Memory / L0–L3 Compression / Token Budget**
-- **Storage/Observability**: SQLite | MySQL | memory; MinIO; OTLP/Prometheus; host-agent
+- **Storage / Observability**: SQLite | MySQL | memory; MinIO; OTLP/Prometheus; host-agent
 - **CI/CD**: golangci-lint v2 + gofumpt formatting gate; CI 3-shard parallel testing + 10-minute timeout per shard; coverage auto-merge report
 
 ## Documentation
@@ -163,7 +163,7 @@ llm:
 # mock + prefer_host: tools can execute in local workspace
 powershell -File scripts/dev_local.ps1 -Workspace .
 
-# Real LLM (Eino primary path)
+# Real LLM (Native Loop primary path)
 $env:LLM_API_KEY="sk-..."
 $env:LLM_USE_MOCK="false"
 powershell -File scripts/dev_local.ps1 -RealLLM -Workspace D:\your\repo
