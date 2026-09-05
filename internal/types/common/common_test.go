@@ -111,3 +111,49 @@ func TestHeuristicCounter(t *testing.T) {
 		t.Fatal("HeuristicCounter must equal EstimateTokens")
 	}
 }
+
+func TestTiktokenCounter(t *testing.T) {
+	c := NewTiktokenCounter("cl100k_base")
+
+	// Empty string
+	if got := c.CountTokens(""); got != 0 {
+		t.Fatalf("TiktokenCounter empty: got %d, want 0", got)
+	}
+
+	// ASCII text - should return positive count
+	got := c.CountTokens("hello world")
+	if got <= 0 {
+		t.Fatalf("TiktokenCounter ASCII: got %d, want > 0", got)
+	}
+	t.Logf("TiktokenCounter('hello world') = %d", got)
+
+	// CJK text
+	got = c.CountTokens("你好世界")
+	if got <= 0 {
+		t.Fatalf("TiktokenCounter CJK: got %d, want > 0", got)
+	}
+	t.Logf("TiktokenCounter('你好世界') = %d", got)
+
+	// Longer text should have more tokens
+	short := c.CountTokens("hi")
+	long := c.CountTokens("hello world this is a longer sentence")
+	if long <= short {
+		t.Fatalf("longer text should have more tokens: short=%d long=%d", short, long)
+	}
+
+	// Default encoding
+	c2 := NewTiktokenCounter("")
+	got2 := c2.CountTokens("test")
+	if got2 <= 0 {
+		t.Fatalf("TiktokenCounter default encoding: got %d, want > 0", got2)
+	}
+}
+
+func TestTiktokenCounterFallback(t *testing.T) {
+	// Invalid encoding should fall back to heuristic
+	c := NewTiktokenCounter("invalid_encoding_12345")
+	got := c.CountTokens("hello")
+	if got <= 0 {
+		t.Fatalf("TiktokenCounter fallback: got %d, want > 0", got)
+	}
+}

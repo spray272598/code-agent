@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/spray272598/code-agent/internal/domain/agent/engine"
 	"github.com/spray272598/code-agent/internal/domain/checkpoint"
 	memport "github.com/spray272598/code-agent/internal/domain/memory/adapter/port"
@@ -115,24 +117,39 @@ func (a *ChatApp) storeIdempotency(ctx context.Context, req ChatRequest, resp *C
 }
 
 func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
+	ctx, span := observability.StartSpan(context.Background(), "ChatApp.Chat",
+		attribute.String("user.id", req.UserID),
+		attribute.String("session.id", req.SessionID),
+		attribute.String("project.id", req.ProjectID),
+	)
+	defer span.End()
+
 	forceCompact := false
 	if resp, handled, fc := a.trySlash(&req); handled {
+		span.SetAttributes(attribute.Bool("slash", true))
 		return resp, nil
 	} else {
 		forceCompact = fc
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), a.cp.runTimeout())
+	ctx, cancel := context.WithTimeout(ctx, a.cp.runTimeout())
 	defer cancel()
 
 	session, err := a.resolveSession(req)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
+	span.SetAttributes(attribute.String("session.id", session.ID))
+
 	if err := a.checkRate(ctx, req.UserID); err != nil {
+		span.SetAttributes(attribute.Bool("rate_limited", true))
+		span.RecordError(err)
 		return nil, err
 	}
 	if err := a.checkQuota(ctx, req.UserID); err != nil {
+		span.SetAttributes(attribute.Bool("quota_exceeded", true))
+		span.RecordError(err)
 		return nil, err
 	}
 
@@ -145,16 +162,21 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 	if req.IdempotencyKey != "" {
 		switch status, cached, ierr := a.checkIdempotency(ctx, req); status {
 		case "done":
+			span.SetAttributes(attribute.String("idempotency", "replay"))
 			return cached, nil
 		case "pending":
+			span.SetAttributes(attribute.String("idempotency", "pending"))
 			return nil, fmt.Errorf("request %s is already in progress", req.IdempotencyKey)
 		case "error":
+			span.SetAttributes(attribute.String("idempotency", "error"))
+			span.RecordError(ierr)
 			return nil, ierr
 		}
 	}
 
 	unlock, err := a.acquireRunLock(ctx, session.ID)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 	defer unlock()
@@ -204,6 +226,11 @@ func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
 		ToolCalls: res.ToolCalls, TokenUsed: res.TokenUsed,
 		NeedPermission: res.NeedPermission, Pending: res.Pending, ErrorClass: res.ErrorClass,
 	}
+	span.SetAttributes(
+		attribute.Int("steps", res.Steps),
+		attribute.Int("tool_calls", res.ToolCalls),
+		attribute.Int("tokens_used", res.TokenUsed),
+	)
 	a.storeIdempotency(ctx, req, resp, nil)
 	return resp, nil
 }
