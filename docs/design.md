@@ -14,19 +14,19 @@
 | 目标 | 说明 |
 |------|------|
 | Claude Code 式体验 | CLI 多轮对话、LLM **流式**输出、工具调用过程可见 |
-| 服务端管控 | 风险、会话、限流、审计集中在 Server（企业常见做法） |
+| 服务端集中管控 | 风险、会话、限流、审计统一收敛到 Server（单 operator，无企业/组织概念） |
 | 六大编程工具 | ReadFile / WriteFile / EditFile / Bash / Glob / Grep |
 | Agent Loop | ReAct：拆任务 → 调工具 → 观察 → 再决策 |
 | 扩展生态 | MCP 热装、Skill 技能包、Slash 命令、Hook 生命周期 |
 | 安全纵深 | 5 层权限：拒绝 / 路径沙箱 / 工具分级 / 会话策略 / 人机确认+熔断 |
-| 上下文与记忆 | 多级压缩 + Token 预算；**用户级 + 项目级**跨会话记忆 |
+| 上下文与记忆 | 多级压缩 + Token 预算；**operator 级 + 项目级**跨会话记忆 |
 | 协作增强 | SubAgent 并行；Git Worktree 隔离（P2）；Agent Teams 薄实现（P2） |
 | 工程基础设施 | MySQL 持久化、Redis 限流/缓存/Token、对象存储、MQ 按需 |
 
 ### 1.2 非目标（当前阶段不做或弱化）
 
 - 完整 IDE / VS Code 插件（后续可加）
-- 真·多租户 SaaS 计费与组织权限中台
+- 多租户 / 组织权限中台（单 operator，非目标）
 - 桌面 GUI 点击自动化（Computer Use）
 - 办公 Office 全家桶（能力走 MCP）
 - 分布式 Agent 集群编排（SubAgent 单机并发即可）
@@ -101,7 +101,7 @@ trigger → application → domain ← infrastructure
 | `tool` | 六大工具契约与注册表 |
 | `security` | 5 层权限、awaiting 恢复 |
 | `contextx` | Token 预算、多级压缩 |
-| `memory` | 用户级 / 项目级记忆 |
+| `memory` | operator 级 / 项目级记忆 |
 | `mcp` | 安装、热加载、工具同步策略（port） |
 | `skill` | SKILL.md 加载匹配 |
 | `slash` | 斜杠命令 |
@@ -288,7 +288,7 @@ skills/<id>/
 
 | Scope | Key | 内容示例 |
 |-------|-----|----------|
-| `user` | user_id | 偏好、纠正教训 |
+| `user` | operator（单 operator 运行身份，无多租户隔离） | 偏好、纠正教训 |
 | `project` | project_id（root 路径 hash / git remote） | 构建命令、架构约定 |
 
 - 写入：工具 `memory_save` + 纠正检测 + 异步提炼  
@@ -335,17 +335,17 @@ event: done           data: {"tokenUsed":...}
 
 ### 5.2 CLI
 
-- 登录/配置 API Base / Token
+- 配置 API Base / Token（API-Key 鉴权；无账号登录）
 - REPL：输入、渲染 SSE、权限 y/N/session
 - 展示 tool 调用与 diff 摘要
 - 本地记录最近 sessionId
 
-### 5.3 鉴权（toC）
+### 5.3 鉴权（单 operator / API-Key）
 
-- 邮箱 + 密码注册/登录，密码 bcrypt 哈希；登录成功签发 JWT（`access_token` 短期 + `refresh_token` 长期）
-- `user_id` 注入上下文，会话/记忆/SSH 连接等资源统一按 `user_id` 隔离——**无企业/组织/租户概念**
-- 请求头：`Authorization: Bearer <access_token>`；过期用 `refresh_token` 换发
-- 后续可接 OAuth / 第三方登录
+- 单 operator 架构：**无账号 / 密码 / JWT / 多租户**；运行身份为 operator（`Session.UserID`，恒定 `"operator"`），不作为多租户隔离维度。
+- 鉴权方式：HTTP 请求头 `X-API-Key: <key>`（默认 `dev-key`，生产经环境变量注入，绝不提交仓库）。Server 校验通过后放行，其余路径一致走 Guard。
+- 资源边界（会话 / 记忆 / SSH 连接 / 审计）统一以 operator 为归属，无需 `org_id` / `user_id` 隔离层。
+- 第三方登录（OAuth / SSO）：原 `auth/oauth.go`（OAuth2 授权码 + PKCE）已在单 operator 化中随账号域一并移除；如需 GitHub/Google SSO，作为后续可选后端，不进入默认路径。
 
 ### 5.4 工具执行位置（重要决策）
 
@@ -371,8 +371,7 @@ event: done           data: {"tokenUsed":...}
 
 | 表 | 用途 |
 |----|------|
-| `users` | 用户表：邮箱、密码（bcrypt 哈希）、邮箱验证状态、刷新令牌；按 `user_id` 隔离（toC，无 org） |
-| `chat_session` | 会话；含 user_id、project_id、title、token_used、status |
+| `chat_session` | 会话；含 operator_id（运行身份，恒定 `operator`）、project_id、title、token_used、status |
 | `chat_message` | 消息；role/content/tool_*/token/priority |
 | `chat_milestone` | 里程碑事件 |
 | `core_memory` | 长期记忆；scope、project_id、category、importance |
@@ -570,12 +569,7 @@ code-agent/
 | Method | Path | 说明 |
 |--------|------|------|
 | GET | `/health` | 健康 |
-| POST | `/api/v1/auth/signup` | 邮箱+密码注册（toC，无 org） |
-| POST | `/api/v1/auth/login` | 登录，返回 access/refresh token |
-| POST | `/api/v1/auth/verify-email` | 邮箱验证（激活链接） |
-| POST | `/api/v1/auth/forgot-password` | 申请密码重置（发邮件） |
-| POST | `/api/v1/auth/reset-password` | 重置密码 |
-| POST | `/api/v1/session` | 创建会话（带 projectId） |
+| POST | `/api/v1/session` | 创建会话（带 projectId；鉴权为 `X-API-Key`） |
 | GET | `/api/v1/session/{id}` | 会话信息 |
 | POST | `/api/v1/chat/stream` | SSE 对话 |
 | POST | `/api/v1/permission/approve` | 批准（continue 可选） |
@@ -616,7 +610,7 @@ code-agent/
 |---|------|----------|------|
 | 1 | 对象存储厂商 | MinIO 本地 + S3 API | 已按此设计 |
 | 2 | 首期工具是否必须操作开发者本机目录 | Phase1 Server workspace | **请确认是否接受** |
-| 3 | 鉴权 | 邮箱+密码 + JWT（toC，无组织概念） | 已落地 |
+| 3 | 鉴权 | API-Key（单 operator，无账号系统） | 已落地 |
 | 4 | 默认模型提供商 | 环境变量注入，不绑死 | OK |
 | 5 | 是否保留 Web 调试台 | 二期可选 | OK |
 

@@ -1,6 +1,6 @@
 # Code-Agent
 
-A **Claude Code-like** Coding Agent runtime (Go): **Eino handles orchestration and dialogue, while custom code handles security execution and product layers**.
+A **Claude Code-like** Coding Agent runtime (Go): the **self-built Native Loop handles orchestration and dialogue, while custom code handles security execution and product layers**; Eino is an optional backend (`orchestrator: eino`).
 
 - Design: [docs/design.md](docs/design.md) · Boundaries: [docs/boundary.md](docs/boundary.md) · Eino: [docs/eino-integration.md](docs/eino-integration.md)
 
@@ -82,7 +82,7 @@ go run ./cmd/server -config configs/config.yaml
 go run ./cmd/cli --base http://127.0.0.1:8080 --key dev-key
 ```
 
-### Production/Real Model (Eino Primary Path)
+### Production/Real Model (Native Loop Primary; Eino Optional)
 
 ```bash
 # PowerShell
@@ -90,14 +90,14 @@ $env:LLM_API_KEY="sk-..."
 $env:LLM_API_BASE="https://api.siliconflow.cn/v1"   # or OpenAI compatible
 $env:LLM_MODEL="deepseek-ai/DeepSeek-V3"
 $env:LLM_USE_MOCK="false"
-# Optional: $env:AGENT_ORCHESTRATOR="eino"   # default is already eino
+# Optional: $env:AGENT_ORCHESTRATOR="eino"   # default is already native (self-built Loop)
 go run ./cmd/server -config configs/config.yaml
 ```
 
 ```yaml
 # configs/config.yaml
 agent:
-  orchestrator: eino        # primary path; auto native-offline when no key/mock
+  orchestrator: native      # primary path (self-built Native Loop); eino available when real key set, else honest-degrade
   eino_stream: false
   token_budget: 32000
 llm:
@@ -116,18 +116,18 @@ llm:
 | `/tools` `/mcp` `/help` | List and help |
 | `/team …` | Eino multi-agent explore+verify (eino mode) |
 
-## Account & Auth (toC)
+## Auth (API-Key)
 
-面向个人用户（**无企业/组织概念**），数据统一按 `user_id` 隔离：
+单 operator 开源 harness，**无账号 / 密码 / JWT / 多租户**；运行身份为 operator（恒定 `operator`），不作为隔离维度：
 
-- 邮箱 + 密码注册 / 登录，密码 bcrypt 哈希；JWT（`access_token` + `refresh_token`）鉴权
-- 邮箱验证（注册激活）、密码重置（邮件链接）
-- 连接管理、记忆、SSH 资源等全部以 `user_id` 为边界，无 `org_id`
-- 详见 [docs/design.md](docs/design.md)；本地一键见 [docs/local-demo.md](docs/local-demo.md)
+- 鉴权：HTTP 请求头 `X-API-Key: <key>`（默认 `dev-key`，生产经环境变量注入，绝不提交仓库）
+- Server 校验通过后放行，其余路径一致走 Guard（五层权限）
+- 连接管理、记忆、SSH 资源等统一以 operator 为归属，无 `org_id` / `user_id` 隔离层
+- 详见 [docs/design.md](docs/design.md) §5.3；本地一键见 [docs/local-demo.md](docs/local-demo.md)
 
 ## Capabilities
 
-- **Account (toC)**: Email + password registration/login, JWT auth, email verification and password reset; data isolated by `user_id` (no organization concept)
+- **Auth (API-Key)**: single-operator; no account/password/JWT; Server validates `X-API-Key` header (no organization concept)
 - **Orchestration**: Eino ReAct + callbacks→SSE; `/team` parallel sub-agents; native Loop fallback; **plan-execute-reflect** visualization + interruptible replanning (3.5)
 - **Security**: 5-layer Guard, path/command normalization, HITL, Hook abort, audit, Redis rate limiting; **sandbox 3 modes** (readonly / workspace / strict, 5.1)
 - **LLM Reliability**: Pure function retry classifier `ClassifyLLMError` (21 table-driven unit tests); 429 exponential backoff±20% jitter respecting Retry-After; 400 context overflow→compress then resubmit (`ErrContextOverflow`); 401/403 propagate to auth layer (`ErrAuth`)
@@ -154,7 +154,7 @@ llm:
 | [docs/agent-loop.md](docs/agent-loop.md) | ReAct flow |
 | [docs/mcp.md](docs/mcp.md) | MCP integration (Client + Server) |
 | [docs/design.md](docs/design.md) | Overall design |
-| [docs/roadmap.md](docs/roadmap.md) | **toC product and engineering roadmap / future work planning** |
+| [docs/roadmap.md](docs/roadmap.md) | **open-source single-operator Agent Harness roadmap / future work planning** |
 | [docs/learning-guide.md](docs/learning-guide.md) | Learning guide |
 
 ## Local One-Click (Host + Server)
