@@ -1,3 +1,5 @@
+// Experimental: part of the GoalOrchestrator subsystem (plan→execute→verify).
+// Not wired into the default agent runtime yet; treat as a spike, API may churn.
 package subagent
 
 import (

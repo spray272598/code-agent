@@ -51,6 +51,11 @@ orchestrator 默认 = native（自研主路径）
 配置 `security.require_kernel_sandbox: true` 时，若内核级隔离不可用则**拒绝启动**（fail-closed），
 而非静默退化为无隔离；默认 `false`，允许退化为 `heuristic` 并告警。
 
+## 实验性特性（Experimental）
+
+- `internal/domain/subagent/goal_*`（GoalOrchestrator：plan→execute→verify）尚未接入默认运行时，
+  标记为 Experimental；API 可能变化，仅由自身单测覆盖，不作为生产路径依赖。
+
 ## MCP 统一入口
 
 ```
