@@ -126,7 +126,7 @@ Final Answer: 文件内容已读取，任务完成`,
 		TimeoutSec: 30, Workspace: wsDir,
 	}, WithCheckpoint(store, runs))
 
-	resp, err := app.Chat(ChatRequest{UserID: "u1", ProjectID: "p1", Message: "请读取 README 并确认内容"})
+	resp, err := app.Chat(context.Background(), ChatRequest{UserID: "u1", ProjectID: "p1", Message: "请读取 README 并确认内容"})
 	if err != nil {
 		t.Fatalf("Chat error: %v", err)
 	}

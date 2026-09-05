@@ -24,7 +24,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &edge) {
 		return
 	}
-	res, err := s.app.Chat(dto.ToAppChat(edge))
+	res, err := s.app.Chat(r.Context(), dto.ToAppChat(edge))
 	if err != nil {
 		writeErr(w, 400, "400", err.Error())
 		return

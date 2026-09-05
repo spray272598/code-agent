@@ -296,7 +296,7 @@ func (a *ChatApp) ResumeSession(ctx context.Context, sessionID, message string) 
 		SessionID: sessionID, UserID: snap.UserID, ProjectID: snap.ProjectID,
 		Message: message,
 	}
-	return a.Chat(req)
+	return a.Chat(ctx, req)
 }
 
 func (a *ChatApp) markRun(session *sessmodel.Session, req ChatRequest, status string, pending *security.PendingConfirm, errClass string) {

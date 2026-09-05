@@ -48,7 +48,7 @@ func (s *Server) handlePermApprove(w http.ResponseWriter, r *http.Request) {
 		if msg == "" {
 			msg = "继续"
 		}
-		res, err := s.app.Chat(application.ChatRequest{SessionID: sid, UserID: body.UserID, Message: msg})
+		res, err := s.app.Chat(r.Context(), application.ChatRequest{SessionID: sid, UserID: body.UserID, Message: msg})
 		if err != nil {
 			out["continueError"] = err.Error()
 		} else {

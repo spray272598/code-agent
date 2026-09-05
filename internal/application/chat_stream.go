@@ -116,8 +116,8 @@ func (a *ChatApp) storeIdempotency(ctx context.Context, req ChatRequest, resp *C
 	a.idemSvc.storeIdempotency(ctx, req, resp, runErr, a.redis)
 }
 
-func (a *ChatApp) Chat(req ChatRequest) (*ChatResponse, error) {
-	ctx, span := observability.StartSpan(context.Background(), "ChatApp.Chat",
+func (a *ChatApp) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	ctx, span := observability.StartSpan(ctx, "ChatApp.Chat",
 		attribute.String("user.id", req.UserID),
 		attribute.String("session.id", req.SessionID),
 		attribute.String("project.id", req.ProjectID),
